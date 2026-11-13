@@ -4,9 +4,7 @@ import Foundation
 
 public enum Schemas {
     public static let noteCard = "NoteCard@v1"
-    public static let projectList = "ProjectDraftList@v1"
     public static let meta = "WimmMeta@v1"
-    public static let combinedCards = "CombinedCards@v2"
     public static let notesAnalysis = "NotesAnalysis@v1"
 }
 

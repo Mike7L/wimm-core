@@ -56,9 +56,6 @@ public final class DefaultFileStore: FileStoreProtocol, @unchecked Sendable {
     public func audioDirectory() -> URL { recordingsDirectory() }
     public func trashDirectory() -> URL { baseDirectory().appendingPathComponent("Trash", isDirectory: true) }
     public func temporaryDirectory() -> URL { URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true) }
-    public func projectsDirectory() -> URL { baseDirectory().appendingPathComponent("Projects", isDirectory: true) }
-    public func projectsRegistryURL() -> URL { projectsDirectory().appendingPathComponent("projects.json", isDirectory: false) }
-    public func chatHistoryURL() -> URL { baseDirectory().appendingPathComponent("chat_history.json", isDirectory: false) }
     
     public func legacyBaseDirectory() -> URL {
         if StoragePaths.isTestProcess || ProcessInfo.processInfo.environment["WIMM_BASE_DIR"] != nil {
@@ -156,13 +153,6 @@ public final class DefaultFileStore: FileStoreProtocol, @unchecked Sendable {
 
     public func isSupportedRecordingFile(_ url: URL) -> Bool {
         isAudioFile(url) || isDocumentFile(url)
-    }
-
-    public func newRecordingFileName(
-        identity: RecordingIdentity = RecordingIdentity(),
-        extension: String = "m4a"
-    ) -> String {
-        identity.fileName(extension: `extension`)
     }
 
     /// Returns an available URL for a newly allocated identity. In the
@@ -333,85 +323,7 @@ public final class DefaultFileStore: FileStoreProtocol, @unchecked Sendable {
             return false
         }
     }
-    
-    public func formattedDuration(_ seconds: TimeInterval) -> String {
-        let fmt = DateComponentsFormatter()
-        fmt.unitsStyle = .positional
-        fmt.allowedUnits = seconds >= 3600 ? [.hour,.minute,.second] : [.minute,.second]
-        fmt.zeroFormattingBehavior = [.pad]
-        return fmt.string(from: max(0, seconds)) ?? "0:00"
-    }
-    
-    // Logic for attachments
-    public func attachmentUniqueSuffix(strategy: FileStore.AttachmentNamingStrategy, date: Date = Date()) -> String {
-        switch strategy {
-        case .timestamp:
-            return "\(Int(date.timeIntervalSince1970 * 1000))"
-        case .uniqueUUID:
-            return "\(UUID().uuidString)"
-        }
-    }
 
-    public func attachmentFileNameForClipboardFile(
-        source: URL,
-        sessionID: String,
-        strategy: FileStore.AttachmentNamingStrategy,
-        index: Int,
-        uniqueSuffix: String
-    ) -> String {
-        switch strategy {
-        case .timestamp:
-            let ext = source.pathExtension.isEmpty ? "file" : source.pathExtension.lowercased()
-            return "\(sessionID)_Attach_\(uniqueSuffix)_\(index).\(ext)"
-        case .uniqueUUID:
-            return uniqueDestinationFileName(for: source, sessionID: sessionID, prefix: "\(sessionID)_Attach_")
-        }
-    }
-
-    public func attachmentDestinationURLForClipboardFile(
-        source: URL,
-        sessionID: String,
-        strategy: FileStore.AttachmentNamingStrategy,
-        index: Int,
-        uniqueSuffix: String
-    ) -> URL {
-        let name = attachmentFileNameForClipboardFile(
-            source: source,
-            sessionID: sessionID,
-            strategy: strategy,
-            index: index,
-            uniqueSuffix: uniqueSuffix
-        )
-        return recordingsDirectory().appendingPathComponent(name)
-    }
-    
-    public func attachmentFileNameForClipboardImage(
-        sessionID: String,
-        strategy: FileStore.AttachmentNamingStrategy,
-        index: Int,
-        uniqueSuffix: String
-    ) -> String {
-        let suffix = strategy == .timestamp
-            ? "Attach_\(uniqueSuffix)_\(index)"
-            : "Attach_\(UUID().uuidString)_\(index)"
-        return "\(sessionID)_\(suffix).heic"
-    }
-
-    public func attachmentDestinationURLForClipboardImage(
-        sessionID: String,
-        strategy: FileStore.AttachmentNamingStrategy,
-        index: Int,
-        uniqueSuffix: String
-    ) -> URL {
-        let name = attachmentFileNameForClipboardImage(
-            sessionID: sessionID,
-            strategy: strategy,
-            index: index,
-            uniqueSuffix: uniqueSuffix
-        )
-        return recordingsDirectory().appendingPathComponent(name)
-    }
-    
     public func attachmentFileNameForClipboardText(
         sessionID: String,
         strategy: FileStore.AttachmentNamingStrategy,
@@ -423,63 +335,6 @@ public final class DefaultFileStore: FileStoreProtocol, @unchecked Sendable {
         return "\(sessionID)_\(suffix)_Text.txt"
     }
 
-    public func attachmentDestinationURLForClipboardText(
-        sessionID: String,
-        strategy: FileStore.AttachmentNamingStrategy,
-        uniqueSuffix: String
-    ) -> URL {
-        let name = attachmentFileNameForClipboardText(
-            sessionID: sessionID,
-            strategy: strategy,
-            uniqueSuffix: uniqueSuffix
-        )
-        return recordingsDirectory().appendingPathComponent(name)
-    }
-
-    public func screenshotAttachmentURL(sessionID: String?) -> URL {
-        let uuid = UUID().uuidString
-        let fileName: String
-        if let sessionID, !sessionID.isEmpty {
-            fileName = "\(sessionID)_Attach_screenshot_\(uuid).heic"
-        } else {
-            fileName = "screenshot_\(uuid).heic"
-        }
-        return recordingsDirectory().appendingPathComponent(fileName)
-    }
-
-    private func uniqueDestinationFileName(for source: URL, sessionID: String, prefix: String) -> String {
-        let rawBase = source.deletingPathExtension().lastPathComponent
-        let base = rawBase.isEmpty ? "attachment" : rawBase
-        let ext = source.pathExtension
-        let finalBase = prefix + base
-
-        var candidate = finalBase + (ext.isEmpty ? "" : ".\(ext)")
-        var i = 2
-        let destDir = recordingsDirectory()
-        while FileManager.default.fileExists(atPath: destDir.appendingPathComponent(candidate).path) {
-            candidate = "\(finalBase)_\(i)" + (ext.isEmpty ? "" : ".\(ext)")
-            i += 1
-        }
-        return candidate
-    }
-
-    public func uniqueDestinationURL(
-        for source: URL,
-        in destDir: URL,
-        baseFallback: String,
-        preferredExtension: String? = nil
-    ) -> URL {
-        let rawBase = source.deletingPathExtension().lastPathComponent
-        let base = rawBase.isEmpty ? baseFallback : rawBase
-        let ext = preferredExtension ?? source.pathExtension
-        var candidate = destDir.appendingPathComponent(base).appendingPathExtension(ext)
-        var i = 2
-        while FileManager.default.fileExists(atPath: candidate.path) {
-            candidate = destDir.appendingPathComponent("\(base)_\(i)").appendingPathExtension(ext)
-            i += 1
-        }
-        return candidate
-    }
 }
 
 // MARK: - Legacy Compatibility
@@ -495,9 +350,6 @@ public enum FileStore {
     public static func audioDirectory() -> URL { DefaultFileStore.shared.audioDirectory() }
     public static func trashDirectory() -> URL { DefaultFileStore.shared.trashDirectory() }
     public static func temporaryDirectory() -> URL { DefaultFileStore.shared.temporaryDirectory() }
-    public static func projectsDirectory() -> URL { DefaultFileStore.shared.projectsDirectory() }
-    public static func projectsRegistryURL() -> URL { DefaultFileStore.shared.projectsRegistryURL() }
-    public static func chatHistoryURL() -> URL { DefaultFileStore.shared.chatHistoryURL() }
     public static func legacyBaseDirectory() -> URL { DefaultFileStore.shared.legacyBaseDirectory() }
     public static func legacyRecordingsDirectory() -> URL { DefaultFileStore.shared.legacyRecordingsDirectory() }
 
@@ -524,12 +376,6 @@ public enum FileStore {
     public static func relativePath(for url: URL) -> String { DefaultFileStore.shared.relativePath(for: url) }
     public static func resolveRelativePath(_ path: String) -> URL { DefaultFileStore.shared.resolveRelativePath(path) }
 
-    public static func newRecordingFileName(
-        identity: RecordingIdentity = RecordingIdentity(),
-        extension: String = "m4a"
-    ) -> String {
-        DefaultFileStore.shared.newRecordingFileName(identity: identity, extension: `extension`)
-    }
     public static func newRecordingURL(
         identity: RecordingIdentity,
         extension: String = "m4a",
@@ -571,52 +417,9 @@ public enum FileStore {
 
     public static func fileCreationDate(_ url: URL) throws -> Date { try DefaultFileStore.shared.fileCreationDate(url) }
     public static func fileModificationDate(_ url: URL) -> Date { DefaultFileStore.shared.fileModificationDate(url) }
-    public static func formattedDuration(_ seconds: TimeInterval) -> String { DefaultFileStore.shared.formattedDuration(seconds) }
     @discardableResult
     public static func trySetFileDates(_ url: URL, created: Date?, modified: Date?) -> Bool {
         DefaultFileStore.shared.trySetFileDates(url, created: created, modified: modified)
-    }
-
-    public static func attachmentUniqueSuffix(strategy: AttachmentNamingStrategy, date: Date = Date()) -> String {
-        DefaultFileStore.shared.attachmentUniqueSuffix(strategy: strategy, date: date)
-    }
-
-    public static func attachmentFileNameForClipboardFile(
-        source: URL,
-        sessionID: String,
-        strategy: AttachmentNamingStrategy,
-        index: Int,
-        uniqueSuffix: String
-    ) -> String {
-        DefaultFileStore.shared.attachmentFileNameForClipboardFile(source: source, sessionID: sessionID, strategy: strategy, index: index, uniqueSuffix: uniqueSuffix)
-    }
-
-    public static func attachmentDestinationURLForClipboardFile(
-        source: URL,
-        sessionID: String,
-        strategy: AttachmentNamingStrategy,
-        index: Int,
-        uniqueSuffix: String
-    ) -> URL {
-        DefaultFileStore.shared.attachmentDestinationURLForClipboardFile(source: source, sessionID: sessionID, strategy: strategy, index: index, uniqueSuffix: uniqueSuffix)
-    }
-
-    public static func attachmentFileNameForClipboardImage(
-        sessionID: String,
-        strategy: AttachmentNamingStrategy,
-        index: Int,
-        uniqueSuffix: String
-    ) -> String {
-        DefaultFileStore.shared.attachmentFileNameForClipboardImage(sessionID: sessionID, strategy: strategy, index: index, uniqueSuffix: uniqueSuffix)
-    }
-
-    public static func attachmentDestinationURLForClipboardImage(
-        sessionID: String,
-        strategy: AttachmentNamingStrategy,
-        index: Int,
-        uniqueSuffix: String
-    ) -> URL {
-        DefaultFileStore.shared.attachmentDestinationURLForClipboardImage(sessionID: sessionID, strategy: strategy, index: index, uniqueSuffix: uniqueSuffix)
     }
 
     public static func attachmentFileNameForClipboardText(
@@ -627,26 +430,6 @@ public enum FileStore {
         DefaultFileStore.shared.attachmentFileNameForClipboardText(sessionID: sessionID, strategy: strategy, uniqueSuffix: uniqueSuffix)
     }
 
-    public static func attachmentDestinationURLForClipboardText(
-        sessionID: String,
-        strategy: AttachmentNamingStrategy,
-        uniqueSuffix: String
-    ) -> URL {
-        DefaultFileStore.shared.attachmentDestinationURLForClipboardText(sessionID: sessionID, strategy: strategy, uniqueSuffix: uniqueSuffix)
-    }
-
-    public static func screenshotAttachmentURL(sessionID: String?) -> URL {
-        DefaultFileStore.shared.screenshotAttachmentURL(sessionID: sessionID)
-    }
-    
-    public static func uniqueDestinationURL(
-        for source: URL,
-        in destDir: URL,
-        baseFallback: String,
-        preferredExtension: String? = nil
-    ) -> URL {
-        DefaultFileStore.shared.uniqueDestinationURL(for: source, in: destDir, baseFallback: baseFallback, preferredExtension: preferredExtension)
-    }
 }
 
 // MARK: - Metadata sidecar helpers
@@ -792,15 +575,4 @@ extension FileStore {
         }
     }
 
-    public static func removeMetadataKeys(for recordingURL: URL, keys: Set<String>) {
-        guard !keys.isEmpty else { return }
-
-        mutateMetadata(for: recordingURL) { current in
-            var changed = false
-            for key in keys where current.removeValue(forKey: key) != nil {
-                changed = true
-            }
-            return changed
-        }
-    }
 }

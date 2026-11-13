@@ -65,11 +65,4 @@ public struct PrivateEgressPreview: Sendable {
     private static let mainTextHeader = try! NSRegularExpression(
         pattern: #"^\[MAIN_TEXT(?:[ \t][^\]\n]*)?\][ \t]*\n?"#, options: [.anchorsMatchLines])
 
-    /// The payload pretty-printed; same content as `maskedUser`.
-    public var prettyMaskedUser: String {
-        guard let object = PseudonymizedPayload.jsonObject(maskedUser),
-              let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
-        else { return maskedUser }
-        return String(decoding: data, as: UTF8.self)
-    }
 }

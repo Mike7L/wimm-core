@@ -30,7 +30,6 @@ actor StudioLibraryStore {
         let recent: [Note]
         let decoded: Int
         let revision: UInt64
-        var titleBytes: Int { entries.reduce(0) { $0 + $1.studioTitle.utf8.count } }
     }
     private struct Stamp: Equatable, Sendable {
         let seconds: Int, nanos: Int, size: Int64, inode: UInt64

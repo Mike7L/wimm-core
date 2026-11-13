@@ -93,14 +93,6 @@ public actor AttachmentRepository: AttachmentRepositoryProtocol {
         await metadataRepository.upsertMetadata(for: file, updates: ["attachments": jsonCompatible])
     }
 
-    /// Append attachments to the existing list and persist.
-    public func appendAttachments(for file: URL, attachments newAttachments: [NoteAttachment]) async {
-        guard !newAttachments.isEmpty else { return }
-        var merged = await attachments(for: file)
-        merged.append(contentsOf: newAttachments)
-        await upsertAttachments(for: file, attachments: merged)
-    }
-    
     // MARK: - OCR
 
     /// OCR of a standalone document must also replace the transcript the Reader

@@ -2,15 +2,6 @@ import Foundation
 
 public enum ModelSelection {
     public static let defaultGeminiModel = "gemini-3.5-flash"
-    public static let defaultGeminiLiveModel = "gemini-3.1-flash-live-preview"
-
-    /// Apple on-device model identifier used when available.
-    public static let appleModelIdentifier = "apple/on-device"
-
-    /// Whether Apple on-device LLM is available on this device (iOS 26+ / macOS 26+, A17 Pro / M1+).
-    public static var appleOnDeviceAvailable: Bool {
-        AppleModelFactory.isAvailable
-    }
 
     public static func model(for capability: ModelCapability) -> String {
         // If user explicitly selected "apple/on-device", honor that selection
@@ -55,14 +46,6 @@ public enum ModelSelection {
             shared.set(trimmed, forKey: DefaultsKey.capabilitySeeModel)
             UserDefaults.standard.set(trimmed, forKey: DefaultsKey.capabilitySeeModel)
         }
-    }
-
-    public static var localEnabled: Bool {
-#if ENABLE_LOCAL_AI
-        return LocalModelManager.isEnabled
-#else
-        return false
-#endif
     }
 
     private static func resolve(

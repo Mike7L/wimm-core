@@ -1,5 +1,4 @@
 import XCTest
-import WimmDomain
 import WimmInfrastructure
 
 final class AudioSilenceMapTests: XCTestCase {

@@ -19,9 +19,7 @@ public final class Profiler: @unchecked Sendable {
 
     public struct Series { public var values: [Double] = [] }
     public internal(set) var series: [String: Series] = [:]
-    private var samplingTimer: DispatchSourceTimer?
     private var cpuLastSample: (user: Double, system: Double, wall: Date)?
-    private var cpuLock = NSLock()
 
     // Series that represent counts (unitless integers), not durations
     private static let countSeriesNames: Set<String> = [
@@ -67,11 +65,6 @@ public final class Profiler: @unchecked Sendable {
         ser.values.append(value)
         series[name] = ser
         sampleVersion += 1
-    }
-
-    public func currentSampleVersion() -> Int {
-        lock.lock(); defer { lock.unlock() }
-        return sampleVersion
     }
 
     public func reset() {
@@ -124,78 +117,4 @@ public final class Profiler: @unchecked Sendable {
         do { try txt.write(to: url, atomically: true, encoding: .utf8); return url } catch { return nil }
     }
 
-    public func startSampling(interval: TimeInterval = 0.5) {
-        guard Self.isEnabled else { return }
-        lock.lock()
-        let alreadyRunning = samplingTimer != nil
-        lock.unlock()
-        guard !alreadyRunning else { return }
-
-        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
-        timer.schedule(deadline: .now(), repeating: interval)
-        timer.setEventHandler { [weak self] in
-            self?.sampleResources()
-        }
-        samplingTimer = timer
-        timer.resume()
-    }
-
-    public func stopSampling() {
-        lock.lock()
-        let timer = samplingTimer
-        samplingTimer = nil
-        lock.unlock()
-        timer?.cancel()
-    }
-
-    private func sampleResources() {
-        guard Self.isEnabled else { return }
-        sampleCPUPercent()
-        var info = task_vm_info_data_t()
-        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.stride / MemoryLayout<natural_t>.stride)
-        let kerr = withUnsafeMutablePointer(to: &info) { ptr -> kern_return_t in
-            ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { infoPtr in
-                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), infoPtr, &count)
-            }
-        }
-        guard kerr == KERN_SUCCESS else { return }
-
-        let mb = 1_048_576.0
-        record("mem.rssMB", value: Double(info.resident_size) / mb)
-        record("mem.virtualMB", value: Double(info.virtual_size) / mb)
-        record("mem.footprintMB", value: Double(info.phys_footprint) / mb)
-    }
-
-    private func sampleCPUPercent() {
-        var times = task_thread_times_info_data_t()
-        var count = mach_msg_type_number_t(MemoryLayout<task_thread_times_info_data_t>.stride / MemoryLayout<natural_t>.stride)
-        let kerr = withUnsafeMutablePointer(to: &times) { ptr -> kern_return_t in
-            ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { infoPtr in
-                task_info(mach_task_self_, task_flavor_t(TASK_THREAD_TIMES_INFO), infoPtr, &count)
-            }
-        }
-        guard kerr == KERN_SUCCESS else { return }
-
-        func timeValueToSeconds(_ tv: time_value_t) -> Double {
-            Double(tv.seconds) + Double(tv.microseconds) / 1_000_000.0
-        }
-
-        let user = timeValueToSeconds(times.user_time)
-        let system = timeValueToSeconds(times.system_time)
-        let now = Date()
-
-        cpuLock.lock()
-        let last = cpuLastSample
-        cpuLastSample = (user: user, system: system, wall: now)
-        cpuLock.unlock()
-
-        guard let last else { return }
-        let elapsed = now.timeIntervalSince(last.wall)
-        guard elapsed > 0 else { return }
-
-        let delta = (user - last.user) + (system - last.system)
-        let cores = max(1, ProcessInfo.processInfo.processorCount)
-        let percent = (delta / elapsed) * 100.0 / Double(cores)
-        record("cpu.percent", value: percent)
-    }
 }

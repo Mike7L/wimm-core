@@ -20,7 +20,6 @@ let enableWhisperKit: Bool = {
 var products: [Product] = [
     .library(name: "WimmDocumentUI", targets: ["WimmDocumentUI"]),
     .library(name: "WimmTranscription", targets: ["WimmTranscription"]),
-    .library(name: "WimmRecording", targets: ["WimmRecording"]),
     .executable(name: "wimm-studio", targets: ["WimmStudio"]),
     .executable(name: "WimmCLI", targets: ["WimmCLI"]),
 ]
@@ -74,15 +73,6 @@ var targetDefinitions: [Target] = [
             .linkedFramework("Speech"),
         ]
     ),
-    .target(
-        name: "WimmRecording",
-        dependencies: [
-            "WimmTranscription",
-            .product(name: "WimmDomain", package: "WimmCore"),
-        ],
-        path: "Sources/WimmRecording",
-        swiftSettings: [.swiftLanguageMode(.v6)]
-    ),
     .systemLibrary(
         name: "CNcurses"
     ),
@@ -101,15 +91,6 @@ var targetDefinitions: [Target] = [
             "entitlements.plist",
         ],
         swiftSettings: [.swiftLanguageMode(.v6)]
-    ),
-    .testTarget(
-        name: "WimmRecordingTests",
-        dependencies: ["WimmRecording"],
-        swiftSettings: [
-            .swiftLanguageMode(.v6),
-            .define("WIMM_TEST_MODE"),
-            .define("SWIFTDATA_ENABLED", .when(configuration: .release))
-        ]
     ),
     // WimmCore's own tests, compiled against the WimmCore modules this build already has.
     // Running them from Packages/WimmCore instead builds the whole dependency graph a second
@@ -156,7 +137,6 @@ var targetDefinitions: [Target] = [
         name: "WimmTestSupport",
         dependencies: [
             "WimmTranscription",
-            "WimmRecording",
             .product(name: "WimmDomain", package: "WimmCore"),
         ],
         path: "Sources/WimmTestSupport",

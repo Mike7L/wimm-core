@@ -237,89 +237,6 @@ public actor NoteProcessor {
 
     // MARK: - Batch Retry for Missing/Unprocessed NoteCards
 
-    /// Finds and reprocesses all notes that are missing or have unprocessed NoteCard metadata.
-    /// - Parameters:
-    ///   - batchSize: Maximum number of notes to process in one batch (default: 50)
-    ///   - progress: Optional callback (processed, total, currentFile)
-    /// - Returns: Tuple of (successful, failed) counts
-    public func retryMissingNoteCards(
-        batchSize: Int = 50,
-        progress: (@Sendable (Int, Int, String) -> Void)? = nil
-    ) async -> (success: Int, failed: Int) {
-        let allFiles = await fileRepository.recordings()
-        var missing: [URL] = []
-
-        // Find files without NoteCard or with unprocessed fallback cards
-        for file in allFiles {
-            let card = await metadataRepository.existingNoteCard(for: file)
-            if card == nil || !(card?.isProcessed ?? false) {
-                missing.append(file)
-            }
-        }
-
-        guard !missing.isEmpty else {
-            log("NoteProcessor: No files missing NoteCard metadata")
-            return (0, 0)
-        }
-
-        log(
-            "NoteProcessor: Found \(missing.count) files without NoteCard, processing batch of \(min(batchSize, missing.count))"
-        )
-
-        var successCount = 0
-        var failedCount = 0
-        let batch = Array(missing.prefix(batchSize))
-
-        // Front-load the whole batch into the unified queue so queue UI shows the
-        // real total from the start; the manager's per-type concurrency limit then
-        // works through it one job at a time (ProcessingModelHandler → process(file:)).
-        // Background priority keeps freshly recorded notes ahead of the backfill.
-        let jobIds: [UUID] = await MainActor.run {
-            batch.map { file in
-                UnifiedModelManager.shared.submit(
-                    type: .processing,
-                    input: file.absoluteString,
-                    priority: .background,
-                    engine: Config.smartModel,
-                    context: ["origin": "NoteProcessor.retryMissingNoteCards"],
-                    retainResult: true
-                )
-            }
-        }
-
-        for (index, (file, jobId)) in zip(batch, jobIds).enumerated() {
-            if Task.isCancelled { break }
-            progress?(index, batch.count, file.lastPathComponent)
-
-            do {
-                _ = try await UnifiedModelManager.shared.waitForCompletion(jobId: jobId)
-                successCount += 1
-            } catch {
-                log("NoteProcessor: Retry failed for \(file.lastPathComponent): \(error)")
-                failedCount += 1
-            }
-        }
-        await UnifiedModelManager.shared.releaseResults(for: jobIds)
-
-        log(
-            "NoteProcessor: Batch complete - success: \(successCount), failed: \(failedCount), remaining: \(missing.count - batch.count)"
-        )
-        return (successCount, failedCount)
-    }
-
-    /// Returns count of notes missing or with unprocessed NoteCard metadata.
-    public func countMissingNoteCards() async -> Int {
-        let allFiles = await fileRepository.recordings()
-        var count = 0
-        for file in allFiles {
-            let card = await metadataRepository.existingNoteCard(for: file)
-            if card == nil || !(card?.isProcessed ?? false) {
-                count += 1
-            }
-        }
-        return count
-    }
-
     /// Generate and persist a NoteCard without running assignments.
     /// Useful for backfill flows that only need metadata enrichment.
     @discardableResult
@@ -496,8 +413,6 @@ public actor NoteProcessor {
 
         return parts.joined(separator: "\n\n")
     }
-
-    // MARK: - Search Index Construction
 
     // MARK: - Private Helpers
 

@@ -98,11 +98,6 @@ public enum VisionDocumentAndSceneExtractor {
         return result
     }
 
-    public static func extractForCaption(from image: CGImage) async throws -> (text: String, isDenseDocument: Bool) {
-        let analysis = try await analyze(image: image)
-        return (analysis.text, analysis.isDenseDocument)
-    }
-
     // MARK: - Document Extraction
 
     private struct DocumentOutcome: Sendable {

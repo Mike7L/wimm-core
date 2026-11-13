@@ -4,8 +4,6 @@ import WimmDomain
 public protocol FileRepositoryProtocol: Sendable {
     func recordings(order: FileRepository.Order, limit: Int?) async -> [URL]
     func assets(for file: URL) async -> FileRepository.FileAssets
-    func deleteRecordingAssets(at file: URL) async
-    func recordingURLs(for noteIds: [String]) async -> [URL]
     func invalidateCache() async
 }
 
@@ -30,7 +28,6 @@ public extension FileRepositoryProtocol {
     func upsertMetadata(for file: URL, updates: [String: Any]) async
     func upsertNoteCard(for file: URL, card: NoteCard, lang: String?) async
     func naiveNoteCard(for file: URL, transcript: String) async -> NoteCard?
-    func noteCardHasContent(_ card: NoteCard) async -> Bool
     #if SWIFTDATA_ENABLED && canImport(SwiftData) && !SPM_TESTS
     func updateNoteMetaEntity(noteId: String, update: @escaping @Sendable (NoteMetaEntity) -> Void) async
     #endif
@@ -58,16 +55,11 @@ public protocol TranscriptRepositoryProtocol: Sendable {
 
 public protocol AttachmentRepositoryProtocol: Sendable {
     func attachments(for file: URL) async -> [NoteAttachment]
-    func appendAttachments(for file: URL, attachments: [NoteAttachment]) async
     func saveOCR(for file: URL, text: String, provider: String, model: String, startedAt: Date) async
     func findParentSessionFile(for attachmentFile: URL) async -> URL?
     func upsertAttachments(for file: URL, attachments: [NoteAttachment]) async
 }
 
 public protocol TrashRepositoryProtocol: Sendable {
-    @discardableResult func moveToTrash(file: URL) async -> URL?
-    @discardableResult func restoreFromTrash(file: URL) async -> URL?
-    func permanentlyDelete(file: URL) async
     func emptyTrash() async
-    func listTrash(order: FileRepository.Order) async -> [URL]
 }

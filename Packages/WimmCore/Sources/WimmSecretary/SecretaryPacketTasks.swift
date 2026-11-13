@@ -249,36 +249,5 @@ extension SecretaryPacket {
 }
 
 extension SecretaryPacket {
-    struct DeferredHint: Codable {
-        let id: String
-        let reason: String
-        let sources: [String]
-        let needsContext: [String]
-    }
 
-    /// Reuse bounded task metadata, never substitute it for source evidence. IDs are remapped
-    /// by actual source path + snapshot hash because new-source IDs may not have been committed.
-    static func deferredHints(root: URL, selected: [String], receipts: [SecretaryReadReceipt]) -> [DeferredHint] {
-        let runs = root.appendingPathComponent("secretary/runs")
-        let directories = ((try? FileManager.default.contentsOfDirectory(at: runs, includingPropertiesForKeys: nil)) ?? [])
-            .sorted { $0.lastPathComponent > $1.lastPathComponent }.prefix(20)
-        let current = Dictionary(zip(selected, receipts).map { ($0.1.file, ($0.0, $0.1)) }, uniquingKeysWith: { first, _ in first })
-        var seen = Set<String>(), hints: [DeferredHint] = []
-        for directory in directories {
-            let url = directory.appendingPathComponent("packet-task-report.json")
-            guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 1_000_000,
-                  let data = try? Data(contentsOf: url), let reports = try? JSONDecoder().decode([TaskReport].self, from: data) else { continue }
-            for report in reports {
-                let matching = report.sources.filter {
-                    !seen.contains($0.file) && current[$0.file]?.1.sha256 == $0.sha256
-                        && current[$0.file]?.1.text == $0.text && current[$0.file]?.1.analysis == $0.analysis
-                }
-                seen.formUnion(matching.map(\.file))
-                guard report.state == "deferred", !matching.isEmpty, hints.count < 20 else { continue }
-                hints.append(DeferredHint(id: report.id, reason: String(report.reason.prefix(1000)),
-                    sources: matching.compactMap { current[$0.file]?.0 }, needsContext: Array(report.needsContext.prefix(5))))
-            }
-        }
-        return hints
-    }
 }

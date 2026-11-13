@@ -183,7 +183,6 @@ public struct RecallSidecar {
 
     /// Where the note came from when recorded inside a document or conversation workflow.
     public var originSource: String? { Self.text(origin?["source"]) }
-    public var originDocument: String? { Self.text(origin?["doc"]) }
     public var originSection: String? { Self.text(origin?["section"]) }
     public var originHeading: String? { Self.text(origin?["heading"]) }
     public var originQuote: String? { Self.text(origin?["quote"]) }

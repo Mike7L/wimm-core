@@ -9,7 +9,6 @@ struct ResponsiveHUDLayout: Equatable {
     static let timerMinWidth: CGFloat = 135
     static let sendMinWidth: CGFloat = 160
     static let actionsMinWidth: CGFloat = 250
-    static let captionsMinWidth: CGFloat = 330
     static let textMinWidth: CGFloat = 480
     static let listFadeSpan: CGFloat = 24
 

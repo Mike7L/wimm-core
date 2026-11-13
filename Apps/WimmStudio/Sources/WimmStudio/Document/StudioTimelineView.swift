@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import WimmDocumentUI
 import WimmDomain
 import WimmInfrastructure
 

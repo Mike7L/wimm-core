@@ -76,20 +76,4 @@ public enum APIKeySecureStore {
         SecItemDelete(query as CFDictionary)
     }
 
-    @discardableResult
-    public static func migrateFromUserDefaults(_ key: String, removeLegacy: Bool = true) -> String? {
-        if isRunningTests() { return nil }
-        if let existing = read(key) {
-            return existing
-        }
-        let ud = UserDefaults.standard
-        guard let legacy = ud.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines), !legacy.isEmpty else {
-            return nil
-        }
-        write(legacy, for: key)
-        if removeLegacy {
-            ud.removeObject(forKey: key)
-        }
-        return legacy
-    }
 }

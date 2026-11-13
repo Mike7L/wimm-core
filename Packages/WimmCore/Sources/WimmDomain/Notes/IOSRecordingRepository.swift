@@ -206,12 +206,7 @@ public actor IOSRecordingRepository {
         }
         upsertMetadata(file: file, updates: ["attachments": jsonCompatible])
     }
-    
-    public func appendAttachments(for file: URL, attachments newAttachments: [NoteAttachment]) {
-        let current = attachments(for: file)
-        upsertAttachments(for: file, attachments: current + newAttachments)
-    }
-    
+
     // MARK: - Recording Metadata Operations
     
     /// Saves recording metadata to a .metadata.json file next to the recording

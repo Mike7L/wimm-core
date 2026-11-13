@@ -190,9 +190,6 @@ public struct ModelProviderFactory {
         }
     }
 
-    public static func inferProvider(for model: String, fallback: LLMCfg.Provider = .gemini) -> LLMCfg.Provider {
-        ModelRouter.provider(for: model, fallback: fallback)
-    }
 }
 
 // MARK: - Provider payloads
@@ -205,7 +202,6 @@ private struct GeminiRequest: Encodable {
     let systemInstruction: Content?
     struct GenConfig: Encodable { let temperature: Double?; let responseMimeType: String?; let responseSchema: AnyEncodable? }
 }
-
 
 private struct OpenRouterRequest: Encodable {
     struct Message: Encodable { let role: String; let content: String }

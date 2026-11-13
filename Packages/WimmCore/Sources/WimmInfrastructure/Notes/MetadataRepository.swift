@@ -138,12 +138,6 @@ public actor MetadataRepository: @preconcurrency MetadataRepositoryProtocol {
         }
     }
 
-    public func noteCardHasContent(_ card: NoteCard) -> Bool {
-        let trimmedTitle = card.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedSummary = card.summary.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmedTitle.isEmpty || !trimmedSummary.isEmpty
-    }
-
     public func naiveNoteCard(for file: URL, transcript: String) -> NoteCard? {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }

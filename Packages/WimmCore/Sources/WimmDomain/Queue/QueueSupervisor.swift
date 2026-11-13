@@ -21,10 +21,6 @@ public actor QueueSupervisor {
         self.analysis = analysis
         self.workflow = ProcessingWorkflow(storage: storage, analysis: analysis)
     }
-    
-    public func setProgressHandler(_ handler: @escaping ProgressHandler) {
-        self.onProgress = handler
-    }
 
     /// Возвращает список задач, которые будут обработаны, без изменений на диске.
     public func previewProcessQueue(limit: Int? = nil) async throws -> [UUID] {

@@ -1,5 +1,4 @@
 import XCTest
-import WimmDomain
 @testable import WimmInfrastructure
 
 final class ProcessingConfigTests: XCTestCase {

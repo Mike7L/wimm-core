@@ -18,20 +18,6 @@ extension SecretaryPacket.Plan {
 }
 
 extension SecretaryPacket {
-    static let sessionContract = """
-
-    Runtime session mode: you may perform bounded addressed reads within this same conversation.
-    To read, return {"read_requests":[{"id":"r1","operation":"find|section|source|outline","query":"literal phrase, exact heading/block ID, or S source ID","purpose":"what this resolves","offset":0}]}.
-    At most 5 read requests per turn; at most 6 total model turns share this run's original budget.
-    find searches the complete versioned document and returns matching whole blocks with budget/absence diagnostics.
-    section reads an exact heading title or heading block ID, with offset pagination over whole blocks.
-    outline lists all headings in pages. source reads all available distinct text variants of a registered source in this owned library, within the original source budget; it never uploads an original image/audio.
-    Read replies contain only additional context; keep all earlier supplied evidence and blocks in this conversation.
-    Respond to next_offset when a section/page is incomplete. not_found concerns the stated search scope, never proof an event did not happen.
-    admitted_source_ids is the complete source set your final source_decisions and tasks must partition, including additional sources you requested.
-    Return ready independent tasks as soon as possible. The host commits ready work without buying reads for unrelated deferred work.
-    On the final turn, return your ready/deferred tasks rather than another read request. Missing evidence stays explicitly deferred.
-    """
 
     struct ReadRequest: Codable {
         let id: String

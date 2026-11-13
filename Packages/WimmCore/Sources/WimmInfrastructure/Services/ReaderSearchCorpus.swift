@@ -203,11 +203,6 @@ public struct ReaderSearchCorpus: Sendable {
             total + entry.fields.reduce(0) { $0 + ($1.sharesSource ? 0 : $1.utf8.utf8.count) }
         }
     }
-    public var boundaryByteCount: Int {
-        entries.reduce(0) { total, entry in
-            total + entry.fields.reduce(0) { $0 + $1.forbiddenBoundaries.count * MemoryLayout<Int>.stride }
-        }
-    }
 
     /// Transactional: a cancellation keeps the previous complete corpus. Identity
     /// and field comparisons happen on the worker, never on MainActor. Reordering,

@@ -15,8 +15,6 @@ public actor LLMBundleExporter {
         public var includeAttachmentsOCR: Bool = true
         /// Skip notes that haven't been processed by LLM yet
         public var filterUnprocessed: Bool = true
-        /// Merge or skip notes within this interval if they are redundant (in seconds)
-        public var deduplicationInterval: TimeInterval? = 600  // 10 minutes
         /// Minimum content length to be included (to avoid "noisy" short recordings)
         public var minContentLength: Int = 10
 
@@ -255,12 +253,6 @@ public actor LLMBundleExporter {
         return entries
     }
 
-    private func mergeContent(_ a: String, _ b: String) -> String {
-        if a == b { return a }
-        if b.contains(a) { return b }
-        if a.contains(b) { return a }
-        return a + "\n\n[Continuance]\n" + b
-    }
 }
 
 private struct ChronicleEntry {

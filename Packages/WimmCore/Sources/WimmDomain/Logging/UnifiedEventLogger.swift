@@ -69,11 +69,6 @@ public final class UnifiedEventLogger: @unchecked Sendable {
             .appendingPathComponent("events", isDirectory: true)
     }
 
-    /// Redacts sensitive data for user-visible copy/export flows without truncating content.
-    public static func redactSensitiveTextForClipboard(_ text: String) -> String {
-        shared.sanitizeText(text, maxLength: Int.max)
-    }
-
     public func logAgent(message: String, legacyLogDirectory: URL? = nil) {
         let now = Date()
         let record = UnifiedEventRecord(

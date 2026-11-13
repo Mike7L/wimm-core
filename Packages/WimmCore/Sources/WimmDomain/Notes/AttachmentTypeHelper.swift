@@ -74,12 +74,7 @@ public enum AttachmentTypeHelper {
             return .document
         }
     }
-    
-    /// Determine attachment type string for creating new attachments
-    public static func typeString(for url: URL) -> String {
-        determineType(for: url).rawValue
-    }
-    
+
     /// Check if file should be processed (supported types)
     public static func isSupported(extension ext: String) -> Bool {
         imageExtensions.contains(ext) || 

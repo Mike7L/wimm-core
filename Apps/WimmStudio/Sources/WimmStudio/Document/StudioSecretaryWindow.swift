@@ -211,17 +211,6 @@ struct SecretaryWindowView: View {
         .disabled(secretary.isRunning)
     }
 
-    private func setFormat(_ value: Int) {
-        guard let workspace, SecretaryResponseFormatSetting.current(workspace) != value else { return }
-        do {
-            try SecretaryResponseFormatSetting.set(value, in: workspace)
-            settingsError = nil
-        } catch {
-            settingsError = error.localizedDescription
-        }
-        format = SecretaryResponseFormatSetting.current(workspace)
-    }
-
     // MARK: Queue
 
     private var queueCard: some View {

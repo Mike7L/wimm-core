@@ -32,8 +32,7 @@ public actor FileRepository: FileRepositoryProtocol {
         if let limit, limit < list.count { return Array(list.prefix(limit)) }
         return list
     }
-    
-    
+
     /// Thread-safe implementation of recordings listing (moved from FileStore for concurrency safety)
     private func listRecordingsAscending() -> [URL] {
         // Check cache validity
@@ -182,28 +181,6 @@ public actor FileRepository: FileRepositoryProtocol {
         cacheTimestamp = nil
     }
 
-    public func recordingURLs(for noteIds: [String]) -> [URL] {
-        guard !noteIds.isEmpty else { return [] }
-        let available = listRecordingsAscending()
-        var map: [String: URL] = [:]
-        var uuidMap: [String: URL] = [:]
-        map.reserveCapacity(available.count)
-        uuidMap.reserveCapacity(available.count)
-        
-        for url in available { 
-            map[url.lastPathComponent] = url
-            uuidMap[url.stableUUID.uuidString] = url
-        }
-        
-        let base = FileStore.recordingsDirectory()
-        return noteIds.compactMap { noteId in
-            if let existing = map[noteId] { return existing }
-            if let existing = uuidMap[noteId] { return existing }
-            let fallback = base.appendingPathComponent(noteId)
-            return fileManager.fileExists(atPath: fallback.path) ? fallback : nil
-        }
-    }
-
     // MARK: - Assets
 
     public func assets(for file: URL) -> FileAssets {
@@ -232,25 +209,4 @@ public actor FileRepository: FileRepositoryProtocol {
         return FileAssets(screenshotURL: screenshot, metadataURL: metadataURL)
     }
 
-    public func deleteRecordingAssets(at file: URL) {
-        let fm = fileManager
-        var targets: [URL] = [
-            file,
-            FileStore.screenshotURL(forRecordingURL: file),
-            FileStore.legacyPNGScreenshotURL(forRecordingURL: file),
-            FileStore.metadataURL(forRecordingURL: file),
-            FileStore.miniURL(forRecordingURL: file),
-            FileStore.metadataURL(forRecordingURL: FileStore.miniURL(forRecordingURL: file)),
-            FileStore.microURL(forRecordingURL: file),
-            FileStore.metadataURL(forRecordingURL: FileStore.microURL(forRecordingURL: file))
-        ]
-        
-        // Add all multi-screen screenshots
-        targets.append(contentsOf: FileStore.allScreenshotURLs(forRecordingURL: file))
-        
-        for target in targets {
-            try? fm.removeItem(at: target)
-        }
-        invalidateCache()
-    }
 }

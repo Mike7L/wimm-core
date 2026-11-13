@@ -47,44 +47,6 @@ struct SecretaryPacket {
         var errorDescription: String? { issues.map(\.message).joined(separator: "\n") }
     }
 
-    /// Repairs replace only the invalid decisions; block edits and all other plan fields stay frozen.
-    struct DecisionRepair: Decodable {
-        let sourceDecisions: [SecretaryResult.SourceDecision]
-        enum CodingKeys: String, CodingKey { case sourceDecisions = "source_decisions" }
-        init(from decoder: Decoder) throws {
-            let keys = try decoder.container(keyedBy: RepairKey.self)
-            guard keys.allKeys.map(\.stringValue) == ["source_decisions"] else {
-                throw Failure("Repair must contain only source_decisions.")
-            }
-            sourceDecisions = try decoder.container(keyedBy: CodingKeys.self).decode([SecretaryResult.SourceDecision].self, forKey: .sourceDecisions)
-        }
-        private struct RepairKey: CodingKey {
-            let stringValue: String
-            var intValue: Int? { nil }
-            init?(stringValue: String) { self.stringValue = stringValue }
-            init?(intValue: Int) { return nil }
-        }
-    }
-
-    func repairing(_ plan: Plan, issues: [DecisionIssue], response: String) throws -> Plan {
-        let repair = try JSONDecoder().decode(DecisionRepair.self, from: Data(response.utf8))
-        let ids = repair.sourceDecisions.map(\.source)
-        guard Set(ids) == Set(issues.map(\.source)), ids.count == issues.count else {
-            throw Failure("Repair must replace exactly the invalid source decisions.")
-        }
-        let originals = Dictionary(uniqueKeysWithValues: plan.sourceDecisions.map { ($0.source, $0) })
-        for decision in repair.sourceDecisions {
-            guard let original = originals[decision.source],
-                  decision.status == original.status || decision.status == "pending",
-                  Set(decision.mergedWith ?? []).isSubset(of: Set(original.mergedWith ?? [])) else {
-                throw Failure("Repair cannot invent a new judgment or duplicate target for \(decision.source).")
-            }
-        }
-        let replacements = Dictionary(uniqueKeysWithValues: repair.sourceDecisions.map { ($0.source, $0) })
-        return Plan(summary: plan.summary, sourceDecisions: plan.sourceDecisions.map { replacements[$0.source] ?? $0 },
-                    edits: plan.edits, questions: plan.questions, needsContext: plan.needsContext, needsImages: plan.needsImages)
-    }
-
     let task: SecretaryTask
     let documentData: Data
     let registryData: Data

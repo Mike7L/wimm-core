@@ -1,6 +1,5 @@
 import XCTest
 import WimmDomain
-@testable import WimmTUI
 
 final class RecordCommandsTests: XCTestCase {
     func testResolveRecordedTranscriptPrefersFinalText() {

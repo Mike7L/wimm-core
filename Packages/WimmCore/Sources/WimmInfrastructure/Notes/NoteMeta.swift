@@ -29,16 +29,6 @@ public enum NoteMeta {
             ])
     }
 
-    /// Mark a note as canceled in metadata
-    public static func markAsCanceled(for file: URL) {
-        FileStore.upsertMetadata(
-            for: file,
-            updates: [
-                "isCanceled": true,
-                "canceledAt": ISO8601.now,
-            ])
-    }
-
     /// Remove canceled status from a note
     public static func uncancel(for file: URL) {
         FileStore.upsertMetadata(

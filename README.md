@@ -14,7 +14,7 @@ This repository holds the current apps only:
 | iOS app | `Sources/WimmiOS`, `Sources/WimmShareExtension` | Recorder, notes, share extension (XcodeGen: `project.yml`) |
 | CLI + MCP server | `Sources/WimmCLI` | `wimm-cli`: library tools, secretary bookkeeping, MCP on stdio |
 | Core | `Packages/WimmCore` | `WimmDomain`, `WimmInfrastructure`, `WimmSecretary`, `WimmTUI` |
-| Shared | `Sources/WimmTranscription`, `Sources/WimmDocumentUI`, `Sources/WimmRecording` | Transcription routing, document UI, recording |
+| Shared | `Sources/WimmTranscription`, `Sources/WimmDocumentUI` | Transcription routing, shared document UI |
 
 ## Build
 

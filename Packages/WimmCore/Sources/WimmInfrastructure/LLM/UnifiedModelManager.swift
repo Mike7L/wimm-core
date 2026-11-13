@@ -97,16 +97,6 @@ public class UnifiedModelManager: ObservableObject {
         pruneFinishedHistory(for: jobs[index].type)
     }
 
-    public func submitAndWait(
-        type: ModelType, input: String, priority: ModelPriority = .normal, engine: String,
-        context: [String: String]? = nil, progress: ((Double) -> Void)? = nil
-    ) async throws -> String {
-        let jobId = submit(
-            type: type, input: input, priority: priority, engine: engine, context: context,
-            retainResult: true)
-        return try await waitForCompletion(jobId: jobId, progress: progress)
-    }
-
     /// Await an already-submitted job until it reaches a terminal state.
     /// Lets bulk callers front-load a whole batch via `submit` (so queue UI sees
     /// the real total immediately) and then await the jobs one by one. Those submissions

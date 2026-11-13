@@ -76,7 +76,6 @@ public struct SecretaryReadReceipt: Codable, Sendable {
         }
     }
 
-    public static let environmentKey = "WIMM_SECRETARY_READ_LOG"
     public static let capability = "x-wimm-read-receipts"
     public static let coverageCapability = "x-wimm-text-coverage"
 

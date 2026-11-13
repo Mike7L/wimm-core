@@ -40,10 +40,6 @@ public actor LLMJSONClient {
         self.pseudonymDictionary = pseudonymDictionary
         self.pseudonymMapArchive = pseudonymMapArchive
     }
-    public static func makeDefault() -> LLMJSONClient {
-        return LLMJSONClient(
-            model: ModelSelection.model(for: .understand), tracer: nil, capability: .understand)
-    }
 
     public init(
         capability: ModelCapability, tracer: (@Sendable (String) -> Void)?,
@@ -284,51 +280,7 @@ public actor LLMJSONClient {
         }
     }
 
-    // Analyze a group of cards (texts only) and return a Markdown analysis.
-    public func analyzeCardsText(texts: [String]) async -> String? {
-        struct Input: Encodable { let cards_texts: [String] }
-        let sys = PromptLoader.load("project_cards_analysis_markdown")
-
-        guard
-            let user = try? String(
-                data: JSONEncoder().encode(Input(cards_texts: texts)), encoding: .utf8)
-        else { return nil }
-
-        do {
-            // Gemini v1beta doesn't allow "text/markdown" responseMimeType. Request as plain text and still prompt for Markdown content.
-            let out = try await call(system: sys, userJSON: user, origin: #function).text
-            let clean = LLMText.stripFences(out)
-            // If the output is wrapped in JSON string quotes by mistake, try to decode or return as is.
-            // Usually call() returns the content string.
-            let trimmed = clean.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        } catch {
-            logAndTrace("Cards analysis LLM error: \(error)")
-            return nil
-        }
-    }
-
-    // Types moved to LLMClientTypes.swift
-
-    // MARK: - Generic Instruction & Insights
-
-    public func performInstruction(instruction: String, context: String) async -> String? {
-        let sys = PromptLoader.load("agent_generic_instruction")
-        let user = "INSTRUCTION: \(instruction)\n\nCONTEXT:\n\(context)"
-
-        do {
-            let out = try await perform(
-                system: sys, userJSON: user, temperature: 0.2, schema: nil,
-                timeout: LLMCfg.requestTimeout, responseMimeType: "text/plain",
-                traceTag: "LLM response (instruction) ←", origin: #function).text
-            let clean = LLMText.stripFences(out)
-            let trimmed = clean.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        } catch {
-            logAndTrace("Perform instruction LLM error: \(error)")
-            return nil
-        }
-    }
+    // MARK: - Logging
 
     private func logAndTrace(_ message: String) {
         log(message)
@@ -421,7 +373,6 @@ public actor LLMJSONClient {
         }
         return merged
     }
-
 
     /// Unified provider-specific execution with shared tracing and error handling.
     private func perform(

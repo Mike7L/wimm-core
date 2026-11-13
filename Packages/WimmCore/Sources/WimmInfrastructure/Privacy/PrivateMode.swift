@@ -28,13 +28,6 @@ public enum PrivateMode {
         try await $egress.withValue(.pseudonymized, operation: operation, isolation: isolation)
     }
 
-    /// For requests that carry no note content at all (an API-key check).
-    public static func withoutUserContent<T>(
-        isolation: isolated (any Actor)? = #isolation, _ operation: () async throws -> T
-    ) async rethrows -> T {
-        try await $egress.withValue(.noUserContent, operation: operation, isolation: isolation)
-    }
-
     /// Called by `LLMTransport` before it builds a cloud request.
     public static func checkCloudEgress(provider: String) throws {
         guard isEnabled, egress == .unmarked else { return }

@@ -1,5 +1,4 @@
 import Foundation
-import WimmInfrastructure
 
 /// UTF-8 source budget; document context is separate. KB uses decimal bytes.
 public enum SecretaryPacketSettings {

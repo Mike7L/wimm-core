@@ -1,6 +1,5 @@
 import Foundation
 import XCTest
-@testable import WimmInfrastructure
 @testable import WimmSecretary
 
 final class SecretaryPacketSettingsTests: XCTestCase {

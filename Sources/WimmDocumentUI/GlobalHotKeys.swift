@@ -30,20 +30,15 @@ public final class HotKeyCenter {
     public enum KeyCode {
     public static let escape: UInt32 = UInt32(kVK_Escape)
     public static let f9: UInt32 = UInt32(kVK_F9)
-    public static let ansiA: UInt32 = UInt32(kVK_ANSI_A)
-    public static let ansiI: UInt32 = UInt32(kVK_ANSI_I)
     public static let ansiW: UInt32 = UInt32(kVK_ANSI_W)
     public static let ansiV: UInt32 = UInt32(kVK_ANSI_V)
     public static let ansiC: UInt32 = UInt32(kVK_ANSI_C)
     public static let ansiX: UInt32 = UInt32(kVK_ANSI_X)
-    public static let ansiS: UInt32 = UInt32(kVK_ANSI_S)
     public static let ansiH: UInt32 = UInt32(kVK_ANSI_H)
     // Common local keys (use UInt32 here; cast as needed for NSEvent.keyCode)
     public static let space: UInt32      = UInt32(kVK_Space)
     public static let leftArrow: UInt32  = UInt32(kVK_LeftArrow)
     public static let rightArrow: UInt32 = UInt32(kVK_RightArrow)
-    public static let upArrow: UInt32    = UInt32(kVK_UpArrow)
-    public static let downArrow: UInt32  = UInt32(kVK_DownArrow)
     }
 
     private var nextID: UInt32 = 1

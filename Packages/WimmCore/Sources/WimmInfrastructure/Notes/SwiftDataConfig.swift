@@ -1,18 +1,6 @@
 import Foundation
 import WimmDomain
 
-// Feature flag to enable SwiftData-backed note metadata storage.
-public enum SwiftDataCfg {
-    /// Enable SwiftData storage layer. Can be toggled via UserDefaults key or env var.
-    /// Env var has priority. Defaults to false.
-    public static var enabled: Bool {
-        if let raw = ProcessInfo.processInfo.environment["WIMM_SWIFTDATA"], !raw.isEmpty {
-            return raw == "1" || raw.lowercased() == "true"
-        }
-        return UserDefaults.standard.bool(forKey: DefaultsKey.swiftDataEnabled)
-    }
-}
-
 #if SWIFTDATA_ENABLED
 import SwiftData
 
