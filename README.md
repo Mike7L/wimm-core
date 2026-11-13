@@ -29,3 +29,7 @@ a real library: under `WIMM_TEST_MODE` storage resolves to a per-process temp
 directory.
 
 Swift 6 / SwiftUI, Swift Package Manager, macOS 14+, iOS 17+.
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
