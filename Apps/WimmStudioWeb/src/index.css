@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+/* Modern Web Guidance: modal dialog scroll containment without mutating body overflow */
+dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background-color: rgba(9, 9, 11, 0.72);
+  backdrop-filter: blur(3px);
+}
+
+/* Custom subtle scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(161, 161, 170, 0.22);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(161, 161, 170, 0.38);
+}
+
+/* Modern Web Guidance (form-fields-automatically-fit-contents):
+   auto-growing textarea with explicit width: 100% and height: auto */
+textarea.shoulders-auto-textarea {
+  field-sizing: content;
+  height: auto;
+  width: 100%;
+  min-block-size: 1.5lh;
+  max-block-size: 7lh;
+}
+
+/* Modern Web Guidance (viewport-aware-dropdowns):
+   Popover API + CSS Anchor Positioning with logical position-area and flip fallbacks */
+.shoulders-settings-popover {
+  inset: auto;
+  top: 3.25rem;
+  right: 0.75rem;
+  margin: 0;
+  position-area: block-end span-inline-start;
+  position-try-fallbacks: flip-block, flip-inline, flip-block flip-inline;
+}
+
+/* Dialog as its own screen: the column is centred (max 48rem) right of the 76px rail. */
+@media (min-width: 768px) {
+  .shoulders-settings-popover-page {
+    right: max(0.75rem, calc((100vw - 76px - 48rem) / 2 + 0.75rem));
+  }
+}
+
+[popover]:is(:popover-open, .\:popover-open) {
+  display: block;
+}
+
+

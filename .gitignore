@@ -1,0 +1,86 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# SwiftPM
+.build/
+.swiftpm/
+Packages/*
+!Packages/WimmCore/
+!Packages/WimmCore/**
+!Packages/WimmCore/
+!Packages/WimmCore/**
+Packages/WimmCore/.build/
+Packages/WimmCore/.build/
+Package.pins
+.build_ios_device/
+.build_ios_sim/
+.build_ios/
+
+# Keep Package.resolved if present (do not ignore)
+
+# Environment files
+.env
+.env.local
+.env.*.local
+keys/
+*.key
+
+# Xcode (in case the project is opened in Xcode)
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xccheckout
+*.moved-aside
+*.xcscmblueprint
+*.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# App bundles and archives
+*.app
+*.xcarchive
+*.ipa
+*.dSYM
+*.dSYM.zip
+/output/
+
+# Carthage/CocoaPods (not used here, but safe to ignore if present)
+Carthage/Build/
+Pods/
+
+# Logs and temporary files
+logs/
+tmp/
+*.log
+all_transcriptions.md
+build_log*.txt
+build_output*.txt
+*.orig
+*~
+*.swp
+__pycache__/
+*.pyc
+
+# Editors/IDEs
+.idea/
+.vscode/
+
+# Build artifacts that might appear at root
+Wimm.app/ 
+Wimm.xcodeproj/
+AppBundle/
+build/
+.cache/
+.venv/
+*.zip
+/*.txt
+/*.log
+
+# Private secretary experiment payloads and model responses.
+/scratch/packet_exp/
+
+# Web artifacts
+node_modules/
+dist/
+*.tsbuildinfo

@@ -1,0 +1,29 @@
+Extract a compact factual card from a transcript. No speculation. Output valid JSON only (no markdown, no comments) with schema NoteCard@v1 and fields: schema, note_id or note_file, lang (if provided), title, summary, refined_text, agent_recommendation (optional), agent_reason (optional).
+If the transcript starts with the word "вопрос" (case-insensitive, may be followed by ":" or ","), treat the remainder as a user question. In that case:
+- Choose agent_recommendation from:
+  - solver: direct answers
+  - analyst: reasoning and synthesis
+  - planner: structured plans and gaps
+  - librarian: exact facts and citations
+  - creative: narrative and tone
+  - sherlock: evidence-first investigation
+- Add agent_reason (<= 120 chars).
+- Do not include the "вопрос" marker in refined_text, title, or summary.
+If it does not start with "вопрос", omit agent_recommendation and agent_reason.
+refined_text is NOT a summary. It is the full transcript, cleaned up: fix grammar and punctuation, drop fillers ("э-э", "ну вот", "как бы", stutters, repeated false starts), add paragraph breaks. Keep every statement, question, detail, number, and name that the transcript contains, in the original order and in the speaker's own voice (first person stays first person). Never retell in the third person, never merge several sentences into one conclusion, never drop a topic because it seems minor. Expect refined_text to be roughly as long as the transcript — removing fillers may shorten it somewhat, but if it comes out under two thirds of the transcript's length you have summarized and must redo it. Condensing belongs in the summary field, which stays short; refined_text and summary must never be two versions of the same abridgement.
+note.localHypothesis, when present, is a rough on-device recognition of the same audio. It is noisier than note.text and is never the base for output. Use it only as secondary evidence: where the two disagree on a name, term, or acronym, prefer the reading that fits the context, which sometimes means taking a spelling the local pass got right (e.g. a Latin-script term the main transcript rendered phonetically). Never import wording, phrasing, or content that appears only in localHypothesis.
+Apply the speaker's own self-corrections: when they correct themselves mid-sentence ("скажи Пете, ой, то есть Васе"), keep only the corrected version and drop the retracted one, along with the correction marker itself ("ой", "то есть", "нет, вернее", "I mean").
+When note.glossary is present, use it only as contextual spelling evidence for refined_text, title, and summary. It is never a substitution table.
+- Canonicalize an observed form only when the surrounding source context matches that entry's apply_when rule and does not match preserve_when.
+- Preserve intentional naming deliberation, quoted historical names, ordinary words, and real unrelated entities.
+- Never invent an acronym expansion, product description, or other meaning merely from an observed form.
+- If context remains ambiguous, leave the source wording unchanged.
+- Change only a whole-token form listed literally in observed_forms. Similar spellings are not aliases.
+- Never add a canonical term as a parenthetical explanation, alternate name, title annotation, or summary annotation. A canonical term may appear only when an observed source token was actually canonicalized in refined_text.
+- Freeze every possible name in a naming-deliberation span. Signals include "X or Y", "X или Y", "название", "назвать", "вернуть имя", and a sequence of similar candidate names. Do not canonicalize any item in that span, even if one is an observed form.
+- The self-correction rule above remains authoritative. Keep only the speaker's corrected choice, remove retracted choices and correction markers, and never canonicalize or reintroduce a retracted term in title or summary.
+For the product.wimm entry specifically:
+- Outside naming deliberation, an exact Vim/Вим/VIM observed form means Wimm when there is no independent editor-specific evidence.
+- Preserve the real Vim editor when the source itself contains evidence such as Neovim, .vimrc, plugins, buffers, modal editing, command mode, or insert mode.
+- Do not invent "text editor" or any other product meaning from the spelling.
+Before returning JSON, verify that every newly introduced Wimm or HUD replaces an allowed observed token, no protected naming span was changed, and every self-correction still contains only the corrected choice. Restore the source form when a check fails.

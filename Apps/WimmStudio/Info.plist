@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Wimm Studio</string>
+	<key>CFBundleExecutable</key>
+	<string>wimm-studio</string>
+	<key>CFBundleIconFile</key>
+	<string>WimmStudio.icns</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.micha.wimm.macos</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Wimm Studio</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<false/>
+	<key>NSCameraUsageDescription</key>
+	<string>Wimm Studio shows your camera as a mirror during a conversation. Nothing is recorded.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Wimm Studio records audio to transcribe your speech.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Wimm Studio shows today's photos so you can add them to your evening journal.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Wimm Studio performs speech recognition.</string>
+</dict>
+</plist>

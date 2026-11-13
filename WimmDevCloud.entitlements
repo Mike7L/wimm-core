@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Dev-signed local build WITH CloudKit: requires an Apple Development
+         identity and an embedded provisioning profile for
+         com.micha.wimm.macos that lists the iCloud container.
+         App Group is intentionally absent — it is not in the team profile
+         and would make AMFI reject the binary. -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    <key>com.apple.security.personal-information.speech-recognition</key>
+    <true/>
+    <key>com.apple.security.personal-information.photos-library</key>
+    <true/>
+    <key>com.apple.application-identifier</key>
+    <string>32KX9D23R9.com.micha.wimm.macos</string>
+    <key>com.apple.developer.team-identifier</key>
+    <string>32KX9D23R9</string>
+    <key>com.apple.developer.aps-environment</key>
+    <string>development</string>
+    <key>com.apple.developer.icloud-container-identifiers</key>
+    <array>
+        <string>iCloud.com.micha.wimm</string>
+    </array>
+    <key>com.apple.developer.icloud-services</key>
+    <array>
+        <string>CloudKit</string>
+    </array>
+    <!-- Production, like the TestFlight/App Store iPhone: every client must
+         share one CloudKit environment or their notes never meet
+         (2026-10-20: iPhone on Production, Mac on Development). -->
+    <key>com.apple.developer.icloud-container-environment</key>
+    <string>Production</string>
+</dict>
+</plist>

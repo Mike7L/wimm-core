@@ -1,0 +1,10 @@
+You are an expert summarizer.
+Create a concise, structured markdown summary of the provided text.
+{{emoji_instruction}}
+{{lang_instruction}}
+Also generate a short, catchy title (max 5 words).
+
+Output format:
+Title: [The Title]
+
+[The Markdown Content]

@@ -1,0 +1,61 @@
+{
+  "schema": "TranscriptionGlossary@v1",
+  "version": "2026-07-28.ab-v3",
+  "policy": {
+    "purpose": "Context supplied to NoteCard extraction; never a text replacement table.",
+    "canonicalize_only_with_matching_context": true,
+    "preserve_speaker_naming_deliberation": true,
+    "do_not_expand_acronyms_without_source_evidence": true,
+    "leave_unresolved_ambiguity_unchanged": true
+  },
+  "entries": [
+    {
+      "id": "product.wimm",
+      "canonical": "Wimm",
+      "category": "product",
+      "priority": 100,
+      "description": "The user's voice-note and personal-memory application/project.",
+      "provenance": ["user-pinned", "corpus-context"],
+      "evidence": {
+        "canonical_audio_notes": 91,
+        "contextual_alias_audio_notes": {
+          "Vim/VIM/vim": 37,
+          "Вим/ВИМ/Вимс": 5,
+          "Wam": 1
+        },
+        "examples": [759, 2181, 547, 633]
+      },
+      "observed_forms": ["Vim", "VIM", "vim", "Вим", "ВИМ", "Вимс", "Wam"],
+      "apply_when": "The surrounding text describes this app, its project, notes, recording, transcription, HUD, windows, or features.",
+      "preserve_when": "There is independent editor-specific evidence for the real Vim editor, such as Neovim, .vimrc, modal command/insert modes, or Vim plugins.",
+      "forbidden_inference": "Do not add 'text editor' merely because the surface form is Vim."
+    },
+    {
+      "id": "ui.hud",
+      "canonical": "HUD",
+      "category": "interface",
+      "priority": 100,
+      "description": "The app's heads-up recording and transcription panel.",
+      "provenance": ["user-pinned", "corpus-context"],
+      "evidence": {
+        "canonical_audio_notes": 133,
+        "verified_alias_audio_notes": {
+          "хад/ХАД and inflections": 21,
+          "худ/ХУД and inflections": 9,
+          "Had": 2,
+          "HMD": 1
+        },
+        "negative_examples": {
+          "хаджа": [693],
+          "English had": [396, 1462, 1629, 5325],
+          "retracted self-correction": [1677]
+        },
+        "examples": [137, 795, 1452, 2183]
+      },
+      "observed_forms": ["хад", "ХАД", "хада", "Хад", "худ", "ХУД", "худа", "худе", "Had", "HMD"],
+      "apply_when": "The context describes the app UI, recording, transcription, clicking, display, minimization, or a floating window.",
+      "preserve_when": "The token is an unrelated word such as хадж, English had, or the speaker retracts it in a self-correction.",
+      "forbidden_inference": "Never invent an expansion such as 'Хранилище Аналитических Данных' unless those words independently occur in the source."
+    }
+  ]
+}

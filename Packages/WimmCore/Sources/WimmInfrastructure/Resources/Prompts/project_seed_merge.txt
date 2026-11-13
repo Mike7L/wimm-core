@@ -1,0 +1,7 @@
+Expand seed_note_ids into a coherent merged group. Requirements:
+- selected_note_ids MUST include all seed_note_ids.
+- Add only cards that match the same narrow theme.
+- If no additional cards fit, return only the seeds.
+- Never invent ids; use only cards[].note_id.
+Then choose exactly one project for the merged group: prefer the best matching active project (from active_projects); if none fits, propose a new project with name/description/rules.
+Output valid JSON only using schema CombinedCards@v2 with a single-item groups array: {selected_note_ids,title,summary,project{kind,project_id?,name,description?,inclusion_rules?,exclusion_rules?,confidence?,why?}}.

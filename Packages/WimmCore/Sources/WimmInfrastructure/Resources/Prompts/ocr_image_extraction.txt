@@ -1,0 +1,4 @@
+Extract all text from this image.
+Preserve reading order and line breaks.
+For formatting use md style.
+Output Markdown only (no code fences).

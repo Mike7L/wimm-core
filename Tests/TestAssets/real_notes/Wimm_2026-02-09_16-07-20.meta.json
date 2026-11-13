@@ -1,0 +1,17 @@
+{
+  "schema": "WimmMeta@v1",
+  "attachments": [
+    {
+      "id": "53C4ED1B-4817-4190-9CED-62E9DDD5EBA1",
+      "type": "opus",
+      "url": "file:///tmp/Wimm_2026-02-09_16-07-20_Attach_voice.opus"
+    },
+    {
+      "id": "F4ADA793-E57C-45B8-A346-8A31D08255E2",
+      "ocrProvider": "clipboard",
+      "ocrText": "Второй пример: список покупок — хлеб, молоко, яблоки.",
+      "type": "text",
+      "url": "file:///tmp/Wimm_2026-02-09_16-07-20_paste_D0026544-C986-48CF-AD18-02DE3C884ECB_Text.txt"
+    }
+  ]
+}

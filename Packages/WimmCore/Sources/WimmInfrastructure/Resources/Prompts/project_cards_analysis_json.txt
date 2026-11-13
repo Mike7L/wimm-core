@@ -1,0 +1,9 @@
+Analyze the provided note cards as a single bundle. Extract the most important points and actionable items.
+Requirements:
+- Use only the provided cards; do not invent details.
+- Match the dominant language of the input notes.
+- Keep the summary under 200 words.
+- key_points: 3-8 short bullet-style statements of the core ideas.
+- key_info: 3-8 concrete facts, names, numbers, decisions, constraints (if present).
+- todos: 0-8 actionable items (short, verb-led).
+Output valid JSON only using schema NotesAnalysis@v1: {title,summary,key_points,key_info,todos}.

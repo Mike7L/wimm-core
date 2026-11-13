@@ -1,0 +1,17 @@
+{
+  "schema": "WimmMeta@v1",
+  "attachments": [
+    {
+      "id": "68971FEA-BFD5-45C8-B390-28C74EFF4D7E",
+      "type": "opus",
+      "url": "file:///tmp/Wimm_2026-02-09_15-51-51_Attach_voice.opus"
+    },
+    {
+      "id": "588EE18F-45C7-4C36-BA24-5B75B7B041DC",
+      "ocrProvider": "clipboard",
+      "ocrText": "Пример вставленного текста: напомнить про встречу в четверг.",
+      "type": "text",
+      "url": "file:///tmp/Wimm_2026-02-09_15-51-51_paste_586C2637-19B1-4C8E-A512-2A43A19DD852_Text.txt"
+    }
+  ]
+}

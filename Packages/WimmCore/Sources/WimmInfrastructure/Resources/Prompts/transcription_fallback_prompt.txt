@@ -1,0 +1,1 @@
+Please transcribe the following audio. Return only the transcript text, with no extra commentary. If the audio contains no speech, only silence, or only background noise, output exactly [[NO_SPEECH]] and nothing else. Do not invent or guess words for non-speech audio.

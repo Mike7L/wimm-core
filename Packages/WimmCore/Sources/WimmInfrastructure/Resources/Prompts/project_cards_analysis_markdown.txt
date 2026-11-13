@@ -1,0 +1,9 @@
+You are an advanced analyst. You are given a list of texts from "cards" (notes/thoughts).
+Analyze them deeply.
+Answer the following:
+1. What are these cards about? (Themes, topics)
+2. Connection: Why are they together?
+3. Ideas: What new insights or ideas emerge from their combination?
+4. Action: Is there anything that needs to be done?
+
+Output format: Markdown. Be concise but insightful.

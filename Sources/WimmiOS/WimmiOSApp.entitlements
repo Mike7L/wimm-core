@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.com.wimm.app</string>
+    </array>
+    <key>aps-environment</key>
+    <string>development</string>
+    <key>com.apple.developer.icloud-container-identifiers</key>
+    <array>
+        <string>iCloud.com.micha.wimm</string>
+    </array>
+    <!-- Xcode-installed debug builds default to Development, while TestFlight
+         and the App Store use Production. Pin Production so every install
+         syncs with the same database as the Mac. -->
+    <key>com.apple.developer.icloud-container-environment</key>
+    <string>Production</string>
+    <key>com.apple.developer.icloud-services</key>
+    <array>
+        <string>CloudKit</string>
+    </array>
+</dict>
+</plist>

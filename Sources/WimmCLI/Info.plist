@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>WimmCLI needs access to speech recognition to transcribe audio files locally.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>WimmCLI needs access to the microphone for live audio transcription.</string>
+</dict>
+</plist>

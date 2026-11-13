@@ -1,0 +1,2 @@
+Transcribe the audio to plain text with punctuation.{{lang_hint}} Return only the transcript text, with no extra commentary.
+If the audio contains no speech, only silence, or only background noise, output exactly [[NO_SPEECH]] and nothing else. Do not invent, guess, or pad words — when uncertain whether there is real speech, output [[NO_SPEECH]] rather than a plausible guess.
