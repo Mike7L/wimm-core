@@ -20,6 +20,9 @@ class IOSAudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
     private var levelTimer: Timer?
     private var streamingTranscriber: IOSStreamingTranscriber?
     private var transcriptionMonitorTask: Task<Void, Never>?
+    /// True only while this recording's own live text session was started;
+    /// otherwise the transcriber still holds an earlier recording's text.
+    private var liveTextStartedForRecording = false
     private var routeObserver: NSObjectProtocol?
     private var inputChanges: [RecordingInputChange] = []
     private var recordingStartedAt = Date()
@@ -114,6 +117,7 @@ class IOSAudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
             audioLevels = []
             transcribedText = ""
             transcriptionProgress = 0.0
+            liveTextStartedForRecording = false
             
             diagnostics = BatteryDiagnosticsSettings.current
 
@@ -264,6 +268,7 @@ class IOSAudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
 
         do {
             try transcriber.startTranscribing()
+            liveTextStartedForRecording = true
             
             // Monitor transcription progress
             transcriptionMonitorTask?.cancel()
@@ -284,10 +289,11 @@ class IOSAudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
         transcriptionMonitorTask = nil
         streamingTranscriber?.stopTranscribing()
         
-        // Get final transcription
-        if let finalText = streamingTranscriber?.transcribedText {
+        // Get final transcription, only from this recording's own session.
+        if liveTextStartedForRecording, let finalText = streamingTranscriber?.transcribedText {
             transcribedText = finalText
         }
+        liveTextStartedForRecording = false
         transcriptionProgress = 1.0
     }
     

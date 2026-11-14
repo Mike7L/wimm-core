@@ -89,6 +89,11 @@ export function blockHash(markdown: string): string {
   return crypto.createHash('sha256').update(normalized(markdown), 'utf8').digest().subarray(0, 12).toString('hex');
 }
 
+/** A question marker (`**[Q58]**`, legacy `**[?3]**`) points at the queue; adding or removing one is not a text change. */
+export function comparable(markdown: string): string {
+  return normalized(markdown.replace(/\s*\*\*\[(?:\?|Q)\d+\]\*\*/g, ''));
+}
+
 function words(text: string): Set<string> {
   return new Set(text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => [...w].length > 2));
 }
@@ -140,15 +145,15 @@ interface RawChange {
 function diff(baseline: string, blocks: DocumentBlock[], parse: InboxDeps['parse']): RawChange[] {
   const old = parse(baseline).blocks;
   const visibleOld = old.filter((b) => !isHidden(b));
-  const oldTexts = new Set(visibleOld.map((b) => normalized(b.markdown)));
-  const newTexts = new Set(blocks.filter((b) => !isHidden(b)).map((b) => normalized(b.markdown)));
+  const oldTexts = new Set(visibleOld.map((b) => comparable(b.markdown)));
+  const newTexts = new Set(blocks.filter((b) => !isHidden(b)).map((b) => comparable(b.markdown)));
   const vanished = visibleOld
-    .filter((b) => !newTexts.has(normalized(b.markdown)))
+    .filter((b) => !newTexts.has(comparable(b.markdown)))
     .map((b) => ({ block: b, section: sectionOf(old, old.indexOf(b)), words: words(b.markdown) }));
 
   const changes: RawChange[] = [];
   blocks.forEach((block, index) => {
-    if (isHidden(block) || oldTexts.has(normalized(block.markdown))) return;
+    if (isHidden(block) || oldTexts.has(comparable(block.markdown))) return;
     const section = sectionOf(blocks, index);
     const own = words(block.markdown);
     let best: { index: number; score: number } | undefined;
@@ -195,7 +200,7 @@ function defaultBaseline(docPath: string): { file: string; kind: 'seen' | 'backu
 
 // MARK: - Questions (StudioInbox.openQuestions)
 
-export function parseQuestions(markdown: string): { number: number; text: string; sources: string[] }[] {
+export function parseQuestions(markdown: string): { number: number; text: string; sources: string[]; topic?: string }[] {
   let inOpen = false;
   const items: string[] = [];
   for (const line of markdown.split(/\r?\n/)) {
@@ -210,8 +215,10 @@ export function parseQuestions(markdown: string): { number: number; text: string
     else if (trimmed) items.push('');
   }
   const seen = new Set<number>();
-  const out: { number: number; text: string; sources: string[] }[] = [];
+  const out: { number: number; text: string; sources: string[]; topic?: string }[] = [];
   for (const raw of items) {
+    // "**Q64. Работа, 2010–2015.** …": the bold lead names the chapter or subject.
+    const topic = raw.match(/^\*\*Q\d+\.\s*([^*]+?)\.?\*\*/)?.[1].trim();
     let text = raw.replaceAll('**', '');
     const match = text.match(/^Q(\d+)\.\s*/);
     if (!match) continue;
@@ -219,7 +226,7 @@ export function parseQuestions(markdown: string): { number: number; text: string
     if (seen.has(number)) continue;
     seen.add(number);
     text = text.slice(match[0].length).replace(new RegExp(`^Q${number}\\.\\s*`), '').trim();
-    out.push({ number, text, sources: [...new Set(text.match(/\bS\d+\b/g) ?? [])] });
+    out.push({ number, text, sources: [...new Set(text.match(/\bS\d+\b/g) ?? [])], ...(topic ? { topic } : {}) });
   }
   return out.sort((a, b) => b.number - a.number);
 }
@@ -238,6 +245,22 @@ function questionSourceBlocks(blocks: DocumentBlock[]): Map<string, Set<number>>
       result.get(s)!.add(block.id);
     }
   }
+  return result;
+}
+
+/** Question number → the one body paragraph that carries its `[Q58]` marker. */
+export function questionMarkerBlocks(blocks: DocumentBlock[]): Map<number, number> {
+  const found = new Map<number, Set<number>>();
+  for (const block of blocks) {
+    if (block.kind.type !== 'body') continue;
+    for (const m of block.markdown.matchAll(/\[Q(\d+)\]/g)) {
+      const number = Number(m[1]);
+      if (!found.has(number)) found.set(number, new Set());
+      found.get(number)!.add(block.id);
+    }
+  }
+  const result = new Map<number, number>();
+  for (const [number, ids] of found) if (ids.size === 1) result.set(number, [...ids][0]);
   return result;
 }
 
@@ -328,11 +351,12 @@ export function buildInbox(deps: InboxDeps): InboxPayload {
 
   const root = workspaceRoot(deps.docPath);
   const sourceBlocks = questionSourceBlocks(blocks);
+  const markerBlocks = questionMarkerBlocks(blocks);
   const questions: InboxQuestion[] = parseQuestions(readOptional(root && path.join(root, 'secretary', 'review_queue.md')))
     .filter((q) => !questionsSeen.has(q.number))
     .map((q) => {
       const matches = new Set(q.sources.flatMap((s) => [...(sourceBlocks.get(s) ?? [])]));
-      const blockId = matches.size === 1 ? [...matches][0] : undefined;
+      const blockId = markerBlocks.get(q.number) ?? (matches.size === 1 ? [...matches][0] : undefined);
       const p = blockId !== undefined ? where.get(blockId) : undefined;
       return {
         ...q,

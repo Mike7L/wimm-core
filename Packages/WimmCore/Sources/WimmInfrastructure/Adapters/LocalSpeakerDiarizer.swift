@@ -23,11 +23,15 @@ public enum LocalSpeakerDiarizer {
         // An unavailable voice profile/model must never fail the speaker split.
         let classification = try? await AudioSpeechClassification.classify(file: file, spans: spans)
         try Task.checkCancellation()
-        log(String(format: "[Diarization] %@ speakers=%d spans=%d turns=%d took=%.1fs",
-                   file.lastPathComponent, speakers, spans.count, turns.count, Date().timeIntervalSince(started)))
+        // Same rule for the person profiles: no profiles or no usable audio means no tags.
+        let voices = await PersonVoiceProfiles.tags(file: file, turns: speakers > 1 ? turns : [], spans: spans)
+        try Task.checkCancellation()
+        log(String(format: "[Diarization] %@ speakers=%d spans=%d turns=%d tagged=%d took=%.1fs",
+                   file.lastPathComponent, speakers, spans.count, turns.count,
+                   voices.filter { $0.card != nil }.count, Date().timeIntervalSince(started)))
         return SpeakerTurnsRecord(
             speakers: speakers, engine: engine,
-            turns: speakers > 1 ? turns : [], speechClassification: classification)
+            turns: speakers > 1 ? turns : [], speechClassification: classification, voices: voices)
     }
 
     public static func preload() async throws {

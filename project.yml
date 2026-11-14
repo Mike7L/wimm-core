@@ -27,7 +27,7 @@ targets:
       CODE_SIGN_ENTITLEMENTS: Sources/WimmiOS/WimmiOSApp.entitlements
       ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       PRODUCT_BUNDLE_IDENTIFIER: com.micha.wimm
-      MARKETING_VERSION: 1.8.0
+      MARKETING_VERSION: 1.8.1
       CURRENT_PROJECT_VERSION: 1
       TARGETED_DEVICE_FAMILY: 1,2 # iPhone/iPad
       DEVELOPMENT_TEAM: 32KX9D23R9
@@ -63,7 +63,7 @@ targets:
       INFOPLIST_FILE: Sources/WimmShareExtension/Info.plist
       CODE_SIGN_ENTITLEMENTS: Sources/WimmShareExtension/WimmShareExtension.entitlements
       PRODUCT_BUNDLE_IDENTIFIER: com.micha.wimm.ShareExtension
-      MARKETING_VERSION: 1.8.0
+      MARKETING_VERSION: 1.8.1
       CURRENT_PROJECT_VERSION: 1
       TARGETED_DEVICE_FAMILY: 1,2
       DEVELOPMENT_TEAM: 32KX9D23R9

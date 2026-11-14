@@ -53,6 +53,10 @@ extension SecretaryPacketFiles {
             text += "\n\(compactSourceHeader(source))\n===== конец источника \(id) =====\n\n"
             sourceChunks.append((text, id))
         }
+        if let cards = input["voice_cards"] as? [String: String], !cards.isEmpty {
+            let rows = cards.keys.sorted().map { "- `[\($0)]` \(cards[$0] ?? "")" }.joined(separator: "\n")
+            sourceChunks.insert(("## Голоса (voice_cards: id карточки → человек)\n\n\(rows)\n\n", nil), at: 0)
+        }
         chunks.insert(contentsOf: sourceChunks, at: documentStart)
 
         if packet.selected.isEmpty || inlinePolicy != nil {

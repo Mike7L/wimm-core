@@ -678,6 +678,7 @@ public struct MCPRecallServer: Sendable {
         }
         if let mark = marks.mark(forFile: mediaURL.lastPathComponent) { out.append(markLine(mark, url: mediaURL)) }
         if let request = queue.latest(forNote: note.filePath) { out.append("retranscription: \(describe(request))") }
+        if isAudio, let split = meta.speakerSplit, let line = Self.voicesLine(split) { out.append(line) }
 
         var blocks = textBlocks(of: note, meta: meta, typed: typed)
         if compact {
@@ -1012,6 +1013,42 @@ public struct MCPRecallServer: Sendable {
         /// `default_status` (an image status restating a default) or `fallback_copy` (an
         /// unedited refined text Wimm copied from the transcript without a model).
         var packetOmission: String?
+        /// The same words printed another way (the transcript by voice). Shown only when the
+        /// block is printed whole; receipts, duplicates and word counts still use `text`.
+        var display: String?
+    }
+
+    /// "[P003]" for a voice tagged with a people card, "Голос 2" otherwise. Two voices with one
+    /// card stay apart: "[P000] голос 3".
+    static func voiceLabel(_ voice: Int, in split: SpeakerTurnsRecord) -> String {
+        guard let card = split.card(forVoice: voice) else { return "Голос \(voice)" }
+        let shared = split.voices.filter { $0.card == card }.count > 1
+        return shared ? "[\(card)] голос \(voice)" : "[\(card)]"
+    }
+
+    /// Wimm's own header line about the voices of a split; nil when there is nothing to say.
+    static func voicesLine(_ split: SpeakerTurnsRecord) -> String? {
+        let numbers = split.isMultiSpeaker ? Set(split.turns.map(\.speaker)).sorted() : (split.voices.isEmpty ? [] : [1])
+        guard !numbers.isEmpty else { return nil }
+        guard !split.voices.isEmpty else {
+            return "voices: \(numbers.count), not compared with voice profiles"
+        }
+        let parts = numbers.map { voice -> String in
+            let tag = split.voices.first { $0.voice == voice }
+            let score = tag?.score.map { String(format: " %.2f", $0) } ?? ""
+            if let card = tag?.card { return "Голос \(voice) = [\(card)]\(score)" }
+            return "Голос \(voice) = unknown" + (tag == nil ? "" : " (best\(score))")
+        }
+        return "voices: " + parts.joined(separator: "; ")
+            + " — on-device voice match; a card id means mostly that person, an unknown voice is nobody known"
+    }
+
+    /// The transcript as turns, only when the split is of exactly these words.
+    static func byVoice(_ transcript: String, split: SpeakerTurnsRecord?) -> String? {
+        guard let split, split.isMultiSpeaker else { return nil }
+        func words(_ text: String) -> [Substring] { text.split(whereSeparator: \.isWhitespace) }
+        guard words(split.turns.map(\.text).joined(separator: " ")) == words(transcript) else { return nil }
+        return SpeakerTurns.render(split.turns) { voiceLabel($0, in: split) }
     }
 
     /// Every stored text variant, in reading order. Variants disagree — a
@@ -1039,7 +1076,8 @@ public struct MCPRecallServer: Sendable {
             blocks.append(TextBlock(
                 label: label + (source.map { " (\($0))" } ?? ""), text: transcript,
                 isTranscript: note.kind == "audio", isPrimary: blocks.isEmpty,
-                kind: note.kind == "audio" ? meta.transcriptionKind : nil, date: date, quality: meta.qualitySummary()))
+                kind: note.kind == "audio" ? meta.transcriptionKind : nil, date: date, quality: meta.qualitySummary(),
+                display: note.kind == "audio" ? Self.byVoice(transcript, split: meta.speakerSplit) : nil))
         } else if note.kind != "text", meta.transcript == nil, !text.isEmpty, !Self.placeholderTexts.contains(text.lowercased()) {
             // Transcript kept outside the sidecar (old notes) or no sidecar at all.
             blocks.append(TextBlock(
@@ -1206,6 +1244,8 @@ public struct MCPRecallServer: Sendable {
             var body = block.text
             if body.count > cap {
                 body = String(body.prefix(cap)) + "\n… [truncated, \(block.text.count) characters total]"
+            } else if let display = block.display {
+                return "--- \(header), by voice ---\n\(display)"
             }
             return "--- \(header) ---\n\(body)"
         }.joined(separator: "\n\n")

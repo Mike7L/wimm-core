@@ -69,6 +69,49 @@ final class RecordingListLoadingTests: XCTestCase {
         XCTAssertFalse(state.isLoading)
     }
 
+    /// Battery drain 2026-11-12: every note listed the whole folder again, O(N²)
+    /// over the library on each launch and return to the foreground.
+    func testListLoadListsTheFolderOncePerLoadNotPerNote() async throws {
+        for index in 0..<120 { _ = try writeNote("note-\(index)") }
+        let state = AppState(startServices: false)
+        await state.loadRecordings()
+        XCTAssertEqual(state.recordings.count, 120)
+        XCTAssertEqual(state.listDirectoryIndexBuilds, 1)
+        await state.loadRecordings()
+        XCTAssertEqual(state.listDirectoryIndexBuilds, 2)
+    }
+
+    /// A repeat load reuses rows whose file and sidecar are unchanged and
+    /// rebuilds only the changed ones.
+    func testRepeatLoadReusesUnchangedRowsAndRebuildsChangedOnes() async throws {
+        for index in 0..<30 { _ = try writeNote("note-\(index)") }
+        let state = AppState(startServices: false)
+        await state.loadRecordings()
+        XCTAssertEqual(state.listItemBuilds, 30)
+
+        await state.repository.invalidateCache()
+        await state.loadRecordings()
+        XCTAssertEqual(state.listItemBuilds, 30, "nothing changed, nothing rebuilt")
+
+        let edited = FileStore.recordingsDirectory().appendingPathComponent("note-7.txt")
+        try "edited body text".write(to: edited, atomically: true, encoding: .utf8)
+        let added = try writeNote("added")
+        try FileManager.default.removeItem(at: FileStore.recordingsDirectory().appendingPathComponent("note-3.txt"))
+        await state.repository.invalidateCache()
+        await state.loadRecordings()
+        XCTAssertEqual(state.listItemBuilds, 32, "only the edited and the added note")
+        XCTAssertEqual(state.recordings.count, 30)
+        XCTAssertEqual(state.recordings.first { $0.fileURL == edited }?.titlePreview, "edited body text")
+        XCTAssertTrue(state.recordings.contains { $0.fileURL == added })
+
+        let sidecar = FileStore.metadataURL(forRecordingURL: added)
+        try #"{"duration": 12.5}"#.write(to: sidecar, atomically: true, encoding: .utf8)
+        await state.repository.invalidateCache()
+        await state.loadRecordings()
+        XCTAssertEqual(state.listItemBuilds, 33, "a sidecar change rebuilds its row")
+        XCTAssertEqual(state.recordings.first { $0.fileURL == added }?.durationSeconds, 12.5)
+    }
+
     func testAudioListUsesStoredDurationEvenWhenAudioCannotBeOpened() async throws {
         let url = FileStore.recordingsDirectory().appendingPathComponent("unfinished.m4a")
         try Data().write(to: url)

@@ -16,6 +16,7 @@ final class StudioInboxModel {
     private(set) var questionsByBlock: [Int: [StudioInbox.Question]] = [:]
     private(set) var questionBlocks: [Int: Int] = [:]
     @ObservationIgnored private var questionSourceBlocks: [String: Set<Int>] = [:]
+    @ObservationIgnored private var questionMarkerBlocks: [Int: Int] = [:]
 
     var openQuestions: [StudioInbox.Question] {
         questions.filter { !seen.questionsSeen.contains($0.number) }
@@ -54,7 +55,7 @@ final class StudioInboxModel {
 
     private func refreshQuestionPlacement() {
         questionBlocks = Dictionary(uniqueKeysWithValues: (openQuestions + answeredQuestions).compactMap { question in
-            StudioInbox.questionBlock(question, sourceBlocks: questionSourceBlocks).map { (question.number, $0) }
+            StudioInbox.questionBlock(question, sourceBlocks: questionSourceBlocks, markerBlocks: questionMarkerBlocks).map { (question.number, $0) }
         })
         let placements = openQuestions.compactMap { question in
             questionBlocks[question.number].map { (block: $0, question: question) }
@@ -99,6 +100,7 @@ final class StudioInboxModel {
         seen = StudioInboxSeen()
         answerDrafts = [:]
         questionSourceBlocks = [:]
+        questionMarkerBlocks = [:]
         refreshQuestionPlacement()
         refreshUnread()
     }
@@ -121,6 +123,7 @@ final class StudioInboxModel {
             refreshUnread()
             lastText = document.text
             questionSourceBlocks = StudioInbox.questionSourceBlocks(in: document)
+            questionMarkerBlocks = StudioInbox.questionMarkerBlocks(in: document)
             refreshQuestionPlacement()
             recompute(document)
         }

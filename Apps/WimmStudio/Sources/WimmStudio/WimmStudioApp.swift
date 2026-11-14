@@ -397,6 +397,7 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         registerHotKeys()
+        if !StoragePaths.isTestProcess { registerAirPodsPress() }
         registerExternalCaptureCommandObserver()
         if !StoragePaths.isTestProcess { externalShoulderVoice.start() }
         showHUD()
@@ -452,6 +453,23 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
         }
         if !unavailable.isEmpty {
             capture.errorMessage = "Глобальные клавиши заняты: \(unavailable.joined(separator: ", ")). Закройте Wimm или другое приложение, использующее их, и перезапустите Studio."
+        }
+    }
+
+    /// AirPods stem press: send while recording (⌥X), start when idle (⌥W).
+    private func registerAirPodsPress() {
+        AirPodsCaptureGesture.install { [weak self] in
+            guard let self, !self.capture.isBusy, !self.capture.isSending else { return }
+            switch self.capture.phase {
+            case .recording:
+                log("[Capture] AirPods press → send")
+                Task { @MainActor [weak self] in await self?.capture.send() }
+            case .idle:
+                log("[Capture] AirPods press → start")
+                self.capture.toggle()
+            case .starting, .finishing:
+                break
+            }
         }
     }
 

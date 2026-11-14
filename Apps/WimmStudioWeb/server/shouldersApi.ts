@@ -567,11 +567,16 @@ export function triggerWimmCapture(
   }
 
   try {
+    // JXA via the ObjC bridge: ~0.3 s and no app is targeted, so no
+    // Automation prompt. `swift -e` JIT-compiled each call (~7 s) and hit
+    // the timeout.
     execFileSync(
-      '/usr/bin/swift',
+      '/usr/bin/osascript',
       [
+        '-l',
+        'JavaScript',
         '-e',
-        `import Foundation; DistributedNotificationCenter.default().postNotificationName(NSNotification.Name("com.micha.wimm.studio.captureCommand"), object: "${action}", userInfo: ["action": "${action}"], deliverImmediately: true)`,
+        `ObjC.import("Foundation"); $.NSDistributedNotificationCenter.defaultCenter.postNotificationNameObjectUserInfoDeliverImmediately("com.micha.wimm.studio.captureCommand", "${action}", $({action: "${action}"}), true)`,
       ],
       { stdio: ['ignore', 'ignore', 'ignore'], timeout: 2500 }
     );
@@ -1056,19 +1061,38 @@ export async function handleShouldersTurnSse(
       model
     )}:streamGenerateContent?key=${encodeURIComponent(apiKey)}&alt=sse`;
 
-    const upstreamRes = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemText }] },
-        contents: messages.map((m) => ({
-          role: m.role,
-          parts: [{ text: m.text }],
-        })),
-        generationConfig,
-      }),
-      signal: abortController.signal,
+    const requestBody = JSON.stringify({
+      systemInstruction: { parts: [{ text: systemText }] },
+      contents: messages.map((m) => ({
+        role: m.role,
+        parts: [{ text: m.text }],
+      })),
+      generationConfig,
     });
+    // fetch() itself throwing means no response arrived yet (connect
+    // timeout, DNS, reset), so nothing was streamed and a retry is safe.
+    let upstreamRes: Response | undefined;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        upstreamRes = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: requestBody,
+          signal: abortController.signal,
+        });
+        break;
+      } catch (err: any) {
+        if (abortController.signal.aborted) throw err;
+        const cause = err?.cause?.code || err?.cause?.message;
+        if (attempt >= 3) {
+          throw new Error(
+            `Нет связи с Gemini${cause ? ` (${cause})` : ''} после ${attempt} попыток.`
+          );
+        }
+        console.warn(`[ShouldersWeb] fetch attempt ${attempt} failed: ${cause ?? err?.message}`);
+        await new Promise((r) => setTimeout(r, 700 * attempt));
+      }
+    }
 
     if (!upstreamRes.ok) {
       const errBody = await upstreamRes.text().catch(() => '');

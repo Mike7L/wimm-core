@@ -142,6 +142,11 @@ struct SketchCaptureView: View {
                 await persistImages(loadedImages, quality: photoQuality)
             }
         }
+        .onChange(of: appState.splitRequest) { _ in
+            // AirPods press: a paused note resumes, a running one is sent.
+            if audioRecorder.isPaused { togglePause() }
+            else { Task { await performSplit() } }
+        }
         .onChange(of: audioRecorder.isRecording) { isRecording in
             if isRecording {
                 startTimer()

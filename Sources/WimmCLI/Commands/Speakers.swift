@@ -21,7 +21,7 @@ struct Speakers: AsyncParsableCommand {
     @Argument(help: "Path to the audio file (omit with --missing)")
     var path: String?
 
-    @Flag(name: .long, help: "Split library notes with a Parakeet transcript but no speaker split")
+    @Flag(name: .long, help: "Split library notes with a Parakeet transcript but no speaker split (with a path: only that note)")
     var missing: Bool = false
 
     @Flag(name: .long, help: "With --missing: write the splits (otherwise dry-run)")
@@ -42,6 +42,18 @@ struct Speakers: AsyncParsableCommand {
     @Flag(name: .long, help: "Classify speech/owner/count without retranscribing; --apply stores the label")
     var classify: Bool = false
 
+    @Flag(name: .long, help: "Print each voice's raw voice vectors as JSON (local experiments; writes nothing)")
+    var voiceEmbeddings: Bool = false
+
+    @Flag(name: .long, help: "Tag each voice with a people-card id from the local person voice profiles; --apply stores the tags in the note's existing speaker split")
+    var who: Bool = false
+
+    @Option(name: .long, help: "Build a person voice profile for this card id (P003) from --sample; dry-run without --apply")
+    var buildPersonProfile: String?
+
+    @Option(name: .long, help: "With --build-person-profile: '<audio path>#<voice number>' labelled by ear; repeatable")
+    var sample: [String] = []
+
     func run() async throws {
         if let importOwnerProfile {
             let file = URL(fileURLWithPath: (importOwnerProfile as NSString).expandingTildeInPath)
@@ -51,12 +63,15 @@ struct Speakers: AsyncParsableCommand {
             print("Owner voice profile \(profile.id.prefix(12)): \(apply ? "installed locally" : "valid; pass --apply to install")")
             return
         }
+        if let buildPersonProfile { return try await buildProfile(card: buildPersonProfile) }
         if missing { return try await backfill() }
         guard let path else { throw ValidationError("Give an audio file, or --missing") }
         let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw ValidationError("No such file: \(url.path)")
         }
+        if voiceEmbeddings { return try await printVoiceEmbeddings(url) }
+        if who { return try await printWho(url) }
         if classify {
             if apply {
                 try await AudioSpeechClassification.detectIfNeeded(for: url)
@@ -100,8 +115,133 @@ struct Speakers: AsyncParsableCommand {
         }
     }
 
+    /// Voices come from the stored split when the note has one (so "voice 2" is the note's
+    /// "Голос 2"), otherwise from a fresh diarization numbered by first appearance.
+    private func voiceSpans(_ url: URL) async throws -> (source: String, voices: [(voice: String, spans: [SpeakerTurns.Span])]) {
+        let sidecar = FileStore.metadataURL(forRecordingURL: url)
+        if let data = try? Data(contentsOf: sidecar),
+           let metadata = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let transcription = FileStore.transcriptionDictionary(from: metadata["transcription"]),
+           let record = SpeakerTurnsRecord(sidecarValue: transcription[SpeakerTurnsRecord.sidecarKey]),
+           record.isMultiSpeaker {
+            return ("turns", Set(record.turns.map(\.speaker)).sorted().map { voice in
+                ("\(voice)", record.turns.filter { $0.speaker == voice }.map {
+                    SpeakerTurns.Span(speaker: "\(voice)", start: $0.start, end: $0.end)
+                })
+            })
+        }
+        let spans = try await LocalSpeakerDiarizer.spans(for: url).sorted { $0.start < $1.start }
+        var order: [String] = []
+        for span in spans where !order.contains(span.speaker) { order.append(span.speaker) }
+        return ("diarizer", order.enumerated().map { index, speaker in
+            ("\(index + 1)", spans.filter { $0.speaker == speaker })
+        })
+    }
+
+    private func printVoiceEmbeddings(_ url: URL) async throws {
+        let (source, byVoice) = try await voiceSpans(url)
+        var voices: [[String: Any]] = []
+        var digests: [String: Any] = [:]
+        for (voice, spans) in byVoice {
+            guard let result = try await OwnerVoiceVerifier.embeddings(file: url, spans: spans, limit: 40) else { continue }
+            digests = ["embeddingWeightsSHA256": result.embeddingWeightsSHA256,
+                       "fbankWeightsSHA256": result.fbankWeightsSHA256]
+            voices.append([
+                "voice": voice,
+                "seconds": spans.reduce(0) { $0 + $1.end - $1.start },
+                "windows": result.windows.map { ["start": $0.start, "end": $0.end, "embedding": $0.embedding] },
+            ])
+        }
+        var output: [String: Any] = ["model": OwnerVoiceProfile.model, "source": source, "voices": voices]
+        output.merge(digests) { _, new in new }
+        let data = try JSONSerialization.data(withJSONObject: output)
+        print("VOICE_EMBEDDINGS " + String(decoding: data, as: UTF8.self))
+    }
+
+    private func printWho(_ url: URL) async throws {
+        let profiles = PersonVoiceProfiles.load()
+        guard !profiles.isEmpty else {
+            print("No person voice profiles in \(PersonVoiceProfiles.directory.path)")
+            return
+        }
+        let (source, byVoice) = try await voiceSpans(url)
+        print("WHO source=\(source) profiles=\(profiles.keys.sorted().joined(separator: ","))")
+        var tags: [SpeakerTurnsRecord.VoiceTag] = []
+        defer {
+            if apply {
+                let sidecar = FileStore.metadataURL(forRecordingURL: url)
+                let record = (try? Data(contentsOf: sidecar))
+                    .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                    .flatMap { FileStore.transcriptionDictionary(from: $0["transcription"]) }
+                    .flatMap { SpeakerTurnsRecord(sidecarValue: $0[SpeakerTurnsRecord.sidecarKey]) }
+                if source == "turns", let record, PersonVoiceProfiles.store(tags, for: url, ifSplitCreatedAt: record.createdAt) {
+                    print("WHO stored \(tags.count) voice tag(s)")
+                } else {
+                    print("WHO not stored: the note has no stored multi-voice split")
+                }
+            }
+        }
+        for (voice, spans) in byVoice {
+            let seconds = spans.reduce(0) { $0 + $1.end - $1.start }
+            guard let result = try await OwnerVoiceVerifier.embeddings(
+                file: url, spans: spans, limit: PersonVoiceProfiles.windowsPerVoice) else {
+                print(String(format: "WHO voice=%@ seconds=%.0f card=- (no usable audio)", voice, seconds))
+                continue
+            }
+            let found = PersonVoiceProfiles.identify(
+                result.windows.map(\.embedding), profiles: profiles,
+                embeddingWeightsSHA256: result.embeddingWeightsSHA256, fbankWeightsSHA256: result.fbankWeightsSHA256)
+            if let number = Int(voice) {
+                tags.append(.init(voice: number, card: found.card, score: found.score, windows: found.windows))
+            }
+            print(String(format: "WHO voice=%@ seconds=%.0f windows=%d card=%@ best=%@ score=%.2f",
+                         voice, seconds, found.windows, found.card ?? "-", found.best ?? "-", found.score ?? .nan))
+        }
+    }
+
+    private func buildProfile(card: String) async throws {
+        guard PersonVoiceProfiles.isCardID(card) else { throw ValidationError("Card id must look like P003") }
+        guard !sample.isEmpty else { throw ValidationError("Give at least one --sample '<audio>#<voice>'") }
+        var vectors: [[Double]] = []
+        var digests: (String, String)?
+        var recordings = Set<String>()
+        for item in sample {
+            guard let hash = item.lastIndex(of: "#") else { throw ValidationError("Bad --sample: \(item)") }
+            let url = URL(fileURLWithPath: (String(item[..<hash]) as NSString).expandingTildeInPath)
+            let wanted = String(item[item.index(after: hash)...])
+            guard FileManager.default.fileExists(atPath: url.path) else { throw ValidationError("No such file: \(url.path)") }
+            guard let spans = try await voiceSpans(url).voices.first(where: { $0.voice == wanted })?.spans else {
+                throw ValidationError("No voice \(wanted) in \(url.lastPathComponent)")
+            }
+            guard let result = try await OwnerVoiceVerifier.embeddings(file: url, spans: spans, limit: 40) else {
+                throw ValidationError("No usable audio for voice \(wanted) in \(url.lastPathComponent)")
+            }
+            if let digests, digests != (result.embeddingWeightsSHA256, result.fbankWeightsSHA256) {
+                throw ValidationError("Model weights changed between samples")
+            }
+            digests = (result.embeddingWeightsSHA256, result.fbankWeightsSHA256)
+            vectors += result.windows.map(\.embedding)
+            recordings.insert(url.lastPathComponent)
+        }
+        let source = "\(ISO8601DateFormatter().string(from: Date())); \(vectors.count) windows from \(recordings.count) recording(s) labelled by the user"
+        guard let digests, let profile = PersonVoiceProfiles.profile(
+            from: vectors, source: source, embeddingWeightsSHA256: digests.0, fbankWeightsSHA256: digests.1) else {
+            throw ValidationError("Could not build a valid profile")
+        }
+        if apply { try PersonVoiceProfiles.install(profile, card: card) }
+        print("Person voice profile \(card): \(vectors.count) windows, \(recordings.count) recording(s) — "
+              + (apply ? "installed locally" : "valid; pass --apply to install"))
+    }
+
     private func backfill() async throws {
-        var pending = SpeakerTurnsBackfill.candidates()
+        var pending: [SpeakerTurnsBackfill.Candidate]
+        if let path {
+            // One note: `speakers <audio> --missing [--apply]`.
+            let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            pending = SpeakerTurnsBackfill.candidate(for: url).map { [$0] } ?? []
+        } else {
+            pending = SpeakerTurnsBackfill.candidates()
+        }
         if let limit { pending = Array(pending.prefix(limit)) }
         print("speakers --missing — \(apply ? "APPLY" : "dry-run") — \(pending.count) note(s) without a speaker split")
         guard !pending.isEmpty else { return }

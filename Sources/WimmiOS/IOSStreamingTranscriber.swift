@@ -148,6 +148,13 @@ class IOSStreamingTranscriber: NSObject, ObservableObject {
     
     /// Start real-time transcription
     func startTranscribing() throws {
+        // Drop the previous recording's session and text before anything can
+        // throw: a start that fails must not leave the old text to be saved
+        // as the new note's live text.
+        stopTranscribing()
+        transcribedText = ""
+        transcriptAccumulator.reset()
+
         // Availability may have changed since init (connectivity, model download),
         // so re-pick the recognizer if the current one isn't ready.
         if speechRecognizer?.isAvailable != true {
@@ -157,12 +164,7 @@ class IOSStreamingTranscriber: NSObject, ObservableObject {
             throw TranscriptionError.recognizerUnavailable
         }
         
-        // Cancel any existing task
-        stopTranscribing()
-        
         // Reset state
-        transcribedText = ""
-        transcriptAccumulator.reset()
         restartPolicy.reset()
         error = nil
         progress = 0.0
@@ -278,9 +280,10 @@ class IOSStreamingTranscriber: NSObject, ObservableObject {
             guard let self = self else { return }
 
             Task { @MainActor in
-                // A cancelled earlier session (restart, route change) must not
-                // restart or overwrite the session that replaced it.
-                if let current = self.recognitionRequest, current !== request { return }
+                // A cancelled earlier session (restart, route change, stop) must
+                // not restart or overwrite what replaced it. After a stop the
+                // request is nil: a late result would append its utterance again.
+                guard self.recognitionRequest === request else { return }
 
                 // Update timing
                 let now = Date()

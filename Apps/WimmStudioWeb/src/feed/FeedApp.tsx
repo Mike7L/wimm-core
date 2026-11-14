@@ -93,6 +93,7 @@ export function FeedApp({ embedded = false, onOpenBlock, onOpenSource, onNavigat
   const [liked, setLiked] = useState<Map<number, string>>(new Map());
   const [answered, setAnswered] = useState<Map<number, string>>(new Map());
   const [later, setLater] = useState<Set<number>>(new Set());
+  const [chaptersShown, setChaptersShown] = useState(1);
   const [closedThreads, setClosedThreads] = useState<Set<string>>(new Set());
   /** Keys of entries that are playing their exit; they are removed when it ends. */
   const [leaving, setLeaving] = useState<Set<string>>(new Set());
@@ -156,6 +157,23 @@ export function FeedApp({ embedded = false, onOpenBlock, onOpenSource, onNavigat
     return [...all.filter((q) => !later.has(q.number)), ...all.filter((q) => later.has(q.number))];
   }, [data, later]);
   const openQuestions = questions.filter((q) => !answered.has(q.number));
+  // Chapter questions come one chapter at a time: a chapter with unread edits first, then document order.
+  const questionPages = useMemo(() => {
+    const byTopic = new Map<string, InboxQuestion[]>();
+    for (const q of questions) if (q.topic) byTopic.set(q.topic, [...(byTopic.get(q.topic) ?? []), q]);
+    const chapters = [...byTopic].filter(([, items]) => items.length > 1);
+    const paged = new Set(chapters.map(([topic]) => topic));
+    const edited = (topic: string) => changes.some((c) => c.storyTitle.startsWith(topic));
+    const first = (items: InboxQuestion[]) => Math.min(...items.map((q) => q.number));
+    chapters.sort((a, b) => Number(edited(b[0])) - Number(edited(a[0])) || first(a[1]) - first(b[1]));
+    return {
+      loose: questions.filter((q) => !q.topic || !paged.has(q.topic)),
+      chapters: chapters.map(([topic, items]) => ({ topic, items: [...items].sort((a, b) => a.number - b.number) })),
+    };
+  }, [questions, changes]);
+  const shownChapters = questionPages.chapters.slice(0, chaptersShown);
+  const nextChapter = questionPages.chapters[chaptersShown];
+  const shownQuestions = [...questionPages.loose, ...shownChapters.flatMap((c) => c.items)];
   const replies = (data?.replies ?? []).filter((r) => !closedThreads.has(r.threadId));
   const attention = openQuestions.length + replies.length;
   const unread = attention + changes.length;
@@ -453,11 +471,17 @@ export function FeedApp({ embedded = false, onOpenBlock, onOpenSource, onNavigat
               <div className="f-list" key={active}>
                 {showsAttention && <GroupLabel>Ждут тебя</GroupLabel>}
                 {shows('questions') &&
-                  questions.map((q) => (
+                  shownQuestions.map((q) => (
                     <Fx key={`q${q.number}`} leaving={false}>
                       <QuestionEntry q={q} answeredNote={answered.get(q.number)} deferred={later.has(q.number)} onAnswer={(mode) => answerQuestion(q, mode)} onLater={() => setLater((s) => new Set(s).add(q.number))} />
                     </Fx>
                   ))}
+                {shows('questions') && nextChapter && (
+                  <button type="button" className="chip f-more" onClick={() => setChaptersShown((n) => n + 1)}>
+                    Ещё вопросы: «{nextChapter.topic}» · {nextChapter.items.length}
+                    {questionPages.chapters.length - chaptersShown > 1 && `, всего глав ${questionPages.chapters.length - chaptersShown}`}
+                  </button>
+                )}
                 {shows('replies') &&
                   replies.map((r) => (
                     <Fx key={r.threadId} leaving={leaving.has(r.threadId)}>
@@ -639,9 +663,9 @@ function ChangeEntry({ c, liked, onLike, onReply, onSeen }: { c: InboxChange; li
 function QuestionEntry({ q, answeredNote, deferred, onAnswer, onLater }: { q: InboxQuestion; answeredNote?: string; deferred: boolean; onAnswer: (mode: ReplyMode) => void; onLater: () => void }) {
   return (
     <article className="f-entry attn" style={{ '--tone': 'var(--accent-blue)', opacity: deferred && !answeredNote ? 0.6 : undefined } as CSSProperties}>
-      <EntryMeta kind={`Вопрос Q${q.number}`} where={whereOf(q.storyTitle, q.heading)} blockId={q.blockId} />
+      <EntryMeta kind={`Вопрос Q${q.number}`} where={whereOf(q.storyTitle ?? q.topic, q.heading)} blockId={q.blockId} />
       <p className="f-text lead">
-        <FeedText text={q.text} />
+        <FeedText text={q.topic && q.text.startsWith(`${q.topic}. `) ? q.text.slice(q.topic.length + 2) : q.text} />
       </p>
       <SourceLinks sources={q.sourceInfo} />
       {answeredNote ? (

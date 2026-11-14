@@ -64,8 +64,17 @@ final class VikContextToolsTests: XCTestCase {
         XCTAssertTrue(transcript.isEmpty)
     }
 
+    func testPreloadedCarriesOutlineAndHourListAndIsKeptAsEvidence() async throws {
+        let tools = VikContextTools(document: document, source: current, isAllowed: { true }, files: { [] })
+        let context = try await tools.preloaded()
+        XCTAssertTrue(context.contains("## Семья")); XCTAssertTrue(context.contains("notes_last_hour:"))
+        let transcript = await tools.transcript()
+        XCTAssertTrue(transcript.contains("### document_outline")); XCTAssertTrue(transcript.contains("### notes_last_hour"))
+    }
+
     func testDeniedAccessNeverTouchesFiles() async {
         let tools = VikContextTools(document: document, source: current, isAllowed: { false }, files: { XCTFail("must not read"); return [] })
+        do { _ = try await tools.preloaded(); XCTFail("must refuse") } catch {}
         do { _ = try await tools.read("notes_last_hour", arguments: "{}"); XCTFail("must refuse") } catch {}
         do { _ = try await tools.read("document_outline", arguments: "{}"); XCTFail("must refuse") } catch {}
     }

@@ -83,4 +83,39 @@ final class AudioSpeechClassificationTests: XCTestCase {
         XCTAssertEqual(SpeakerTurnsRecord(sidecarValue: record.sidecarValue)?.speechClassification, result)
         XCTAssertNil(SpeakerTurnsRecord(sidecarValue: ["speakers": 1])?.speechClassification)
     }
+
+    func testPersonVoiceTagNeedsAClearWinnerAndEnoughAudio() throws {
+        func unit(_ index: Int, _ other: Int? = nil, mix: Double = 0) -> [Double] {
+            var vector = [Double](repeating: 0, count: 256)
+            vector[index] = (1 - mix * mix).squareRoot()
+            if let other { vector[other] = mix }
+            return vector
+        }
+        func profile(_ vectors: [[Double]]) throws -> OwnerVoiceProfile {
+            try XCTUnwrap(PersonVoiceProfiles.profile(
+                from: vectors, source: "test", embeddingWeightsSHA256: String(repeating: "a", count: 64),
+                fbankWeightsSHA256: String(repeating: "b", count: 64)))
+        }
+        func identify(_ vectors: [[Double]], _ profiles: [String: OwnerVoiceProfile],
+                      weights: String = "a") -> PersonVoiceProfiles.Identification {
+            PersonVoiceProfiles.identify(vectors, profiles: profiles,
+                                         embeddingWeightsSHA256: String(repeating: weights, count: 64),
+                                         fbankWeightsSHA256: String(repeating: "b", count: 64))
+        }
+        let profiles = ["P000": try profile([unit(0), unit(0)]), "P003": try profile([unit(1)])]
+        XCTAssertTrue(PersonVoiceProfiles.isCardID("P003"))
+        for bad in ["O001", "P", "p003", "P0x3", "../P003"] { XCTAssertFalse(PersonVoiceProfiles.isCardID(bad)) }
+
+        XCTAssertEqual(identify(Array(repeating: unit(1), count: 4), profiles).card, "P003")
+        // Too little audio: reported as the best guess, never as a tag.
+        let short = identify(Array(repeating: unit(1), count: 3), profiles)
+        XCTAssertNil(short.card)
+        XCTAssertEqual(short.best, "P003")
+        // An unknown voice and a voice between two people stay untagged.
+        XCTAssertNil(identify(Array(repeating: unit(7), count: 6), profiles).card)
+        XCTAssertNil(identify(Array(repeating: unit(0, 1, mix: 0.7), count: 6), profiles).card)
+        // Profiles made with other model weights are not compared.
+        XCTAssertNil(identify(Array(repeating: unit(1), count: 6), profiles, weights: "c").best)
+        XCTAssertNil(PersonVoiceProfiles.profile(from: [], source: "test", embeddingWeightsSHA256: "", fbankWeightsSHA256: ""))
+    }
 }

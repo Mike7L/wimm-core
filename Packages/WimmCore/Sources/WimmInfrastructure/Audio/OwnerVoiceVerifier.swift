@@ -76,8 +76,33 @@ public enum OwnerVoiceVerifier {
         #endif
     }
 
+    /// Raw voice vectors for the given spans, for local experiments (trial profiles of other
+    /// voices, threshold calibration). Biometric data: callers keep it local and never sync it.
+    public struct VoiceEmbeddings: Sendable {
+        public struct Window: Sendable {
+            public let start: Double
+            public let end: Double
+            public let embedding: [Double]
+        }
+        public let windows: [Window]
+        public let embeddingWeightsSHA256: String
+        public let fbankWeightsSHA256: String
+    }
+
+    public static func embeddings(file: URL, spans: [SpeakerTurns.Span], limit: Int) async throws -> VoiceEmbeddings? {
+        #if canImport(FluidAudio)
+        return try await LocalInferenceScheduler.shared.withPermit(priority: .background) {
+            try Task.checkCancellation()
+            return try embed(file: file, windows: windows(for: spans, limit: limit))
+        }
+        #else
+        return nil
+        #endif
+    }
+
     #if canImport(FluidAudio)
-    private static func infer(file: URL, spans: [SpeakerTurns.Span], profile: OwnerVoiceProfile) throws -> Match? {
+    /// Non-overlapping 2–6 s windows inside the spans, thinned evenly to `limit`.
+    private static func windows(for spans: [SpeakerTurns.Span], limit: Int) -> [(Double, Double)] {
         var windows: [(Double, Double)] = []
         for span in spans.sorted(by: { $0.start < $1.start }) {
             var start = span.start + 0.15
@@ -90,11 +115,27 @@ public enum OwnerVoiceVerifier {
         }
         // Spread evidence across the recording; the first 30 seconds must not
         // decide the identity of an entire long recording.
-        if windows.count > 5 {
+        if limit > 1, windows.count > limit {
             let all = windows
-            windows = (0..<5).map { all[$0 * (all.count - 1) / 4] }
+            windows = (0..<limit).map { all[$0 * (all.count - 1) / (limit - 1)] }
         }
+        return windows
+    }
+
+    private static func infer(file: URL, spans: [SpeakerTurns.Span], profile: OwnerVoiceProfile) throws -> Match? {
+        let windows = windows(for: spans, limit: 5)
         guard windows.count >= 2, windows.reduce(0, { $0 + $1.1 - $1.0 }) >= 6 else { return nil }
+        guard let result = try embed(file: file, windows: windows, expecting: profile) else { return nil }
+        let scores = result.windows.map { zip($0.embedding, profile.embedding).reduce(0) { $0 + $1.0 * $1.1 } }
+        return Match(isOwner: accepted(scores: scores, threshold: profile.threshold),
+                     score: scores.sorted()[scores.count / 2], profileID: profile.id)
+    }
+
+    /// One unit-length vector per window. With `expecting`, returns nil before loading any model
+    /// when the installed weights are not the ones the profile was made with.
+    private static func embed(file: URL, windows: [(Double, Double)],
+                              expecting profile: OwnerVoiceProfile? = nil) throws -> VoiceEmbeddings? {
+        guard !windows.isEmpty else { return nil }
         let directory = OfflineDiarizerModels.defaultModelsDirectory()
         let candidates = ["speaker-diarization", "speaker-diarization-coreml/offline", "speaker-diarization-coreml"]
         guard let modelDirectory = candidates.map({ directory.appendingPathComponent($0) }).first(where: {
@@ -105,8 +146,11 @@ public enum OwnerVoiceVerifier {
             SHA256.hash(data: try Data(contentsOf: modelDirectory.appendingPathComponent("\(name).mlmodelc/weights/weight.bin"),
                                        options: .mappedIfSafe)).map { String(format: "%02x", $0) }.joined()
         }
-        guard try digest("Embedding") == profile.embeddingWeightsSHA256,
-              try digest("FBank") == profile.fbankWeightsSHA256 else { return nil }
+        let embeddingDigest = try digest("Embedding"), fbankDigest = try digest("FBank")
+        if let profile {
+            guard embeddingDigest == profile.embeddingWeightsSHA256,
+                  fbankDigest == profile.fbankWeightsSHA256 else { return nil }
+        }
         let cpu = MLModelConfiguration(); cpu.computeUnits = .cpuOnly
         let ane = MLModelConfiguration(); ane.computeUnits = .cpuAndNeuralEngine
         let fbank = try MLModel(contentsOf: modelDirectory.appendingPathComponent("FBank.mlmodelc"), configuration: cpu)
@@ -117,10 +161,10 @@ public enum OwnerVoiceVerifier {
         let source = try AVAudioFile(forReading: file)
         let format = source.processingFormat
         let converter = AudioConverter()
-        var scores: [Double] = []
+        var result: [VoiceEmbeddings.Window] = []
         for (start, end) in windows {
             try Task.checkCancellation()
-            let score: Double = try autoreleasepool {
+            let vector: [Double] = try autoreleasepool {
                 source.framePosition = AVAudioFramePosition(start * format.sampleRate)
                 let capacity = AVAudioFrameCount((end-start) * format.sampleRate)
                 guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else {
@@ -132,8 +176,8 @@ public enum OwnerVoiceVerifier {
                 let audio = try MLMultiArray(shape: audioShape, dataType: .float32)
                 let pointer = audio.dataPointer.assumingMemoryBound(to: Float.self)
                 for index in 0..<audio.count { pointer[index] = samples[index % samples.count] }
-                let result = try fbank.prediction(from: MLDictionaryFeatureProvider(dictionary: ["audio": audio]))
-                guard let features = result.featureValue(for: "fbank_features")?.multiArrayValue,
+                let prediction = try fbank.prediction(from: MLDictionaryFeatureProvider(dictionary: ["audio": audio]))
+                guard let features = prediction.featureValue(for: "fbank_features")?.multiArrayValue,
                       features.shape.count == 4, features.dataType == .float32 else { throw CocoaError(.fileReadCorruptFile) }
                 recenter(features, audio: pointer, count: audio.count)
                 let weights = try MLMultiArray(shape: weightShape, dataType: .float32)
@@ -147,12 +191,11 @@ public enum OwnerVoiceVerifier {
                 let values = (0..<vector.count).map { vector[$0].doubleValue }
                 let norm = sqrt(values.reduce(0) { $0 + $1*$1 })
                 guard norm > 0, norm.isFinite else { throw CocoaError(.fileReadCorruptFile) }
-                return zip(values, profile.embedding).reduce(0) { $0 + $1.0 / norm * $1.1 }
+                return values.map { $0 / norm }
             }
-            scores.append(score)
+            result.append(.init(start: start, end: end, embedding: vector))
         }
-        return Match(isOwner: accepted(scores: scores, threshold: profile.threshold),
-                     score: scores.sorted()[scores.count / 2], profileID: profile.id)
+        return VoiceEmbeddings(windows: result, embeddingWeightsSHA256: embeddingDigest, fbankWeightsSHA256: fbankDigest)
     }
 
     /// Same digital-silence correction as FluidAudio's offline embedSpan path.

@@ -56,6 +56,14 @@ actor VikContextTools {
 
     func transcript() -> String { evidence.joined(separator: "\n\n") }
 
+    /// First pages of the two reads nearly every question starts with, sent with
+    /// the first request so the model does not spend a round asking for each.
+    func preloaded() async throws -> String {
+        let outline = try await read("document_outline", arguments: "{}")
+        let recent = try await read("notes_last_hour", arguments: "{}")
+        return "document_outline:\n\(outline)\n\nnotes_last_hour:\n\(recent)"
+    }
+
     func read(_ name: String, arguments: String) async throws -> String {
         try await checkAccess()
         guard let args = (try? JSONSerialization.jsonObject(with: Data(arguments.utf8))) as? [String: Any] else {

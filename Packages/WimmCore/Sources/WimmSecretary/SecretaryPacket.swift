@@ -317,6 +317,8 @@ struct SecretaryPacket {
             "response_format": 2, "blocked_sources": blockedSources, "held_sources": heldSources, "no_text_sources": noTextSources,
             "viewing_sources": viewingSources, "skipped_sources": skippedSources, "unfinished_sources": unfinishedSources,
             "oversize_previews": previews]
+        let voiceCards = Self.voiceCards(in: selected.compactMap { fullSourcesByID[$0] }, document: task.workspace.document)
+        if !voiceCards.isEmpty { payload["voice_cards"] = voiceCards }
         if editorBundle {
             payload["editor_evidence"] = pool.object
             let context = editorContext(blocks: blocks, sourceIDs: selected, primaryText: text,
@@ -329,6 +331,33 @@ struct SecretaryPacket {
         return SecretaryPacket(task: task, documentData: documentData, registryData: registryData, queueData: queue,
             blocks: blocks, selected: selected, receipts: receipts, projectedSourceIDs: projectedSourceIDs, newSources: newSources, fullSourcesByID: fullSourcesByID, payload: payload,
             system: editsContract + "\n" + policy, previewReceipts: previewReceipts)
+    }
+
+    /// Names for the card ids Wimm's own `voices:` header lines carry, from the people card file
+    /// beside the document (`me.md` → `me.people.json`). Only ids of this packet; an id without
+    /// a card is left out and stays a bare id.
+    static func voiceCards(in sources: [String], document: URL) -> [String: String] {
+        var ids = Set<String>()
+        for source in sources {
+            for line in source.components(separatedBy: "\n").prefix(40) where line.hasPrefix("voices: ") {
+                for part in line.components(separatedBy: "[").dropFirst() {
+                    let id = String(part.prefix { $0 != "]" })
+                    if PersonVoiceProfiles.isCardID(id) { ids.insert(id) }
+                }
+            }
+        }
+        guard !ids.isEmpty else { return [:] }
+        let file = document.deletingPathExtension().appendingPathExtension("people.json")
+        guard let data = try? Data(contentsOf: file),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let cards = root["cards"] as? [[String: Any]] else { return [:] }
+        var result: [String: String] = [:]
+        for card in cards {
+            guard let id = card["id"] as? String, ids.contains(id), let name = card["canonical"] as? String else { continue }
+            let relation = (card["relation"] as? String).map { " — \($0)" } ?? ""
+            result[id] = String((name + relation).prefix(160))
+        }
+        return result
     }
 
     /// About `limit` bytes of the beginning and of the end of the complete text, cut at line ends where possible.

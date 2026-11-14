@@ -26,6 +26,8 @@ export interface InboxChange {
 export interface InboxQuestion {
   number: number;
   text: string;
+  /** Bold lead of the queue item: the document chapter for questions moved from chapters. */
+  topic?: string;
   sources: string[];
   sourceInfo: InboxSource[];
   blockId?: number;

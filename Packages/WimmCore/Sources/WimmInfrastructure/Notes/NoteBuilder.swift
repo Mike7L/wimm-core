@@ -17,7 +17,8 @@ public enum NoteBuilder {
         metaRepo: MetadataRepositoryProtocol,
         transcriptRepo: any TranscriptRepositoryProtocol,
         directoryIndex: RecordingsDirectoryIndex? = nil,
-        includeSearchMetadata: Bool = true
+        includeSearchMetadata: Bool = true,
+        prefetchedSidecar: (dictionary: [String: Any], noteCard: NoteCard?)? = nil
     ) async -> Note {
         let nameCreated = FileStore.recordingDateFromFileName(file)
         let fileCreated = nameCreated ?? ((try? FileStore.fileCreationDate(file)) ?? Date())
@@ -25,7 +26,13 @@ public enum NoteBuilder {
         let isAudio = FileStore.isAudioFile(file)
 
         // One read. Search text is the sidecar's own UTF-8, not a sorted re-encode.
-        let built = await metaRepo.metadataForBuild(for: file, includeSearchText: includeSearchMetadata)
+        // A caller that already read the sidecar passes it in (no search text then).
+        let built: (dictionary: [String: Any], noteCard: NoteCard?, searchText: String)
+        if let prefetchedSidecar {
+            built = (prefetchedSidecar.dictionary, prefetchedSidecar.noteCard, "")
+        } else {
+            built = await metaRepo.metadataForBuild(for: file, includeSearchText: includeSearchMetadata)
+        }
         let docMeta = built.dictionary
         let noteCard = built.noteCard
         let transcriptionDict = docMeta["transcription"] as? [String: Any]

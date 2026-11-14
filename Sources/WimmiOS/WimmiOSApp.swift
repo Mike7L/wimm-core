@@ -96,6 +96,9 @@ class AppState: ObservableObject, ProcessingPerformer {
     @Published var isLoading = true
     @Published var recoveryMessage: String?
     @Published var showCapture = false
+    /// Bumped by an AirPods press while recording; the open capture screen splits
+    /// the note (closes it and records on into a new one), as its own split button.
+    @Published private(set) var splitRequest: UInt64 = 0
     /// Notes with a manual re-transcription in flight.
     @Published var reprocessingURLs: Set<URL> = []
     
@@ -111,10 +114,54 @@ class AppState: ObservableObject, ProcessingPerformer {
     private let displayMetadata = MetadataRepository()
     private let displayTranscripts = TranscriptRepository()
 
-    private func displayNote(for url: URL) async -> Note {
+    private func displayNote(for url: URL, directoryIndex: RecordingsDirectoryIndex? = nil,
+                             sidecar: (dictionary: [String: Any], noteCard: NoteCard?)? = nil) async -> Note {
         await NoteBuilder.build(file: url, index: 0, metaRepo: displayMetadata,
-                                transcriptRepo: displayTranscripts, includeSearchMetadata: false)
+                                transcriptRepo: displayTranscripts,
+                                directoryIndex: directoryIndex,
+                                includeSearchMetadata: false,
+                                prefetchedSidecar: sidecar)
     }
+
+    /// A list row depends only on the note file and its sidecar. A later load
+    /// reuses the row while both are unchanged (modification time and size),
+    /// so returning to the foreground costs two `stat` calls per note instead
+    /// of parsing every sidecar again.
+    struct ListItemStamp: Equatable {
+        let file: FileStamp?
+        let sidecar: FileStamp?
+
+        struct FileStamp: Equatable {
+            let seconds: Int
+            let nanoseconds: Int
+            let size: Int64
+        }
+
+        static func of(_ url: URL) -> ListItemStamp {
+            ListItemStamp(file: fileStamp(url.path),
+                          sidecar: fileStamp(FileStore.metadataURL(forRecordingURL: url).path))
+        }
+
+        private static func fileStamp(_ path: String) -> FileStamp? {
+            var info = stat()
+            guard stat(path, &info) == 0 else { return nil }
+            return FileStamp(seconds: Int(info.st_mtimespec.tv_sec),
+                             nanoseconds: Int(info.st_mtimespec.tv_nsec),
+                             size: Int64(info.st_size))
+        }
+    }
+    private var listItemCache: [URL: (stamp: ListItemStamp, item: Recording)] = [:]
+    /// How many rows list loads built from disk rather than reused (tests check reuse).
+    private(set) var listItemBuilds = 0
+
+    /// One listing of the recordings folder per list load. Without it every
+    /// note listed the whole folder again to look for its screenshots: with
+    /// ~10k notes and ~20k files that kept a core busy for 12–25 minutes after
+    /// each launch or return to the foreground
+    /// (`docs/iOS_Battery_Measurement_Results_2026-11-12.md`).
+    private var listDirectoryIndex: RecordingsDirectoryIndex?
+    /// How many folder listings list loads have made (tests check it is one per load).
+    private(set) var listDirectoryIndexBuilds = 0
     private let cloudSyncService: CloudRecordingSyncService?
     
     init(audioRecorder: ReliableRecorder? = nil, startServices: Bool = true) {
@@ -149,9 +196,21 @@ class AppState: ObservableObject, ProcessingPerformer {
             guard let self = self else { return .commandFailed }
             
             Task { @MainActor in
-                await self.handleGlobalPlayPause()
+                await self.airPodsPressed(via: "play/pause")
             }
             return .success
+        }
+        // While the AirPods mic records, a stem press is the "mute microphone" gesture,
+        // not play/pause. Never let it mute the note: unmute at once and treat it as a press.
+        NotificationCenter.default.addObserver(
+            forName: AVAudioApplication.inputMuteStateChangeNotification,
+            object: nil, queue: .main
+        ) { [weak self] note in
+            guard (note.userInfo?[AVAudioApplication.muteStateKey] as? Bool) == true else { return }
+            Task { @MainActor in
+                try? AVAudioApplication.shared.setInputMuted(false)
+                await self?.airPodsPressed(via: "mute gesture")
+            }
         }
     }
 
@@ -190,12 +249,35 @@ class AppState: ObservableObject, ProcessingPerformer {
         }
     }
 
+    private var lastAirPodsPress: Date?
+
+    /// One press may arrive both as play/pause and as the mute gesture; act once.
+    private func airPodsPressed(via source: String) async {
+        let now = Date()
+        if let last = lastAirPodsPress, now.timeIntervalSince(last) < 1 {
+            log("[IOSRecorder] AirPods press (\(source)) ignored: repeat within 1 s")
+            return
+        }
+        lastAirPodsPress = now
+        log("[IOSRecorder] AirPods press (\(source)), recording: \(audioRecorder.isRecording), paused: \(audioRecorder.isPaused)")
+        await handleGlobalPlayPause()
+    }
+
     func handleGlobalPlayPause() async {
         // An explicit command after a call replaces the automatic restart.
         restartAfterInterruption = false
         guard !isFinishingRecording else { return }
         if audioRecorder.isRecording {
-            await finishRecording()
+            // Send, as in Studio: the note closes and recording goes on in a new one.
+            // A paused note resumes instead (the split needs a running recording).
+            if audioRecorder.isPaused {
+                showCapture = true
+                splitRequest &+= 1
+            } else if showCapture {
+                splitRequest &+= 1
+            } else {
+                await finishRecording()
+            }
         } else {
             showCapture = true
             // Give the UI a moment to appear if needed, or just start recording
@@ -327,32 +409,61 @@ class AppState: ObservableObject, ProcessingPerformer {
         // Fetch URLs
         let urls = await repository.recordings(order: .descending)
         guard loadGeneration == recordingsLoadGeneration else { return }
+        let directories = Array(Set(urls.map { $0.deletingLastPathComponent().standardizedFileURL }))
+        listDirectoryIndex = RecordingsDirectoryIndex(directories: directories)
+        listDirectoryIndexBuilds += 1
+        defer {
+            if loadGeneration == recordingsLoadGeneration { listDirectoryIndex = nil }
+        }
         
         var items: [Recording] = []
         var seen = Set<String>()
+        // Partial publishes at 50, 100, 200, 400… rows: the first screen shows
+        // at once, and the whole load re-sorts and re-diffs the list O(log N)
+        // times instead of every 50 notes (O(N²) on a ~10k-note library).
+        var nextPartialPublish = 50
+        var freshCache: [URL: (stamp: ListItemStamp, item: Recording)] = [:]
+        freshCache.reserveCapacity(urls.count)
         for url in urls {
              // The list keys rows by file name; a second copy would be a
              // duplicate identity, which a SwiftUI List cannot diff.
              guard seen.insert(url.lastPathComponent).inserted else { continue }
-             let rec = await recordingListItem(for: url)
+             let stamp = ListItemStamp.of(url)
+             let rec: Recording
+             if let cached = listItemCache[url], cached.stamp == stamp {
+                 rec = cached.item
+                 // A fully cached load never suspends otherwise; let the UI breathe.
+                 if items.count % 500 == 499 { await Task.yield() }
+             } else {
+                 rec = await recordingListItem(for: url)
+                 listItemBuilds += 1
+             }
              guard loadGeneration == recordingsLoadGeneration else { return }
              items.append(rec)
+             freshCache[url] = (stamp, rec)
              // Show the first rows without waiting for every sidecar. Keep
              // existing rows until the complete snapshot can reconcile them.
-             if items.count.isMultiple(of: 50) {
+             if items.count == nextPartialPublish {
+                 nextPartialPublish *= 2
                  applyLoadedRecordings(items, startedAt: publicationGeneration, complete: false)
              }
         }
         applyLoadedRecordings(items, startedAt: publicationGeneration, complete: true)
+        // Only notes still in the folder stay cached.
+        listItemCache = freshCache
     }
 
     /// List rendering never opens audio assets. A damaged/unfinished container
     /// must not stall the entire library; duration already lives in the sidecar.
     func recordingListItem(for url: URL) async -> Recording {
-        let card = await repository.existingNoteCard(for: url)
-        let note = await displayNote(for: url)
-        let metadata = await repository.metadata(for: url)
-        let storedDuration = (metadata["duration"] as? Double) ?? note.duration
+        // One sidecar read for the card, the duration and the note text.
+        let sidecar = await displayMetadata.metadataAndNoteCard(for: url)
+        let card = sidecar.1
+        let sidecarDuration = sidecar.0["duration"] as? Double
+        // Only the list load's own snapshot; a single publish lists the folder fresh.
+        let note = await displayNote(for: url, directoryIndex: listDirectoryIndex,
+                                     sidecar: (sidecar.0, card))
+        let storedDuration = sidecarDuration ?? note.duration
         let duration = storedDuration.isFinite && storedDuration > 0 ? storedDuration : 0
         return Recording(id: url.lastPathComponent, fileURL: url,
                          timestamp: Self.listTimestamp(for: url),

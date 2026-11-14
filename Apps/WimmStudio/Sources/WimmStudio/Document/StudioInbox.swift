@@ -54,13 +54,13 @@ enum StudioInbox {
     static func diff(baseline: String, current: PersonalDocument) -> Diff {
         let old = PersonalDocument(text: baseline)
         let visibleOld = old.blocks.filter { !isHidden($0) }
-        let oldTexts = Set(visibleOld.map { normalized($0.markdown) })
-        let newTexts = Set(current.blocks.filter { !isHidden($0) }.map { normalized($0.markdown) })
-        var vanished = visibleOld.filter { !newTexts.contains(normalized($0.markdown)) }
+        let oldTexts = Set(visibleOld.map { comparable($0.markdown) })
+        let newTexts = Set(current.blocks.filter { !isHidden($0) }.map { comparable($0.markdown) })
+        var vanished = visibleOld.filter { !newTexts.contains(comparable($0.markdown)) }
             .map { (block: $0, section: old.section(of: $0)?.heading, words: words($0.markdown)) }
 
         var result = Diff()
-        for block in current.blocks where !isHidden(block) && !oldTexts.contains(normalized(block.markdown)) {
+        for block in current.blocks where !isHidden(block) && !oldTexts.contains(comparable(block.markdown)) {
             let section = current.section(of: block)?.heading
             let own = words(block.markdown)
             var best: (index: Int, score: Double)?
@@ -111,6 +111,12 @@ enum StudioInbox {
 
     static func normalized(_ markdown: String) -> String {
         markdown.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    /// A question marker (`**[Q58]**`, legacy `**[?3]**`) points at the queue;
+    /// adding or removing one is not a text change.
+    static func comparable(_ markdown: String) -> String {
+        normalized(markdown.replacingOccurrences(of: #"\s*\*\*\[(?:\?|Q)\d+\]\*\*"#, with: "", options: .regularExpression))
     }
 
     static func hash(_ markdown: String) -> String {
@@ -225,7 +231,23 @@ enum StudioInbox {
         return result
     }
 
-    static func questionBlock(_ question: Question, sourceBlocks: [String: Set<Int>]) -> Int? {
+    /// Question number → the one body paragraph that carries its `[Q58]` marker.
+    static func questionMarkerBlocks(in document: PersonalDocument) -> [Int: Int] {
+        let pattern = try! NSRegularExpression(pattern: #"\[Q(\d+)\]"#)
+        var found: [Int: Set<Int>] = [:]
+        for block in document.blocks {
+            guard case .body = block.kind else { continue }
+            let ns = block.markdown as NSString
+            for match in pattern.matches(in: block.markdown, range: NSRange(location: 0, length: ns.length)) {
+                if let number = Int(ns.substring(with: match.range(at: 1))) { found[number, default: []].insert(block.id) }
+            }
+        }
+        return found.compactMapValues { $0.count == 1 ? $0.first : nil }
+    }
+
+    /// The marker wins; without one, the question's citations must point to one paragraph.
+    static func questionBlock(_ question: Question, sourceBlocks: [String: Set<Int>], markerBlocks: [Int: Int] = [:]) -> Int? {
+        if let marked = markerBlocks[question.number] { return marked }
         let matches = Set(question.sources.flatMap { sourceBlocks[$0] ?? [] })
         return matches.count == 1 ? matches.first : nil
     }

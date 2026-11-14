@@ -112,6 +112,17 @@ final class StudioInboxTests: XCTestCase {
                        [expected.id, nil, nil, nil])
     }
 
+    func testQuestionMarkerPlacesTheQuestionAndIsNotAChange() throws {
+        let before = "# Документ\n\n## Работа\n\nПодал анкету в клуб. [S1] **[?2]**\n\nЗадание отправил. [S1]\n\n[S1]: a.meta.json\n"
+        let after = before.replacingOccurrences(of: "**[?2]**", with: "**[Q64]**")
+        let document = PersonalDocument(text: after)
+        XCTAssertEqual(StudioInbox.diff(baseline: before, current: document), .empty)
+        let marked = try XCTUnwrap(document.blocks.first { $0.markdown.hasPrefix("Подал") })
+        let question = StudioInbox.Question(number: 64, text: "В клуб приняли?", sources: [])
+        XCTAssertEqual(StudioInbox.questionBlock(question, sourceBlocks: [:], markerBlocks: StudioInbox.questionMarkerBlocks(in: document)), marked.id)
+        XCTAssertNil(StudioInbox.questionBlock(question, sourceBlocks: [:]))
+    }
+
     func testAnswerArchiveRoundTripsAndLoadsOlderInboxState() throws {
         let data = Data(#"{"seenBlocks":[],"questionsSeen":[2]}"#.utf8)
         var state = try JSONDecoder().decode(StudioInboxSeen.self, from: data)

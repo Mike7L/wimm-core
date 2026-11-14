@@ -34,6 +34,11 @@ public struct RecallSidecar {
             ?? Self.number(dict["streamingSkipDurationSec"])
     }
 
+    /// The stored split of the current transcript by voice, with its voice tags.
+    var speakerSplit: SpeakerTurnsRecord? {
+        SpeakerTurnsRecord(sidecarValue: transcription?[SpeakerTurnsRecord.sidecarKey])
+    }
+
     /// The main transcript: `transcription.transcript`, or the legacy plain string.
     var transcript: String? {
         Self.text(transcription?["transcript"]) ?? Self.text(dict["transcription"])
