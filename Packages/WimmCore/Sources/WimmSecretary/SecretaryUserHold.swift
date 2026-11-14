@@ -91,6 +91,107 @@ public enum SecretaryUserHold {
         return report
     }
 
+    /// Explicit user release (2026-11-14): the named files' active holds become `active: false` with
+    /// `released_at`/`release_reason`; the hold record stays for audit and nothing else in the row changes.
+    /// Works without the hold run's backup (undo needs it). Dry run unless `apply`.
+    public static func release(document: URL, files: [String], reason: String, apply: Bool, now: Date = Date()) throws -> Report {
+        guard !PrivateMode.isEnabled else { throw SecretaryError.privateMode }
+        guard let workspace = SecretaryWorkspace(document: document) else { throw SecretaryError.notAWorkspace(document.path) }
+        let reason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reason.isEmpty else { throw Failure("A release needs a reason.") }
+        let id = SecretaryClock.runID(now) + "-release"
+        let lock = apply ? try SecretaryRunLock.acquire(in: workspace.runsDirectory, runID: id) : nil
+        defer { lock?.release() }
+        let registryURL = workspace.document.deletingPathExtension().appendingPathExtension("sources.json")
+        let data = try Data(contentsOf: registryURL)
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let sources = root["sources"] as? [[String: Any]] else { throw Failure("Invalid registry.") }
+        var report = Report(runID: id, applied: apply)
+        var updates: [String: [String: Any]] = [:]
+        for name in files {
+            let rows = sources.filter { $0["note_file"] as? String == name }
+            guard rows.count == 1, let row = rows.first, let source = row["source_id"] as? String,
+                  var hold = row["user_exclusion"] as? [String: Any] else {
+                rows.isEmpty ? report.notInRegistry.append(name) : report.ambiguous.append(name); continue
+            }
+            guard SecretaryBookkeeping.flag(hold["active"]) else { report.alreadyHeld.append(source); continue }
+            hold["active"] = false
+            hold["released_at"] = SecretaryClock.stamp(now)
+            hold["release_reason"] = reason
+            var updated = row
+            updated["user_exclusion"] = hold
+            updates[source] = updated
+            report.held[source] = name
+        }
+        guard apply, !updates.isEmpty else { return report }
+        let task = SecretaryTask(id: id, kind: .pass, workspace: workspace, threads: [], wimmCLI: "", createdAt: now)
+        let next = try SecretaryRegistryRevision.patched(data: data, original: root, sources: sources, updates: updates, task: task,
+                                                         method: "Wimm released explicit user holds at the user's request; no reading or status change")
+        let directory = workspace.runDirectory(id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let backup = directory.appendingPathComponent("registry-before-release.json")
+        let audit: [String: Any] = ["run_id": id, "registry_sha256": SecretaryBookkeeping.digest(data),
+                                    "sources": sources.filter { updates[$0["source_id"] as! String] != nil }]
+        try JSONSerialization.data(withJSONObject: audit, options: [.prettyPrinted, .sortedKeys]).write(to: backup, options: .atomic)
+        try SecretaryRegistryRevision.snapshot(data, directory: directory)
+        guard try Data(contentsOf: registryURL) == data else { throw Failure("Registry changed while releasing holds; nothing applied.") }
+        try next.write(to: registryURL, options: .atomic)
+        report.registryBackup = workspace.relative(backup)
+        return report
+    }
+
+    /// Explicit user correction (2026-11-14) of a wrong closing `reason` on settled rows: the old text
+    /// moves to `reason_history` with the user's note; status, marks and reading evidence stay as they are.
+    public static func amendReason(document: URL, files: [String], reason: String, note: String = "",
+                                   apply: Bool, now: Date = Date()) throws -> Report {
+        guard !PrivateMode.isEnabled else { throw SecretaryError.privateMode }
+        guard let workspace = SecretaryWorkspace(document: document) else { throw SecretaryError.notAWorkspace(document.path) }
+        let reason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reason.isEmpty else { throw Failure("An amendment needs the new reason.") }
+        let id = SecretaryClock.runID(now) + "-reason"
+        let lock = apply ? try SecretaryRunLock.acquire(in: workspace.runsDirectory, runID: id) : nil
+        defer { lock?.release() }
+        let registryURL = workspace.document.deletingPathExtension().appendingPathExtension("sources.json")
+        let data = try Data(contentsOf: registryURL)
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let sources = root["sources"] as? [[String: Any]] else { throw Failure("Invalid registry.") }
+        var report = Report(runID: id, applied: apply)
+        var updates: [String: [String: Any]] = [:]
+        for name in files {
+            let rows = sources.filter { $0["note_file"] as? String == name }
+            guard rows.count == 1, let row = rows.first, let source = row["source_id"] as? String else {
+                rows.isEmpty ? report.notInRegistry.append(name) : report.ambiguous.append(name); continue
+            }
+            // Only a settled row has a closing reason worth correcting.
+            guard ["noise", "applied"].contains(row["status"] as? String ?? ""), row["reason"] is String else {
+                report.alreadyHeld.append(source); continue
+            }
+            var updated = row
+            var history = row["reason_history"] as? [[String: Any]] ?? []
+            history.append(["run_id": id, "date": SecretaryRegistryRevision.day(now), "previous_reason": row["reason"] ?? NSNull(),
+                            "note": note.isEmpty ? "Explicit user correction; no reading or status change." : note])
+            updated["reason_history"] = history
+            updated["reason"] = reason
+            updates[source] = updated
+            report.held[source] = name
+        }
+        guard apply, !updates.isEmpty else { return report }
+        let task = SecretaryTask(id: id, kind: .pass, workspace: workspace, threads: [], wimmCLI: "", createdAt: now)
+        let next = try SecretaryRegistryRevision.patched(data: data, original: root, sources: sources, updates: updates, task: task,
+                                                         method: "Wimm corrected a closing reason at the user's request; no reading or status change")
+        let directory = workspace.runDirectory(id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let backup = directory.appendingPathComponent("registry-before-reason.json")
+        let audit: [String: Any] = ["run_id": id, "registry_sha256": SecretaryBookkeeping.digest(data),
+                                    "sources": sources.filter { updates[$0["source_id"] as! String] != nil }]
+        try JSONSerialization.data(withJSONObject: audit, options: [.prettyPrinted, .sortedKeys]).write(to: backup, options: .atomic)
+        try SecretaryRegistryRevision.snapshot(data, directory: directory)
+        guard try Data(contentsOf: registryURL) == data else { throw Failure("Registry changed while amending; nothing applied.") }
+        try next.write(to: registryURL, options: .atomic)
+        report.registryBackup = workspace.relative(backup)
+        return report
+    }
+
     /// The files a hold run held, as the registry names them now (`note_file`).
     public static func heldFiles(document: URL, runID: String) throws -> [String] {
         guard let workspace = SecretaryWorkspace(document: document) else { throw SecretaryError.notAWorkspace(document.path) }

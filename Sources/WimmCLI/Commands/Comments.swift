@@ -51,7 +51,11 @@ struct Comments: AsyncParsableCommand {
                             quote: thread.root.quote ?? "", text: thread.root.text,
                             block: block.map { document?.displayMarkdown(for: $0) ?? $0.markdown },
                             detached: block == nil, at: thread.root.at,
-                            replies: thread.replies.map { .init(author: $0.author, text: $0.text ?? "", status: $0.status, at: $0.at) })
+                            replies: thread.replies.map { reply in
+                                .init(author: reply.author,
+                                      text: (reply.text ?? "") + (reply.intent.flatMap(DocumentReaction.init(rawValue:)).map { " (\($0.emoji) \($0.instruction))" } ?? ""),
+                                      status: reply.status, at: reply.at)
+                            })
             }
             if json {
                 let encoder = JSONEncoder()

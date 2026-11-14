@@ -5,7 +5,7 @@ import Foundation
 struct Notes: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Notes query and selection tools",
-        subcommands: [NotesQuery.self, NotesSelect.self, NotesSplitAttachments.self, NotesLostToText.self]
+        subcommands: [NotesQuery.self, NotesSelect.self, NotesSplitAttachments.self, NotesLostToText.self, NotesImportVoiceMemos.self, NotesMergeVoiceMemosDuplicates.self, NotesFillVoiceMemosFields.self]
     )
 }
 

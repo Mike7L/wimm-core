@@ -200,6 +200,11 @@ public struct NoteFingerprint: Sendable, Equatable, Codable {
         return make(meta, typed: typedText(at: mediaURL))
     }
 
+    /// Fingerprint of a sidecar dictionary alone (an audio note has no typed file text).
+    public static func make(sidecar: [String: Any]) -> NoteFingerprint {
+        make(RecallSidecar(sidecar), typed: nil)
+    }
+
     /// The pass queue only compares text and analysis. Check the qualifying
     /// change and compute those hashes from the same parsed sidecar.
     public static func changedForPass(_ mediaURL: URL, since: Date, mark: AgentMarkStore.Mark) -> Bool {
@@ -237,7 +242,7 @@ public struct NoteFingerprint: Sendable, Equatable, Codable {
         return NoteFingerprint(text: hash(text), analysis: hash(analysis), wording: wording)
     }
 
-    static func normalized(_ text: String) -> String {
+    public static func normalized(_ text: String) -> String {
         text.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }.joined(separator: " ")
     }
 

@@ -767,6 +767,25 @@ final class SecretaryPacketTests: XCTestCase {
         }
     }
 
+    /// 2026-11-14: 172 of the 200 newest changes had no transcript, so a 1000 KB
+    /// budget yielded 15 sources while 1016 waited. The byte budget, not a
+    /// candidate page, ends selection.
+    func testNotesWithoutTextDoNotHideOlderSourcesFromTheBudget() throws {
+        var notes = [library[0]]
+        for i in 0..<210 {
+            let silent = root.appendingPathComponent("recordings/silent-\(i).m4a")
+            try Data().write(to: silent)
+            try FileStore.mutateSidecar(at: FileStore.metadataURL(forRecordingURL: silent)) {
+                $0["recordingId"] = "silent-\(i)"; $0["transcription"] = ["speechStatus": "failed"]; return true
+            }
+            notes.append(RecallNote(id: "silent-\(i)", date: Date(), kind: "audio", title: nil, summary: nil, text: "",
+                                    filePath: silent.path, speech: "failed", updated: Date().addingTimeInterval(3600 + Double(i))))
+        }
+        let packet = try SecretaryPacket.prepare(task: task, library: RecallLibrary(notes), marks: store)
+        XCTAssertEqual(packet.selected, ["S1"])
+        XCTAssertEqual((packet.payload["no_text_sources"] as? [[String: String]])?.count, 210)
+    }
+
     func testRemovedReferenceRequeuesItsNote() throws {
         let fresh = Date().addingTimeInterval(3600)
         try store.update(["note.txt": AgentMarkStore.Mark(status: .applied, source: "S1", markedAt: Date(), noteId: "note", text: "t", analysis: "a")])

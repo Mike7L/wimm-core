@@ -222,7 +222,8 @@ public struct SecretaryTask: Sendable {
             lines.append("  - цитата: «\(Self.oneLine(thread.root.quote ?? "", limit: 240))»")
             if let text = thread.root.text, !text.isEmpty { lines.append("  - Михаил: \(Self.oneLine(text, limit: 600))") }
             for reply in thread.replies where reply.kind == .reply {
-                lines.append("  - \(reply.author): \(Self.oneLine(reply.text ?? "", limit: 600))")
+                let instruction = reply.intent.flatMap(DocumentReaction.init(rawValue:)).map { " (\($0.emoji) \($0.instruction))" } ?? ""
+                lines.append("  - \(reply.author): \(Self.oneLine(reply.text ?? "", limit: 600))\(instruction)")
             }
         }
         lines += [

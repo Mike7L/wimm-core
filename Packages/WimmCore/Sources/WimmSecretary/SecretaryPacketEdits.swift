@@ -590,6 +590,24 @@ extension SecretaryPacket {
 
     /// An image note whose supplied evidence has almost no words of its own: nothing a text-only
     /// editor can claim. It waits for viewing instead of entering the packet; never noise.
+    /// Set by `wimm-cli secretary prepare --admit-images` (environment, so a child packet builder inherits it).
+    static var admitImagesForViewing: Bool {
+        ProcessInfo.processInfo.environment["WIMM_SECRETARY_ADMIT_IMAGES"] == "1"
+    }
+
+    /// `prepare --admit-silent` (2026-11-14, user decision): an audio note whose current transcript is an
+    /// empty cloud `no_speech` verdict is admitted so the editor can close it as silence, instead of
+    /// waiting for text forever. Read-only sidecar check; local-only verdicts still wait.
+    static func admitsVerifiedSilence(sidecar: String) -> Bool {
+        guard ProcessInfo.processInfo.environment["WIMM_SECRETARY_ADMIT_SILENT"] == "1",
+              let data = try? Data(contentsOf: URL(fileURLWithPath: sidecar)),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let transcription = object["transcription"] as? [String: Any] else { return false }
+        let text = (transcription["transcript"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty && transcription["speechStatus"] as? String == "no_speech"
+            && transcription["provider"] as? String == "gemini"
+    }
+
     static func waitsForViewing(kind: String, text: String) -> Bool {
         kind == "image" && evidenceTerms(text).count < 3
     }

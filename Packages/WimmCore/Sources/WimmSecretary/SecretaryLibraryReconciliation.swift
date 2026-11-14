@@ -70,6 +70,49 @@ enum SecretaryLibraryReconciliation {
         return updates
     }
 
+    /// A source flagged removed/unindexed (2026-10-25 audit) whose sidecar now belongs to exactly one
+    /// visible journal note: restored notes, lost-media notes turned into `.txt`, attachments that became
+    /// their own note. User decision 2026-11-14: rebind the source to that note and lift the flag, keeping
+    /// the old flag and file in `visibility_history`. Never changes status, reading evidence or holds.
+    static func visibleAgain(sources: [[String: Any]], task: SecretaryTask, indexedFiles: [URL]) -> [String: [String: Any]] {
+        let owned = task.workspace.root.appendingPathComponent("recordings").resolvingSymlinksInPath()
+        let claimed = Set(sources.compactMap { row -> String? in
+            guard !SecretaryBookkeeping.flag(row["removed_from_wimm"]), !SecretaryBookkeeping.flag(row["wimm_unindexed"]) else { return nil }
+            return row["note_file"] as? String
+        })
+        // Only sources named by `secretary reconcile --relink-source-id` (environment, so the run inherits it).
+        let named = Set((ProcessInfo.processInfo.environment["WIMM_SECRETARY_RELINK_SOURCES"] ?? "")
+            .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+        guard !named.isEmpty else { return [:] }
+        var updates: [String: [String: Any]] = [:]
+        for row in sources {
+            guard let id = row["source_id"] as? String, named.contains(id),
+                  SecretaryBookkeeping.flag(row["removed_from_wimm"]) || SecretaryBookkeeping.flag(row["wimm_unindexed"]),
+                  let path = (row["path"] as? String)?.removingPercentEncoding else { continue }
+            let sidecar = task.workspace.document.deletingLastPathComponent().appendingPathComponent(path).standardizedFileURL.resolvingSymlinksInPath()
+            guard sameDirectory(sidecar.deletingLastPathComponent(), owned), FileManager.default.fileExists(atPath: sidecar.path) else { continue }
+            if let hold = row["user_exclusion"] as? [String: Any], SecretaryBookkeeping.flag(hold["active"]) { continue }
+            let visible = indexedFiles.filter { file in
+                (try? file.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
+                    && sameDirectory(file.deletingLastPathComponent(), owned) && !FileStore.isDerivedAudioFile(file)
+                    && FileStore.metadataURL(forRecordingURL: file).resolvingSymlinksInPath() == sidecar
+            }
+            guard visible.count == 1, let file = visible.first, !claimed.contains(file.lastPathComponent) else { continue }
+            var updated = row
+            var history = row["visibility_history"] as? [[String: Any]] ?? []
+            history.append(["run_id": task.id, "date": SecretaryRegistryRevision.day(task.createdAt),
+                            "previous_file": row["note_file"] ?? NSNull(),
+                            "removed_from_wimm": row["removed_from_wimm"] ?? NSNull(),
+                            "wimm_unindexed": row["wimm_unindexed"] ?? NSNull(), "file": file.lastPathComponent,
+                            "reason": "Sidecar belongs to exactly one visible journal note again; source rebound and flag lifted (user decision 2026-11-14). No status or reading change."])
+            updated["visibility_history"] = history
+            updated["note_file"] = file.lastPathComponent
+            updated.removeValue(forKey: "removed_from_wimm"); updated.removeValue(forKey: "wimm_unindexed")
+            updates[id] = updated
+        }
+        return updates
+    }
+
     static func sameDirectory(_ left: URL, _ right: URL) -> Bool {
         // Resolving a missing leaf does not resolve its existing symlink parent
         // on macOS. Resolve the directory itself before comparing its identity.

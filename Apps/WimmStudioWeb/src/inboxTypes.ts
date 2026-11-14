@@ -41,7 +41,10 @@ export interface InboxReply {
   heading?: string;
   quote?: string;
   at: string;
-  messages: { author: string; text: string; at: string }[];
+  /** Thread status: `applied` means the secretary already changed the document. */
+  status?: string;
+  /** The owner's reaction (✂️ …) shows as the opening message, with an empty text. */
+  messages: { author: string; text: string; at: string; reaction?: { emoji: string; intent?: string } }[];
 }
 
 export interface InboxPass {

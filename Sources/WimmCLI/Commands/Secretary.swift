@@ -43,9 +43,13 @@ struct Secretary: AsyncParsableCommand {
         @Flag(name: .long, help: "With --unread-pending: re-offer unchanged unfinished or skipped sources; no marks are changed") var retryUnfinished = false
         @Option(name: .customLong("exclude-source-id"), help: "With --unread-pending: leave this exact source queued during this sweep; repeatable, no marks are changed") var excludedSourceIDs: [String] = []
         @Option(name: .customLong("source-id"), help: "With --packet-only: include this registry source in the dry sample. Repeat for each source.") var sourceIDs: [String] = []
+        @Flag(name: .long, help: "Admit low-text images instead of parking them as waiting for viewing; only for an editor that views the image itself") var admitImages = false
+        @Flag(name: .long, help: "Admit audio notes whose cloud retranscription found no speech, so the editor can close them as silence") var admitSilent = false
         func run() async throws {
             guard let cli = SecretaryDispatcher.locateWimmCLI() else { throw SecretaryError.wimmCLIMissing }
             guard packetOnly || sourceIDs.isEmpty else { throw ValidationError("--source-id needs --packet-only.") }
+            if admitImages { setenv("WIMM_SECRETARY_ADMIT_IMAGES", "1", 1) }
+            if admitSilent { setenv("WIMM_SECRETARY_ADMIT_SILENT", "1", 1) }
             let url = URL(fileURLWithPath: (document as NSString).expandingTildeInPath).standardizedFileURL
             let data = try await SecretaryPacketFiles.prepare(document: url, cli: cli, sourceKB: packetKB,
                                                               packetOnly: packetOnly, sampleSourceIDs: Set(sourceIDs), unreadPending: unreadPending, retryUnfinished: retryUnfinished, maxSources: maxSources ?? (unreadPending ? 32 : nil), excludedSourceIDs: Set(excludedSourceIDs), contextKB: contextKB)
@@ -272,8 +276,10 @@ struct Secretary: AsyncParsableCommand {
         static let configuration = CommandConfiguration(commandName: "reconcile", abstract: "Locally reconcile confirmed Trash entries, proven media aliases and missing S definitions; no model (dry run unless --apply)")
         @Argument var document: String
         @Flag(name: .long) var apply = false
+        @Option(name: .customLong("relink-source-id"), help: "Rebind this removed/unindexed source to the one visible note that owns its sidecar and lift the flag; repeatable, never held sources") var relinkSourceIDs: [String] = []
         func run() async throws {
             let url = URL(fileURLWithPath: (document as NSString).expandingTildeInPath).standardizedFileURL
+            if !relinkSourceIDs.isEmpty { setenv("WIMM_SECRETARY_RELINK_SOURCES", relinkSourceIDs.joined(separator: ","), 1) }
             let report = try await SecretaryDispatcher.reconcile(document: url, apply: apply)
             let data = try JSONEncoder().encode(report)
             print(String(decoding: data, as: UTF8.self))
@@ -292,10 +298,33 @@ struct Secretary: AsyncParsableCommand {
         var undoRun: String?
         @Flag(name: .long, help: "With --undo-run: the files that run held which are no longer lost-to-text candidates")
         var noLongerLost = false
+        @Flag(name: .long, help: "Release the active holds of the named files (explicit user decision; needs --reason)") var release = false
+        @Flag(name: .long, help: "Replace the closing reason of the named settled files with --reason (explicit user correction)") var amendReason = false
         @Flag(name: .long) var apply = false
 
         func run() throws {
             let url = URL(fileURLWithPath: (document as NSString).expandingTildeInPath).standardizedFileURL
+            if amendReason {
+                guard !file.isEmpty, let reason else { throw ValidationError("--amend-reason needs --file and --reason.") }
+                let report = try SecretaryUserHold.amendReason(document: url, files: file, reason: reason, apply: apply)
+                print(report.applied ? "APPLIED (run \(report.runID))" : "DRY RUN (registry unchanged)")
+                print("Amended: \(report.held.count); not settled: \(report.alreadyHeld.count); not in registry: \(report.notInRegistry.count); ambiguous: \(report.ambiguous.count)")
+                for (source, name) in report.held.sorted(by: { $0.key < $1.key }) { print("  \(source) \(name)") }
+                if let backup = report.registryBackup { print("Backup: \(backup)") }
+                if !report.notInRegistry.isEmpty || !report.ambiguous.isEmpty || !report.alreadyHeld.isEmpty { throw ExitCode(1) }
+                return
+            }
+            if release {
+                guard !file.isEmpty, let reason else { throw ValidationError("--release needs --file and --reason.") }
+                let report = try SecretaryUserHold.release(document: url, files: file, reason: reason, apply: apply)
+                print(report.applied ? "APPLIED (run \(report.runID))" : "DRY RUN (registry unchanged)")
+                print("Released: \(report.held.count); not active: \(report.alreadyHeld.count); not in registry: \(report.notInRegistry.count); ambiguous: \(report.ambiguous.count)")
+                for name in report.notInRegistry { print("  not in registry: \(name)") }
+                for name in report.ambiguous { print("  ambiguous: \(name)") }
+                if let backup = report.registryBackup { print("Backup: \(backup)") }
+                if !report.notInRegistry.isEmpty || !report.ambiguous.isEmpty { throw ExitCode(1) }
+                return
+            }
             if let undoRun {
                 var files = file
                 if noLongerLost {

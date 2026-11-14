@@ -1249,6 +1249,8 @@ export function wimmStudioApiPlugin(): Plugin {
                 at: formatLocalIso(now),
                 reply_to: body.threadId,
                 text: body.text,
+                reaction: body.reaction || undefined,
+                intent: body.intent || undefined,
               };
               appendJsonlRecord(loc.threadsPath, record);
               res.setHeader('Content-Type', 'application/json');

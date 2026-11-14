@@ -384,10 +384,12 @@ export function buildInbox(deps: InboxDeps): InboxPayload {
       heading: t.root.heading,
       quote: t.root.quote,
       at: t.replies.at(-1)?.at ?? t.root.at,
+      status: t.status,
+      // A reaction root has no text; it is still the owner's opening move, so it stays.
       messages: [t.root, ...t.replies]
-        .filter((r) => r.text)
+        .filter((r) => r.text || (r === t.root && r.kind === 'reaction'))
         .slice(-4)
-        .map((r) => ({ author: r.author, text: r.text!, at: r.at })),
+        .map((r) => ({ author: r.author, text: r.text ?? '', at: r.at, reaction: r === t.root ? reactionOf(r) : undefined })),
     }));
 
   const passes = parsePasses(readOptional(root && path.join(root, 'secretary', 'change_log.md')), 5);
@@ -401,6 +403,10 @@ export function buildInbox(deps: InboxDeps): InboxPayload {
     passes,
     liked,
   };
+}
+
+function reactionOf(r: CommentThread['root']): { emoji: string; intent?: string } | undefined {
+  return r.kind === 'reaction' ? { emoji: r.reaction ?? '', intent: r.intent } : undefined;
 }
 
 // MARK: - Saving an answer as a note (wimm-cli mcp create_note)

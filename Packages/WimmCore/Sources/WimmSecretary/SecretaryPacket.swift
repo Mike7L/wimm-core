@@ -90,7 +90,7 @@ struct SecretaryPacket {
         let known = marks.marks(), since = marks.pass()?.asOf ?? .distantPast
         let snapshots = library.fingerprintSnapshotsByPath()
         let changed = NoteRecall.changed(library, since: sampleSourceIDs.isEmpty ? since : nil,
-                                         limit: sampleSourceIDs.isEmpty ? 200 : sampleSourceIDs.count, newestFirst: true) { path in
+                                         limit: sampleSourceIDs.isEmpty ? Int.max : sampleSourceIDs.count, newestFirst: true) { path in
             if !sampleSourceIDs.isEmpty { return sampleFiles.contains(URL(fileURLWithPath: path).lastPathComponent) }
             guard let mark = known[URL(fileURLWithPath: path).lastPathComponent] else { return true }
             let url = URL(fileURLWithPath: path)
@@ -160,7 +160,10 @@ struct SecretaryPacket {
             let sidecar = URL(fileURLWithPath: receipt.sidecar).resolvingSymlinksInPath()
             // A note with no text at all (failed or pending transcription) gives the editor nothing to
             // read; admitting it only made every packet defer it again (2026-10-31: eight passes in a row).
-            if receipt.suppliedText?.isEmpty == true || waitsForViewing(kind: note.kind, text: read.text) {
+            // `prepare --admit-images` (2026-11-14, user decision): an editor that can look at the image
+            // itself gets low-text images admitted unchanged instead of parking them as "waits for viewing".
+            if (receipt.suppliedText?.isEmpty == true && !Self.admitsVerifiedSilence(sidecar: receipt.sidecar))
+                || (!Self.admitImagesForViewing && waitsForViewing(kind: note.kind, text: read.text)) {
                 var entry = ["file": URL(fileURLWithPath: receipt.file).lastPathComponent,
                              "reason": "No transcript or text yet; waits for (re)transcription. Not admitted or acknowledged."]
                 if let row = rowsBySidecar[sidecar.path]?.first, let id = row["source_id"] as? String { entry["source"] = id }

@@ -1,7 +1,7 @@
 import { liveSource } from '../liveEvents';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReplyMode } from './ReplyActions';
-import type { ActiveRecordingInfo, LatestVoiceNote } from '../types';
+import { REACTION_PRESETS, type ActiveRecordingInfo, type LatestVoiceNote, type ReactionPreset } from '../types';
 
 // Voice reply: Studio records (the same capture path as "У меня вопрос" and
 // Ангел и Демон: /api/shoulders/capture + /api/shoulders/voice-stream), the
@@ -17,6 +17,8 @@ export interface ReplyTarget {
   /** false for a plain thought: the voice note itself is the result. */
   needsText: boolean;
   inputMode?: ReplyMode;
+  /** The answer is about a document paragraph: offer the document's reactions (✂️ Сократить …), each with its instruction for the secretary. */
+  reactions?: boolean;
 }
 
 type Phase = 'starting' | 'recording' | 'transcribing' | 'ready';
@@ -46,9 +48,10 @@ export function ReplySheet({
   onClose,
 }: {
   target: ReplyTarget;
-  onDone: (text: string) => Promise<void>;
+  onDone: (text: string, reaction?: ReactionPreset) => Promise<void>;
   onClose: () => void;
 }) {
+  const [reaction, setReaction] = useState<ReactionPreset | undefined>();
   const [voiceEnabled, setVoiceEnabled] = useState((target.inputMode ?? 'voice') === 'voice');
   const [phase, setPhase] = useState<Phase>((target.inputMode ?? 'voice') === 'voice' ? 'starting' : 'ready');
   const [text, setText] = useState('');
@@ -171,11 +174,11 @@ export function ReplySheet({
   const done = async () => {
     if (phase === 'recording') return;
     if (!target.needsText) return onClose();
-    if (!text.trim()) return;
+    if (!text.trim() && !reaction) return;
     setSaving(true);
     setError(null);
     try {
-      await onDone(text.trim());
+      await onDone(text.trim(), reaction);
       onClose();
     } catch (e: any) {
       setError(e?.message || 'Не удалось сохранить');
@@ -184,7 +187,7 @@ export function ReplySheet({
   };
 
   const recording = phase === 'recording' || phase === 'starting';
-  const canFinish = !recording && !saving && (!target.needsText || text.trim().length > 0);
+  const canFinish = !recording && !saving && (!target.needsText || text.trim().length > 0 || Boolean(reaction));
   const label =
     phase === 'starting'
       ? 'Включаем запись…'
@@ -236,7 +239,22 @@ export function ReplySheet({
                 />
               )}
             </div>
-            {target.needsText && (
+            {target.needsText && target.reactions && (
+              <div role="group" aria-label="Реакция" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {REACTION_PRESETS.map((preset) => {
+                  const on = reaction?.intent === preset.intent;
+                  return (
+                    <button key={preset.intent} type="button" className="chip" aria-pressed={on} disabled={saving}
+                      onClick={() => setReaction(on ? undefined : preset)}
+                      style={{ fontSize: 15, minHeight: 44, gap: 6, ...(on ? { background: 'var(--accent-purple)', color: '#fff', borderColor: 'transparent' } : {}) }}>
+                      <span style={{ fontSize: 20 }}>{preset.emoji}</span>
+                      {preset.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {target.needsText && !target.reactions && (
               <div role="group" aria-label="Смайлики для ответа" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {['👍', '👎', '❤️', '🙂', '😂', '😢', '🤔', '🙏'].map((emoji) => (
                   <button key={emoji} type="button" className="chip" aria-label={`Добавить ${emoji}`} disabled={saving}

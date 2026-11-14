@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { ReplyActions, type ReplyMode } from './ReplyActions';
 import { FeedNavigationContext, FeedText, SourceLinks, DocumentLink } from './FeedLinks';
 import type { InboxChange, InboxPayload, InboxQuestion, InboxReply } from '../inboxTypes';
+import { REACTION_PRESETS, type ReactionPreset } from '../types';
 import { ReplySheet, type ReplyTarget } from './ReplySheet';
 import { StoryView, type Story, type StoryItem } from './StoryView';
 import {
@@ -39,7 +40,7 @@ const LEAVE_MS = 360;
 
 type Toast = { text: string; undo?: () => void };
 type Section = { id: string; title: string; items: InboxChange[] };
-type Reply = { target: ReplyTarget; onDone: (text: string) => Promise<void> };
+type Reply = { target: ReplyTarget; onDone: (text: string, reaction?: ReactionPreset) => Promise<void> };
 
 function loadSetting<T extends string>(key: string, allowed: readonly T[], fallback: T): T {
   try {
@@ -285,12 +286,16 @@ export function FeedApp({ embedded = false, onOpenBlock, onOpenSource, onNavigat
         who: whereOf(c.storyTitle, c.heading),
         when: kindLabel(c.kind).toLowerCase(),
         prompt: clip(plain(c.text), 220),
-        hint: 'Дополнение сохранится комментарием к абзацу — секретарь прочитает его в следующем проходе.',
+        hint: 'Дополнение сохранится комментарием к абзацу — секретарь прочитает его в следующем проходе. Реакция значит то же, что в документе.',
         needsText: true,
         inputMode,
+        reactions: true,
       },
-      onDone: async (text) => {
-        await postJson('/api/threads', { action: 'add', section: c.sectionId, heading: c.sectionHeading, quote: quoteOf(c), text });
+      onDone: async (text, reaction) => {
+        await postJson('/api/threads', {
+          action: 'add', section: c.sectionId, heading: c.sectionHeading, quote: quoteOf(c), text,
+          reaction: reaction?.emoji, intent: reaction?.intent,
+        });
         say('Комментарий сохранён');
       },
     });
@@ -314,15 +319,21 @@ export function FeedApp({ embedded = false, onOpenBlock, onOpenSource, onNavigat
   const clarify = (r: InboxReply, inputMode: ReplyMode = 'voice') =>
     setReply({
       target: {
-        who: 'Секретарь ответил на твой комментарий',
+        who: r.status === 'applied' ? 'Секретарь поправил по твоей отметке' : 'Секретарь ответил на твой комментарий',
         when: r.heading,
         prompt: r.messages.at(-1)?.text ?? '',
-        hint: 'Уточнение уйдёт ответом в эту ветку комментариев.',
+        hint: 'Скажи, что не так, — это уйдёт ответом в эту ветку, секретарь прочитает в следующем проходе.',
         needsText: true,
         inputMode,
+        reactions: true,
       },
-      onDone: async (text) => {
-        await postJson('/api/threads', { action: 'reply', threadId: r.threadId, text });
+      onDone: async (text, reaction) => {
+        await postJson('/api/threads', {
+          action: 'reply', threadId: r.threadId,
+          // Every reader of threads.jsonl shows a reply's text; a bare reaction still says what it is.
+          text: text || (reaction ? `${reaction.emoji} ${reaction.label}` : ''),
+          reaction: reaction?.emoji, intent: reaction?.intent,
+        });
         dismiss([r.threadId], () => setClosedThreads((s) => new Set(s).add(r.threadId)));
         say('Уточнение отправлено в ветку');
       },
@@ -691,34 +702,45 @@ function QuestionEntry({ q, answeredNote, deferred, onAnswer, onLater }: { q: In
 }
 
 function ReplyEntry({ r, onClose, onClarify }: { r: InboxReply; onClose: () => void; onClarify: (mode: ReplyMode) => void }) {
+  const applied = r.status === 'applied';
+  const opener = r.messages[0]?.author === 'owner' ? r.messages[0] : undefined;
   return (
     <article className="f-entry attn" style={{ '--tone': 'var(--accent-purple)' } as CSSProperties}>
-      <EntryMeta kind="Ответ секретаря" where={whereOf(r.heading, relativeTime(r.at))} blockId={r.blockId ?? undefined} />
-      {r.quote && (
-        <blockquote className="f-quote">
-          <FeedText text={r.quote} />
-        </blockquote>
-      )}
+      <EntryMeta kind={applied ? 'Секретарь поправил' : 'Секретарь ответил'} where={whereOf(r.heading, relativeTime(r.at))} blockId={r.blockId ?? undefined} />
       <div className="f-thread">
         {r.messages.map((m, i) => {
           const mine = m.author === 'owner';
           return (
             <div key={i} className={mine ? 'f-msg mine' : 'f-msg'}>
-              <span className="f-msg-who">{mine ? 'Ты' : 'Секретарь'}</span>
-              <span className="f-msg-text">
-                <FeedText text={m.text} />
+              <span className="f-msg-who">
+                {mine ? (m.reaction ? `Ты отметил ${m.reaction.emoji} ${REACTION_PRESETS.find((p) => p.intent === m.reaction?.intent)?.label ?? ''}`.trim() : 'Ты') : 'Секретарь'}
               </span>
+              {m.text && (
+                <span className="f-msg-text">
+                  <FeedText text={m.text} />
+                </span>
+              )}
+              {m === opener && r.quote && (
+                <blockquote className="f-quote">
+                  <FeedText text={r.quote} />
+                </blockquote>
+              )}
             </div>
           );
         })}
       </div>
+      {!opener && r.quote && (
+        <blockquote className="f-quote">
+          <FeedText text={r.quote} />
+        </blockquote>
+      )}
       <div className="f-actions">
-        <button type="button" className="chip" onClick={onClose} title="Ответ верный — закрыть ветку">
+        <button type="button" className="chip" onClick={onClose} title="Всё так — закрыть ветку и убрать из ленты">
           <CheckIcon size={15} />
-          Верно
+          {applied ? 'Принять' : 'Понятно'}
         </button>
         <span className="f-space" />
-        <ReplyActions onReply={onClarify} voiceLabel="Уточнить" />
+        <ReplyActions onReply={onClarify} voiceLabel={applied ? 'Не так' : 'Ответить'} />
       </div>
     </article>
   );

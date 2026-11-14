@@ -175,7 +175,9 @@ enum SecretaryBookkeeping {
             if reconcileMediaAliases {
                 let aliases = SecretaryLibraryReconciliation.mediaAliases(sources: sources, task: task, marks: existing, indexedFiles: files)
                 for (id, row) in aliases { updates[id] = row }
-                report.remappedSources = aliases.keys.sorted()
+                let visible = SecretaryLibraryReconciliation.visibleAgain(sources: sources, task: task, indexedFiles: files)
+                for (id, row) in visible where updates[id] == nil { updates[id] = row }
+                report.remappedSources = Set(aliases.keys).union(visible.keys).sorted()
             }
             let nextSources = sources.map { updates[$0["source_id"] as! String] ?? $0 }
             let nextRegistry = try SecretaryRegistryRevision.patched(data: registryData, original: data, sources: sources, updates: updates, task: task)
