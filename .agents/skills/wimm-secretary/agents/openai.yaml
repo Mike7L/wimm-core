@@ -1,0 +1,4 @@
+interface:
+  display_name: "Секретарь Wimm"
+  short_description: "Поиск, чтение и создание личных заметок Wimm"
+  default_prompt: "Используй $wimm-secretary, чтобы найти нужные записи в Wimm или сохранить новую заметку из нашего разговора."
