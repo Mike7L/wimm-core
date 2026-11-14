@@ -54,8 +54,8 @@ def input_digest(root, binary, cli, kind='wimm'):
         for name in ('FluidAudio_FluidAudio.bundle', 'WimmCore_WimmInfrastructure.bundle'):
             path = binary.parent / name
             paths[str(path)] = path
-        # The CloudKit profile make_studio.sh embeds, found the same way as in
-        # make_app.sh; a newly installed or renewed profile must repackage.
+        # The CloudKit profile make_studio.sh embeds, found the same way as
+        # for the old Wimm app; a newly installed or renewed profile must repackage.
         for directory in ('Library/Developer/Xcode/UserData/Provisioning Profiles',
                           'Library/MobileDevice/Provisioning Profiles'):
             for path in (Path.home() / directory).glob('*.provisionprofile'):

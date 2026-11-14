@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift:
+    name: Core tests + CLI smoke
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            .build
+          key: ${{ runner.os }}-${{ runner.arch }}-spm-v1-${{ hashFiles('Package.resolved', 'Package.swift', 'Packages/WimmCore/Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-spm-v1-
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Core tests and CLI bridge smoke
+        env:
+          WIMM_TRANSCRIBER: mock
+        run: ./scripts/test_wimm_fast.sh
+
+      - name: Secretary CLI smoke (disposable data, no model calls)
+        run: |
+          source scripts/build_budget.sh
+          wimm_swift build --product WimmCLI
+          CLI="$(swift build --show-bin-path)/WimmCLI"
+          python3 scripts/test_secretary_files_cli.py --cli "$CLI"
+
+  web-and-scripts:
+    name: Web + script tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Studio web tests
+        run: npm --prefix Apps/WimmStudioWeb test
+
+      - name: Script tests
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'

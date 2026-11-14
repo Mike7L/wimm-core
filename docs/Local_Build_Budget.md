@@ -46,7 +46,7 @@ removed ~100 MB of clones, nothing more.
   `scripts/test_wimm_fast.sh` does this and builds `wimm-tui` first for the TUI smoke
   tests. `cd Packages/WimmCore && swift test` still works, but builds everything again.
 - **`scripts/clean_worktree_builds.sh [--apply]`** deletes the `.build` folders of worktrees
-  whose HEAD is merged into `origin/wimm` and that nothing has built in for `MIN_AGE_HOURS`
+  whose HEAD is merged into `origin/main` and that nothing has built in for `MIN_AGE_HOURS`
   (12) — a fresh worktree is trivially "merged". Only build output goes.
 - **`scripts/dedupe_build_deps.py [--apply]`** makes the per-checkout NemoTextProcessing copies
   share blocks (APFS clones, marked with an xattr so reruns are no-ops): ~200 MB per extra
@@ -99,9 +99,8 @@ trait iteration stable. It does not export the setting to the caller or to
 Studio launched after the build. Keep using this helper consistently; do not
 rewrite build.db or remove features to work around this issue. Switching a
 previous cache to these stable commands can require one initial rebuild.
-Reproduction and validation: `FluidAudio_Rebuild_Diagnosis_2026-11-10.md`.
 
-`make_app.sh -i` uses standard SwiftPM Release flags. Release still uses
+`make_studio.sh -i` and `make_cli.sh -i` use standard SwiftPM Release flags. Release still uses
 whole-module optimization: a changed file can require compiling its entire
 module. Secretary packet and dispatch code is the target `WimmSecretary`,
 which depends on `WimmInfrastructure`; editing it does not recompile
@@ -124,9 +123,7 @@ caches or adding profiling flags:
 
 | Step | Time |
 | --- | ---: |
-| Wimm product build | 3.40 s |
 | Embedded CLI product build | 8.03 s |
-| Complete `make_app.sh -i`, including packaging, signing and opening | 19.67 s |
 | Studio product build | 2.17 s |
 | Studio command including tool startup | 6.48 s |
 
@@ -136,12 +133,10 @@ Both installed app bundles passed `codesign --verify --deep --strict`.
 Shell checks also verified matching app/CLI flags in standard Release, full
 Release, profiled Release and profiled Debug without recompiling dependencies.
 
-## Whole desktop update cycle (2026-10-26)
+## Studio update cycle (2026-10-26)
 
-Run `./scripts/make_desktop_apps.sh` to build, update, verify and open Wimm
-and Studio with the shared standard Release cache and the same compiler budget.
-The individual entry points remain `make_app.sh -i` and `make_studio.sh -i`.
-Set `WIMM_NO_OPEN=1` to update without opening either app.
+`make_studio.sh -i` builds, updates, verifies and opens Studio with the shared
+standard Release cache and the same compiler budget.
 
 Both builders still invoke SwiftPM to check compilation inputs. After that,
 `app_update_cache.py` checks SHA-256 receipts for the packaging inputs and

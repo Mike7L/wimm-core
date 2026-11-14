@@ -268,10 +268,13 @@ For “update Studio”, follow this order:
   and use `wimm_swift` / `wimm_xcodebuild` (two jobs/two threads by default).
   Preserve the primary `.build` and SwiftPM cache (`docs/Local_Build_Budget.md`).
 - iOS: `xcodegen` generates `Wimm.xcodeproj` from `project.yml` (do not commit
-  the generated project); `scripts/build_ios_xcode.sh` /
-  `scripts/check_ios_build.sh`. iOS tests need simulator code signing (the
+  the generated project); `scripts/run_ios.sh` builds and launches on a
+  simulator, `scripts/check_ios_build.sh` only compiles. iOS tests need simulator code signing (the
   CloudKit entitlement); with `CODE_SIGNING_ALLOWED=NO` the test host traps.
-- Fast tests: `scripts/test_wimm_fast.sh` (`WIMM_TEST_SCOPE=core`). Web tests:
+- Fast tests: `scripts/test_wimm_fast.sh` (`WIMM_TEST_SCOPE=core`). Before a
+  release: `scripts/release_gate.sh` (all tests, release build, iOS Release
+  build, web and script tests). CI (`.github/workflows/ci.yml`) runs the fast
+  tests, the secretary CLI smoke on disposable data, web and script tests. Web tests:
   `npm test` in `Apps/WimmStudioWeb`.
 - Logs: events `~/Library/Application Support/Wimm/logs/events/`, recordings
   and sidecars `~/Library/Application Support/Wimm/Recordings/`, plain `log()`

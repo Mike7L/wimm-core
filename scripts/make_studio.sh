@@ -83,7 +83,7 @@ else
   done
   printf 'APPL????' > "$APP_DIR/Contents/PkgInfo"
   # CloudKit sync with the iPhone needs the same identity as Wimm: Studio's
-  # bundle id is com.micha.wimm.macos, so the profile make_app.sh embeds fits.
+  # bundle id is com.micha.wimm.macos, so the Wimm Mac profile fits.
   # Restricted iCloud entitlements without the profile get the app SIGKILLed at
   # launch, so they are used only together; otherwise sync stays off.
   ENTITLEMENTS="$ROOT_DIR/WimmLocal.entitlements"

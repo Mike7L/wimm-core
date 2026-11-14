@@ -384,7 +384,7 @@ public enum SecretaryError: LocalizedError, Equatable {
         case .wimmCLIMissing: "The Wimm CLI (WimmCLI.app or ~/.local/share/wimm/WimmCLI) was not found."
         case .wimmCLIStale(let path, let missing):
             "The Wimm CLI at \(path) is too old for this run (missing: \(missing.joined(separator: ", "))). "
-                + "Rebuild it (scripts/make_app.sh -i) or point WIMM_CLI_PATH at a current build."
+                + "Rebuild it (scripts/make_cli.sh -i) or point WIMM_CLI_PATH at a current build."
         }
     }
 }
