@@ -37,7 +37,7 @@ struct Secretary: AsyncParsableCommand {
         @Argument(help: "Workspace Markdown document") var document: String
         @Option(name: .long, help: "Source budget, 64–1024 KB; KB = 1000 bytes. 64 is one conversational portion; the rest stays in remaining") var packetKB = 64
         @Flag(name: .long, help: "Prepare a packet without processing comments; apply is limited to --dry-run") var packetOnly = false
-        @Flag(name: .long, help: "Select only registry pending notes whose primary text has not been read, regardless of marks or dates") var unreadPending = false
+        @Flag(name: .long, help: "Select only registry pending notes whose primary text has not been read, plus failed notes retranscribed since their mark, regardless of dates") var unreadPending = false
         @Option(name: .long, help: "Budget for requested document context, 96–1024 KB; source budget is separate") var contextKB = 96
         @Option(name: .long, help: "Maximum complete sources per call (unread pending defaults to 32); remaining sources stay queued") var maxSources: Int?
         @Flag(name: .long, help: "With --unread-pending: re-offer unchanged unfinished or skipped sources; no marks are changed") var retryUnfinished = false

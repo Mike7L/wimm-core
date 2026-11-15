@@ -75,6 +75,53 @@ final class SecretaryPacketFilesTests: XCTestCase {
         XCTAssertEqual(marks.mark(forFile: files[0].lastPathComponent)?.status, .pending)
     }
 
+    /// 2026-11-15: notes marked `failed` on an empty transcript got parakeet text later; the
+    /// registry sweep picked only `pending` rows, so they could never come back.
+    func testUnreadPendingAdmitsFailedNoteOnlyAfterANewTranscript() async throws {
+        let retried = root.appendingPathComponent("recordings/retried.m4a")
+        let still = root.appendingPathComponent("recordings/still.m4a")
+        let markedAt = Date().addingTimeInterval(-7200)
+        for file in [retried, still] {
+            try Data().write(to: file)
+            try FileStore.mutateSidecar(at: FileStore.metadataURL(forRecordingURL: file)) {
+                $0["recordingId"] = file.deletingPathExtension().lastPathComponent
+                $0["transcription"] = ["speechStatus": "failed", "transcript": "",
+                                       "startedAt": ISO8601.string(from: markedAt.addingTimeInterval(-60))]
+                return true
+            }
+            let fp = NoteFingerprint.read(forRecordingURL: file)
+            try marks.update([file.lastPathComponent: .init(status: .failed, source: nil, markedAt: markedAt,
+                noteId: file.deletingPathExtension().lastPathComponent, text: fp.text, analysis: fp.analysis, wording: fp.wording)])
+        }
+        try FileStore.mutateSidecar(at: FileStore.metadataURL(forRecordingURL: retried)) {
+            $0["transcription"] = ["speechStatus": "speech", "provider": "parakeet", "model": "parakeet:ultra",
+                                   "transcript": "Начать сначала, идея для бота услуг.", "startedAt": ISO8601.string(from: Date())]
+            return true
+        }
+        var data = try object(Data(contentsOf: registry))
+        var rows = (data["sources"] as! [[String: Any]]).map { $0.merging(["primary_text_read": true]) { _, new in new } }
+        rows += [["source_id": "S3", "path": "../recordings/retried.meta.json", "note_file": "retried.m4a",
+                  "status": "failed", "reason": "empty transcript", "primary_text_read": true],
+                 ["source_id": "S4", "path": "../recordings/still.meta.json", "note_file": "still.m4a",
+                  "status": "failed", "reason": "empty transcript", "primary_text_read": true]]
+        data["sources"] = rows; data["source_count"] = 4; data["counts"] = ["pending": 2, "failed": 2]
+        try JSONSerialization.data(withJSONObject: data).write(to: registry)
+        try marks.setPass(.init(asOf: .distantFuture, cursor: nil, comment: nil, setAt: Date()))
+
+        let ids = SecretaryPacketFiles.unreadPendingSourceIDs(rows) {
+            SecretaryPacketFiles.retranscribedSinceFailedMark(self.root.appendingPathComponent("recordings/\($0)"), marks: self.marks)
+        }
+        XCTAssertEqual(ids, ["S3"], "a failed note without new text stays out; read pending rows stay out")
+        XCTAssertTrue(SecretaryPacketFiles.unreadPendingSourceIDs(rows).isEmpty, "failed rows need the transcript check")
+
+        let notes = RecallLibrary([RecallNote(id: "retried", date: markedAt, kind: "audio", title: nil, summary: nil,
+            text: "Начать сначала, идея для бота услуг.", filePath: retried.path, speech: "speech", updated: Date())])
+        let m = try object(await SecretaryPacketFiles.prepare(document: document, cli: URL(fileURLWithPath: "/unused-cli"),
+            sourceKB: 64, library: notes, marks: marks, unreadPending: true))
+        XCTAssertEqual(m["source_ids"] as? [String], ["S3"])
+        XCTAssertEqual(marks.mark(forFile: "retried.m4a")?.status, .failed, "prepare never re-marks")
+    }
+
     func testUnreadPendingLeavesOverflowForLaterPackets() async throws {
         for file in files {
             try String(repeating: "A", count: 45_000).write(to: file, atomically: true, encoding: .utf8)
