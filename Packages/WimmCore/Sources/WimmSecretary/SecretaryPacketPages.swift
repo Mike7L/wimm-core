@@ -162,6 +162,9 @@ extension SecretaryPacketFiles {
         var notes: [String] = []
         if value(of: "speech", in: header)?.hasPrefix("no_speech") == true { notes.append("speech: no_speech") }
         if let retry = value(of: "retranscription", in: header), retry.contains("no_speech") { notes.append("перерасшифровка: no_speech") }
+        if let file = value(of: "audio_file", in: header) {
+            notes.append("audio_file: " + (file.components(separatedBy: " — ").first ?? file))
+        }
         if let coverage = value(of: "coverage", in: header) {
             notes.append("coverage: " + (coverage.components(separatedBy: " — ").first ?? coverage))
         }

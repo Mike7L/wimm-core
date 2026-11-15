@@ -715,7 +715,12 @@ public struct MCPRecallServer: Sendable {
                 if blocks[i].sameAs == nil { exact[bytes] = blocks[i].label }
             }
         }
-        if isAudio, speech == "speech", let duration, duration >= 30 {
+        let shortFile = isAudio ? meta.shortFile : nil
+        if let shortFile {
+            out.append("audio_file: \(Int(shortFile.file.rounded())) s saved of \(Int(shortFile.recorded.rounded())) s recorded — the file stopped growing early; the rest was never saved and a re-transcription cannot recover it")
+        }
+        // Coverage is judged against what the file holds, not the recorder's clock.
+        if isAudio, speech == "speech", let duration = shortFile?.file ?? duration, duration >= 30 {
             let longest = blocks.filter { $0.isTranscript }.map(\.text.count).max() ?? 0
             if Double(longest) < duration * Self.minimumCharsPerSecond {
                 out.append("coverage: ~\(Int((Double(longest) / 15).rounded())) s text for \(Int(duration.rounded())) s audio — the transcript likely misses most of the recording")

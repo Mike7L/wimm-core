@@ -453,6 +453,47 @@ final class MCPRecallServerTests: XCTestCase {
         XCTAssertTrue(text.contains("coverage: ~4 s text for 136 s audio"), text)
     }
 
+    /// An old iPhone build kept the clock running after the file stopped
+    /// growing: 785 s "recorded", 186 s in the file. The transcript covers the
+    /// whole file, so the read blames the file, not the transcript.
+    func testGetNoteBlamesAShortFileNotTheTranscript() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mcp-recall-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let media = dir.appendingPathComponent("recording_2026-07-23T08:47:17Z.m4a")
+        try Data().write(to: media)
+        let transcript = String(repeating: "Это тестовый разговор про пироги и погоду. ", count: 20)
+        let sidecar: [String: Any] = [
+            "duration": 784.6,
+            "transcription": ["provider": "parakeet", "model": "ultra", "speechStatus": "speech",
+                              "transcript": transcript, "audioDurationSec": 185.9],
+        ]
+        try JSONSerialization.data(withJSONObject: sidecar).write(to: FileStore.metadataURL(forRecordingURL: media))
+        let note = RecallNote(
+            id: "0B699E76-0000-0000-0000-000000000001", date: Self.base, kind: "audio",
+            title: nil, summary: nil, text: transcript, filePath: media.path,
+            duration: 784.6, speech: "speech", chars: transcript.count, device: "iPhone")
+
+        let (text, isError) = try await toolText(factServer([note]), "get_note", #"{"id":"0B699E76"}"#)
+        XCTAssertFalse(isError, text)
+        XCTAssertTrue(text.contains("duration: 785 s (13 min)"), text)
+        XCTAssertTrue(text.contains("audio_file: 186 s saved of 785 s recorded — the file stopped growing early"), text)
+        // ~880 chars for 186 s of file is a full transcript, not a partial one.
+        XCTAssertFalse(text.contains("coverage:"), text)
+    }
+
+    func testShortFileTrustsOnlyAParakeetMeasurement() {
+        let parakeet: [String: Any] = ["provider": "parakeet", "audioDurationSec": 185.9]
+        XCTAssertEqual(RecallSidecar(["duration": 784.6, "transcription": parakeet]).shortFile?.file, 185.9)
+        // A cloud run measures its silence-trimmed upload copy: shorter by design.
+        let gemini: [String: Any] = ["provider": "gemini", "audioDurationSec": 185.9]
+        XCTAssertNil(RecallSidecar(["duration": 784.6, "transcription": gemini]).shortFile)
+        // Container rounding or a few seconds' gap is not a short file.
+        XCTAssertNil(RecallSidecar(["duration": 200, "transcription": parakeet]).shortFile)
+        XCTAssertNil(RecallSidecar(["duration": 186.4, "transcription": parakeet]).shortFile)
+        XCTAssertNil(RecallSidecar(["transcription": parakeet]).shortFile)
+    }
+
     func testSidecarSpeechVerdicts() {
         XCTAssertNil(RecallSidecar([:]).speech(isAudio: false))
         XCTAssertEqual(RecallSidecar(["transcription": ["speechStatus": "no_speech", "transcript": "[[NO_SPEECH]]"]]).speech(isAudio: true), "no_speech")

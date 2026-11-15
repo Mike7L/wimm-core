@@ -34,6 +34,28 @@ public struct RecallSidecar {
             ?? Self.number(dict["streamingSkipDurationSec"])
     }
 
+    /// How long the audio file itself is, as the current Parakeet run measured it.
+    /// Only Parakeet is known to read the original; a cloud run measures its
+    /// silence-trimmed upload copy, which is legitimately shorter.
+    var measuredFileDuration: Double? {
+        guard transcriptionProvider?.lowercased().hasPrefix("parakeet") == true else { return nil }
+        return Self.number(transcription?["audioDurationSec"])
+    }
+
+    /// The recorder said it captured `duration` seconds, but the file the
+    /// Parakeet run read holds only `file` seconds: the file stopped growing
+    /// early (an old iPhone build kept the clock running through an audio
+    /// interruption). The missing part was never saved; no re-run recovers it.
+    var shortFile: (recorded: Double, file: Double)? {
+        guard let recorded = Self.number(dict["duration"]), let file = measuredFileDuration,
+              file > 0, recorded - file >= Self.shortFileMinimumGap,
+              file < recorded * Self.shortFileMaximumRatio else { return nil }
+        return (recorded, file)
+    }
+
+    static let shortFileMinimumGap = 30.0
+    static let shortFileMaximumRatio = 0.8
+
     /// The stored split of the current transcript by voice, with its voice tags.
     var speakerSplit: SpeakerTurnsRecord? {
         SpeakerTurnsRecord(sidecarValue: transcription?[SpeakerTurnsRecord.sidecarKey])
