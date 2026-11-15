@@ -3,9 +3,13 @@ import Foundation
 extension SecretaryPacket {
     /// Route by primary speech/text and titles, not the incidental words of screen OCR.
     /// This only selects document context; no source evidence is removed.
+    /// Words are compared by `stem`, as in `select`: a voice note says «без дрожжей» where the
+    /// document's recipe says «на дрожжах» (2026-11-15 audit: a later note contradicted a recipe
+    /// entry the packet never showed the editor).
     static func editorContext(blocks: [Block], sourceIDs: [String], primaryText: String,
                               limit: Int, requested: [String] = []) -> (blocks: [Block], report: [String: Any]) {
-        let query = terms(primaryText)
+        func stems(_ text: String) -> Set<String> { Set(terms(text).map(stem)).subtracting(functionStems) }
+        let query = stems(primaryText)
         var chosen = Set<String>(), used = 0
         func admit(_ block: Block) -> Bool {
             if chosen.contains(block.id) { return true }
@@ -33,13 +37,13 @@ extension SecretaryPacket {
                 if let h = heading(blocks[end].text), h.depth <= 3 { break }
                 end += 1
             }
-            groups.append((start, end, terms(blocks[start..<end].map(\.text).joined(separator: "\n"))))
+            groups.append((start, end, stems(blocks[start..<end].map(\.text).joined(separator: "\n"))))
         }
         var frequency: [String: Int] = [:]
         for (_, _, words) in groups { for word in words { frequency[word, default: 0] += 1 } }
         let specific = query.filter { frequency[$0, default: 0] <= max(2, groups.count / 5) }
         for (start, end, words) in groups {
-            let title = terms(heading(blocks[start].text)!.title)
+            let title = stems(heading(blocks[start].text)!.title)
             let overlap = title.intersection(query).count
             let cited = blocks[start..<end].contains { b in sourceIDs.contains { b.text.contains("[\($0)]") } }
             let score = overlap * 100 + min(100, words.intersection(specific).count * 5) + (cited ? 1000 : 0)
@@ -64,7 +68,7 @@ extension SecretaryPacket {
                             "complete": missing.isEmpty, "omitted_blocks": missing])
         }
         // Fill unused space with existing lexical/citation matching, using the same primary text.
-        for block in select(blocks: blocks, sourceIDs: sourceIDs, terms: query, limit: max(0, limit - used), excluding: chosen) {
+        for block in select(blocks: blocks, sourceIDs: sourceIDs, terms: terms(primaryText), limit: max(0, limit - used), excluding: chosen) {
             _ = admit(block)
         }
         return (blocks.filter { chosen.contains($0.id) }, ["method": "primary_text_and_title_routing", "bytes": used,

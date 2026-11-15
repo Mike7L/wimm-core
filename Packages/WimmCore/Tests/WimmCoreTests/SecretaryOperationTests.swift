@@ -43,6 +43,21 @@ final class SecretaryOperationTests: XCTestCase {
         XCTAssertNotNil(context.report["sections"])
     }
 
+    /// A later note about the same dish uses other word forms than the document's entry; the
+    /// entry must still be routed into the packet so the editor can see the contradiction.
+    func testRoutingMatchesInflectedWordsSoAnEarlierEntryOnTheSameTopicIsShown() {
+        let names = ["Ольга": "Ольгой", "Пётр": "Петром", "Вера": "Верой", "Глеб": "Глебом", "Зоя": "Зоей", "Тимур": "Тимуром"]
+        var text = "# Документ\n\nВступление.\n\n## Люди\n\nО людях.\n\n## Быт\n\nО быте.\n\n"
+        for (title, form) in names.sorted(by: { $0.key < $1.key }) { text += "### \(title)\n\nС \(form) гуляли у реки [S1].\n\n" }
+        text += "### Еда\n\n- **Пирожки** (3 марта): тесто на дрожжах, 40 штук [S10].\n\n"
+        let blocks = SecretaryPacket.blocks(text)
+        let source = "Обсуждали праздник с Ольгой, Петром, Верой, Глебом, Зоей и Тимуром. Пирожков около 50, теста замешу без дрожжей, на разрыхлителе."
+        let context = SecretaryPacket.editorContext(blocks: blocks, sourceIDs: ["S20"], primaryText: source, limit: 4000)
+        let sections = (context.report["sections"] as? [[String: Any]] ?? []).compactMap { $0["title"] as? String }
+        XCTAssertTrue(sections.contains("### Еда"), "\(sections)")
+        XCTAssertTrue(context.blocks.contains { $0.text.contains("тесто на дрожжах") })
+    }
+
     func testBlockInsertionsKeepAdjacentParagraphsHeadingsAndCitationsSeparate() throws {
         for operation in ["insert_before", "insert_after"] {
             for insertion in ["Новый абзац [S3].", "Новый абзац [S3].\n", "Новый абзац [S3].\n\n"] {
