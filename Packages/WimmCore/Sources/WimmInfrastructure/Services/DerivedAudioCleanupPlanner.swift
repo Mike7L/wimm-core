@@ -6,8 +6,8 @@ import WimmDomain
 ///
 /// A derived file is only disposable while the recording it was derived from is still on
 /// disk. On 2026-10-20 `clean derived --mini --force` deleted 1729 legacy `_mini` files
-/// without checking, and for 267 notes that was the only audio left — `clean originals`
-/// had deleted their originals earlier because the mini existed. So the rule here is
+/// without checking, and for 267 notes that was the only audio left — the now-removed
+/// `clean originals` had deleted their originals earlier because the mini existed. So the rule here is
 /// strict: a candidate is deletable only when a **non-derived audio** file with the same
 /// session base sits in the same directory. A sidecar, `.txt`, image, or another derived
 /// tier does not count — none of those is the recording.

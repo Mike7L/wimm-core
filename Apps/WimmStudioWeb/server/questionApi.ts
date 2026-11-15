@@ -3,13 +3,13 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { DocumentBlock } from '../src/types';
+import type { DocumentBlock } from '../src/types.ts';
 import {
   isPrivateModeEnabled,
   resolveGeminiApiKey,
   resolveUnderstandGeminiModel,
-} from './shouldersApi';
-import { cliReader, MAX_IDS_PER_CALL, webReader, type QuestionReader, type ReaderName } from './questionReaders';
+} from './shouldersApi.ts';
+import { cliReader, MAX_IDS_PER_CALL, webReader, type QuestionReader, type ReaderName } from './questionReaders.ts';
 
 // Answer to a spoken "У меня вопрос …". The model always sees the document's outline
 // and may read it through one of two readers (see questionReaders.ts) for at most
@@ -97,9 +97,9 @@ export function warmQuestionPath(): void {
   const model = resolveUnderstandGeminiModel();
   const settingsMs = Date.now() - t0;
   if (!apiKey) return;
-  fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}?key=${encodeURIComponent(apiKey)}`
-  )
+  fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}`, {
+    headers: { 'x-goog-api-key': apiKey },
+  })
     .then((r) => r.arrayBuffer())
     .then(() => console.log(`[question] warmed: settings ${settingsMs} ms, connect ${Date.now() - t0 - settingsMs} ms`))
     .catch(() => {});
@@ -184,7 +184,7 @@ export async function handleQuestion(
 
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
     model
-  )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  )}:generateContent`;
   const contents: Array<Record<string, unknown>> = [{ role: 'user', parts: [{ text: question }] }];
   const sectionsRead: Array<{ id: string; title: string }> = [];
   const totals: Record<string, number> = {};
@@ -202,7 +202,7 @@ export async function handleQuestion(
       const callStarted = Date.now();
       const upstream = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: systemText }] },
           contents,

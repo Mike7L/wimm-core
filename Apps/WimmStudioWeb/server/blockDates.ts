@@ -1,4 +1,4 @@
-import type { DocumentBlock, SourceDateRange } from '../src/types';
+import type { DocumentBlock, SourceDateRange } from '../src/types.ts';
 
 /**
  * Dates of a block are computed from the sources it cites, never written into the document.

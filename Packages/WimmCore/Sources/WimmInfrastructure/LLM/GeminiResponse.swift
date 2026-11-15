@@ -98,7 +98,7 @@ struct GeminiTextGeneration {
         // the same private-mode guard: these prompts carry unmasked note text.
         try PrivateMode.checkCloudEgress(provider: "gemini")
         guard let url = URL(
-            string: "https://generativelanguage.googleapis.com/v1beta/models/\(modelName):generateContent?key=\(apiKey)"
+            string: "https://generativelanguage.googleapis.com/v1beta/models/\(modelName):generateContent"
         ) else {
             throw URLError(.badURL)
         }
@@ -106,6 +106,7 @@ struct GeminiTextGeneration {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "contents": [["parts": [["text": prompt]]]]
         ])

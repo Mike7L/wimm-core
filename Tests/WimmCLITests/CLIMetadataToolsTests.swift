@@ -116,51 +116,6 @@ final class CLIMetadataToolsTests: XCTestCase {
         XCTAssertEqual(transcription?["transcript"] as? String, "legacy transcript text")
     }
 
-    func testCleanOriginalsRefusesWithoutOptIn() throws {
-        let original = recordingsDir.appendingPathComponent("large.m4a")
-        try Data(repeating: 1, count: 1_200_000).write(to: original)
-        try Data(repeating: 2, count: 10).write(to: recordingsDir.appendingPathComponent("large_micro.m4a"))
-
-        let (out, _, status) = try runWimm(["clean", "originals", "--force"])
-        XCTAssertNotEqual(status, 0)
-        XCTAssertTrue(out.contains("Refusing"))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: original.path))
-    }
-
-    func testCleanOriginalsIgnoresMiniAndDeletesOnlyLargeOriginalsWithMicroWhenOptedIn() throws {
-        let largeOriginal = recordingsDir.appendingPathComponent("large.m4a")
-        let largeMicro = recordingsDir.appendingPathComponent("large_micro.m4a")
-        let miniOnlyOriginal = recordingsDir.appendingPathComponent("mini_only.m4a")
-        let noCompanionOriginal = recordingsDir.appendingPathComponent("without_companion.m4a")
-        let smallOriginal = recordingsDir.appendingPathComponent("small.m4a")
-        let smallMicro = recordingsDir.appendingPathComponent("small_micro.m4a")
-
-        try Data(repeating: 1, count: 1_200_000).write(to: largeOriginal)
-        try Data(repeating: 2, count: 10).write(to: largeMicro)
-        try Data(repeating: 3, count: 1_300_000).write(to: miniOnlyOriginal)
-        try Data(repeating: 3, count: 10).write(to: recordingsDir.appendingPathComponent("mini_only_mini.m4a"))
-        try Data(repeating: 3, count: 1_300_000).write(to: noCompanionOriginal)
-        try Data(repeating: 4, count: 100).write(to: smallOriginal)
-        try Data(repeating: 5, count: 10).write(to: smallMicro)
-
-        let (dryRunOut, _, dryRunStatus) = try runWimm(["clean", "originals", "--accept-micro-as-only-copy"])
-        XCTAssertEqual(dryRunStatus, 0)
-        XCTAssertTrue(dryRunOut.contains("large.m4a"))
-        XCTAssertFalse(dryRunOut.contains("mini_only.m4a"))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: largeOriginal.path))
-
-        let (out, _, status) = try runWimm(["clean", "originals", "--accept-micro-as-only-copy", "--force"])
-        XCTAssertEqual(status, 0)
-        XCTAssertTrue(out.contains("Deleted 1 files"))
-
-        XCTAssertFalse(FileManager.default.fileExists(atPath: largeOriginal.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: largeMicro.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: miniOnlyOriginal.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: noCompanionOriginal.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: smallOriginal.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: smallMicro.path))
-    }
-
     func testCleanDerivedMiniKeepsOrphansAndListsThem() throws {
         let withOriginal = recordingsDir.appendingPathComponent("rec_a_mini.m4a")
         try Data(repeating: 1, count: 100).write(to: recordingsDir.appendingPathComponent("rec_a.m4a"))

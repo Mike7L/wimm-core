@@ -74,7 +74,8 @@ struct AuditTranscripts: AsyncParsableCommand {
         let fm = FileManager.default
         let audioExts = DefaultFileStore.shared.supportedAudioExtensions
         // One audio file per note: the original when it exists, else the
-        // derived copy `clean originals` left as the only audio (micro, then mini).
+        // derived copy left as the only audio by the removed `clean originals`
+        // command (micro, then mini).
         var byBase: [String: URL] = [:]
         func rank(_ url: URL) -> Int {
             let base = url.deletingPathExtension().lastPathComponent

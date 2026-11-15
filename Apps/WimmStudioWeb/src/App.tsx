@@ -597,7 +597,10 @@ export function App() {
   };
 
   const saveBlockEdit = async (blockId: number) => {
-    if (!editBaseSha256.current) return;
+    if (!editBaseSha256.current) {
+      setError('Не знаю, с какой версии документа начата правка. Скопируйте черновик и откройте абзац заново.');
+      return;
+    }
     const res = await fetch('/api/block', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

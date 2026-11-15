@@ -143,12 +143,13 @@ public struct GeminiTranscriptionAdapter: FileTranscriptionPort {
         parts: [GenerateRequest.Content.Part]
     ) async throws -> (text: String, usage: TokenUsage?) {
         guard let url = URL(string:
-            "https://generativelanguage.googleapis.com/v1beta/models/\(modelName):generateContent?key=\(apiKey)")
+            "https://generativelanguage.googleapis.com/v1beta/models/\(modelName):generateContent")
         else { throw adapterError(code: -1, message: "Invalid API URL") }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         let body = GenerateRequest(contents: [.init(parts: parts)])
         request.httpBody = try JSONEncoder().encode(body)
 

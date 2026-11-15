@@ -4,10 +4,11 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { attachSourceDates, bulkImportDays } from './blockDates';
-import { documentChanges } from './documentChanges';
-import { handleInbox } from './inboxApi';
-import { handleQuestion, handleQuestionRating, warmQuestionPath } from './questionApi';
+import { attachSourceDates, bulkImportDays } from './blockDates.ts';
+import { documentChanges } from './documentChanges.ts';
+import { handleInbox } from './inboxApi.ts';
+import { handleQuestion, handleQuestionRating, warmQuestionPath } from './questionApi.ts';
+import { apiRequestRejection, checkExpectedSha256, resolveAllowedMediaPath } from './requestGuard.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import type {
@@ -18,7 +19,7 @@ import type {
   DocumentBlock,
   DocumentPayload,
   SourceDetail,
-} from '../src/types';
+} from '../src/types.ts';
 import {
   getActiveRecording,
   getLatestVoiceNote,
@@ -29,8 +30,8 @@ import {
   synthesizeNeuralSpeechWav,
   triggerWimmCapture,
   resolveWimmCliBinary,
-} from './shouldersApi';
-import { sendStudioVoiceCommand, startStudioVoiceEvents } from './studioVoice';
+} from './shouldersApi.ts';
+import { sendStudioVoiceCommand, startStudioVoiceEvents } from './studioVoice.ts';
 
 const HOME = os.homedir();
 const DEFAULT_DOC_PATH =
@@ -882,10 +883,25 @@ function readJsonBody(req: IncomingMessage): Promise<any> {
   });
 }
 
-export function wimmStudioApiPlugin(): Plugin {
-  return {
-    name: 'wimm-studio-api',
-    configureServer(server) {
+export type StudioMiddleware = (
+  req: IncomingMessage,
+  res: ServerResponse,
+  next: () => void
+) => void | Promise<void>;
+
+export interface StudioApi {
+  /** Connect-style handlers, in order: the dashboard page, then every /api/ route behind the request guard. */
+  middlewares: StudioMiddleware[];
+  /** Stops the watchers and timers; call when the HTTP server closes. */
+  close(): void;
+}
+
+/**
+ * The Studio web API, shared by the Vite dev server (`wimmStudioApiPlugin`)
+ * and the production server (`server/prodServer.ts`).
+ */
+export function createStudioApi(): StudioApi {
+      const middlewares: StudioMiddleware[] = [];
       const sseClients = new Set<ServerResponse>();
       const voiceSseClients = new Set<ServerResponse>();
       const { threadsPath } = resolveCommentsLocation(DEFAULT_DOC_PATH);
@@ -949,14 +965,15 @@ export function wimmStudioApiPlugin(): Plugin {
         recWatchTimer = setTimeout(checkRecordingsState, 120);
       };
 
+      let recordingsWatcher: fs.FSWatcher | null = null;
       if (fs.existsSync(WIMM_RECORDINGS_DIR)) {
         try {
-          fs.watch(WIMM_RECORDINGS_DIR, triggerRecWatch);
+          recordingsWatcher = fs.watch(WIMM_RECORDINGS_DIR, triggerRecWatch);
         } catch {
           // ignore
         }
       }
-      setInterval(checkRecordingsState, 900);
+      const recPollTimer = setInterval(checkRecordingsState, 900);
 
       const notifyChange = () => {
         for (const res of sseClients) {
@@ -987,13 +1004,17 @@ export function wimmStudioApiPlugin(): Plugin {
       } catch {
         // ignore
       }
-      server.httpServer?.once('close', () => {
+      const close = () => {
         readingWatcher?.close();
+        recordingsWatcher?.close();
+        clearInterval(recPollTimer);
+        if (recWatchTimer) clearTimeout(recWatchTimer);
         for (const watchTarget of watchedPaths) fs.unwatchFile(watchTarget);
         if (debounceTimer) clearTimeout(debounceTimer);
-      });
+        for (const client of [...sseClients, ...voiceSseClients]) client.end();
+      };
 
-      server.middlewares.use((req, res, next) => {
+      middlewares.push((req, res, next) => {
         // /dashboard — экран приложения; /dashboard?raw=1 — сама страница дашборда для его фрейма,
         // собирается из документа при каждом открытии.
         const dashboardUrl = req.method === 'GET' && req.url ? new URL(req.url, 'http://localhost') : null;
@@ -1017,8 +1038,16 @@ export function wimmStudioApiPlugin(): Plugin {
         }
       });
 
-      server.middlewares.use(async (req, res, next) => {
+      middlewares.push(async (req, res, next) => {
         if (!req.url || !req.url.startsWith('/api/')) return next();
+
+        const rejection = apiRequestRejection(req, req.socket.localPort);
+        if (rejection) {
+          res.statusCode = rejection.status;
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.end(JSON.stringify({ error: rejection.message }));
+          return;
+        }
 
         const url = new URL(req.url, 'http://localhost');
 
@@ -1110,13 +1139,15 @@ export function wimmStudioApiPlugin(): Plugin {
               res.end('Missing path');
               return;
             }
-            const resolved = path.resolve(mediaPath);
+            res.setHeader('X-Content-Type-Options', 'nosniff');
             const allowedDirs = [
               path.resolve(WIMM_RECORDINGS_DIR),
               path.resolve(WIMM_RECORDINGS_DIR, '..', 'Attachments'),
               path.resolve(path.dirname(DEFAULT_DOC_PATH), '..'),
             ];
-            if (!allowedDirs.some((dir) => resolved.startsWith(dir + path.sep)) || !fs.existsSync(resolved)) {
+            // Real paths on both sides: a symlink inside an allowed folder must not lead out of it.
+            const resolved = resolveAllowedMediaPath(mediaPath, allowedDirs);
+            if (!resolved || !fs.statSync(resolved).isFile()) {
               res.statusCode = 403;
               res.end('Forbidden or not found');
               return;
@@ -1280,15 +1311,20 @@ export function wimmStudioApiPlugin(): Plugin {
           if (req.method === 'POST' && url.pathname === '/api/block') {
             const body = await readJsonBody(req);
             const currentText = fs.readFileSync(DEFAULT_DOC_PATH, 'utf8');
-            const currentHash = sha256(currentText);
-            if (body.expectedSha256 && body.expectedSha256 !== currentHash) {
-              res.statusCode = 409;
+            const sendHashRefusal = (status: number, message: string) => {
+              res.statusCode = status;
               res.setHeader('Content-Type', 'application/json');
-              res.end(
-                JSON.stringify({
-                  error: 'Документ изменился после начала редактирования. Скопируйте черновик и откройте абзац заново.',
-                })
-              );
+              res.end(JSON.stringify({ error: message }));
+            };
+            const hashCheck = checkExpectedSha256(body.expectedSha256, sha256(currentText));
+            if (!hashCheck.ok) {
+              sendHashRefusal(hashCheck.status, hashCheck.message);
+              return;
+            }
+            if (typeof body.markdown !== 'string') {
+              res.statusCode = 400;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: 'markdown must be a string' }));
               return;
             }
             const parsed = parsePersonalDocument(currentText);
@@ -1304,6 +1340,14 @@ export function wimmStudioApiPlugin(): Plugin {
               currentText.slice(block.endOffset);
             const tmpPath = `${DEFAULT_DOC_PATH}.tmp-${process.pid}`;
             fs.writeFileSync(tmpPath, nextText, 'utf8');
+            // Re-check right before the rename so another writer (Studio, the secretary)
+            // that saved meanwhile is not overwritten. Not a lock: it only narrows the window.
+            const recheck = checkExpectedSha256(body.expectedSha256, sha256(fs.readFileSync(DEFAULT_DOC_PATH, 'utf8')));
+            if (!recheck.ok) {
+              fs.rmSync(tmpPath, { force: true });
+              sendHashRefusal(recheck.status, recheck.message);
+              return;
+            }
             fs.renameSync(tmpPath, DEFAULT_DOC_PATH);
             res.setHeader('Content-Type', 'application/json');
             res.end(JSON.stringify({ ok: true, sha256: sha256(nextText) }));
@@ -1456,6 +1500,17 @@ export function wimmStudioApiPlugin(): Plugin {
           res.end(JSON.stringify({ error: err?.message || String(err) }));
         }
       });
+
+      return { middlewares, close };
+}
+
+export function wimmStudioApiPlugin(): Plugin {
+  return {
+    name: 'wimm-studio-api',
+    configureServer(server) {
+      const api = createStudioApi();
+      for (const middleware of api.middlewares) server.middlewares.use(middleware);
+      server.httpServer?.once('close', api.close);
     },
   };
 }

@@ -817,6 +817,42 @@ public actor LibraryRecallSource {
             }
         }
 
+        func write(_ out: inout RecallCacheWriter) {
+            out.bytes(bytes)
+            out.int(ranges.count)
+            for (range, (stamp, slot)) in zip(ranges, zip(stamps, slots)) {
+                out.int(range.lowerBound); out.int(range.upperBound)
+                out.optional(stamp.file) { $0.double($1.timeIntervalSinceReferenceDate) }
+                out.optional(stamp.sidecar) { $0.double($1.timeIntervalSinceReferenceDate) }
+                out.optional(stamp.inputs) { out, inputs in
+                    out.int(inputs.count)
+                    for input in inputs { input.write(&out) }
+                }
+                out.int(slot)
+            }
+        }
+
+        static func read(_ input: inout RecallCacheReader) throws -> KnownFiles {
+            var known = KnownFiles()
+            known.bytes = try input.bytes()
+            let count = try input.count(elementSize: 25)
+            known.ranges.reserveCapacity(count); known.stamps.reserveCapacity(count); known.slots.reserveCapacity(count)
+            for _ in 0..<count {
+                let lower = try input.int(), upper = try input.int()
+                guard lower >= 0, lower <= upper else { throw RecallCacheReader.Invalid() }
+                known.ranges.append(lower..<upper)
+                let file = try input.optional { Date(timeIntervalSinceReferenceDate: try $0.double()) }
+                let sidecar = try input.optional { Date(timeIntervalSinceReferenceDate: try $0.double()) }
+                let inputs = try input.optional { input -> [NoteFingerprintSnapshot.Stamp] in
+                    let n = try input.count(elementSize: 48)
+                    return try (0..<n).map { _ in try .read(&input) }
+                }
+                known.stamps.append(Stamp(file: file, sidecar: sidecar, inputs: inputs))
+                known.slots.append(try input.int())
+            }
+            return known
+        }
+
         /// Path → index; built for one reload and dropped with it.
         func index() -> [String: Int] {
             var out: [String: Int] = [:]
@@ -877,34 +913,67 @@ public actor LibraryRecallSource {
 
     /// Order-independent hashes of a directory listing: of its names, and of
     /// names with mtimes — two integers rather than ~25k kept path strings.
-    struct DirectoryFingerprint: Equatable {
+    /// Stable across processes (unlike `hashValue`), so the disk cache keeps
+    /// it and a restored library skips the full `FileRepository` listing.
+    struct DirectoryFingerprint: Equatable, Codable {
         var count = 0
-        var names = 0
-        var entries = 0
+        var names: UInt64 = 0
+        var entries: UInt64 = 0
 
         init(_ mtimes: [String: Date]) {
             count = mtimes.count
             for (path, date) in mtimes {
-                names &+= path.hashValue
-                var hasher = Hasher()
-                hasher.combine(path)
-                hasher.combine(date)
-                entries &+= hasher.finalize()
+                let name = Self.stableHash(path)
+                names &+= name
+                entries &+= Self.mix(name ^ date.timeIntervalSinceReferenceDate.bitPattern)
             }
+        }
+
+        /// FNV-1a over the UTF-8 path, then a SplitMix64 finalizer.
+        static func stableHash(_ path: String) -> UInt64 {
+            var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+            for byte in path.utf8 { hash = (hash ^ UInt64(byte)) &* 0x0000_0100_0000_01b3 }
+            return mix(hash)
+        }
+
+        static func mix(_ value: UInt64) -> UInt64 {
+            var z = value &+ 0x9e37_79b9_7f4a_7c15
+            z = (z ^ (z >> 30)) &* 0xbf58_476d_1ce4_e5b9
+            z = (z ^ (z >> 27)) &* 0x94d0_49bb_1331_11eb
+            return z ^ (z >> 31)
         }
     }
 
+    /// `FileStore.metadataURL(forRecordingURL:)` answered from the listing
+    /// already in hand instead of one or two `fileExists` per note.
+    static func sidecarPath(forRecordingPath path: String, listing: [String: Date]) -> String {
+        let ns = path as NSString
+        var base = (ns.lastPathComponent as NSString).deletingPathExtension
+        if let range = base.range(of: "_Attach_") { base = String(base[..<range.lowerBound]) }
+        let directory = ns.deletingLastPathComponent
+        let current = directory + "/" + base + ".meta.json"
+        if listing[current] != nil { return current }
+        let legacy = directory + "/" + base + ".metadata.json"
+        return listing[legacy] != nil ? legacy : current
+    }
+
     private func reload() async -> RecallLibrary {
+        let clk = TmpStageClock("library")
         if !cacheAttempted {
             cacheAttempted = true
             restoreCache()
         }
+        clk.mark("restore")
         rebuiltNoteCount = 0
         // One listing with mtimes per directory answers "did anything
         // change?". The note listing and per-note stamps behind it cost
         // ~1.5 s, and every agent question after an idle pause used to pay it.
-        let mtimes = Self.modificationDates(in: Self.libraryDirectories())
+        // With fingerprints, the listing's own `fstatat` gives each file's stamp:
+        // a second `stat` of every note and sidecar was ~16k system calls.
+        var listed: [String: NoteFingerprintSnapshot.Stamp]? = includeFingerprints ? [:] : nil
+        let mtimes = Self.modificationDates(in: Self.libraryDirectories(), stamps: &listed)
         let current = DirectoryFingerprint(mtimes)
+        clk.mark("mtimes")
         if !known.isEmpty, current == snapshot, !includeFingerprints { return library }
         let paths: [String]
         if !known.isEmpty, current.count == snapshot?.count, current.names == snapshot?.names {
@@ -917,6 +986,7 @@ public actor LibraryRecallSource {
         }
         snapshot = current
 
+        clk.mark("paths")
         let previousIndex = known.index()
         var stamps: [Stamp] = []
         stamps.reserveCapacity(paths.count)
@@ -924,11 +994,17 @@ public actor LibraryRecallSource {
         var stale: [Int] = []
         var kept: [(file: Int, slot: Int)] = []
         for (i, path) in paths.enumerated() {
-            let stamp = Stamp(
-                file: mtimes[path],
-                sidecar: mtimes[FileStore.metadataURL(forRecordingURL: URL(fileURLWithPath: path)).path],
-                inputs: includeFingerprints ? NoteFingerprintSnapshot.stamps(for: URL(fileURLWithPath: path)) : nil
-            )
+            // A path spelled differently from the listing (`/private/var` vs `/var`)
+            // takes the per-file calls, as before.
+            let inListing = mtimes[path] != nil
+            let sidecar = inListing ? Self.sidecarPath(forRecordingPath: path, listing: mtimes)
+                : FileStore.metadataURL(forRecordingURL: URL(fileURLWithPath: path)).path
+            var inputs: [NoteFingerprintSnapshot.Stamp]?
+            if let listed {
+                if let file = listed[path], let meta = listed[sidecar] { inputs = [file, meta] }
+                else { inputs = NoteFingerprintSnapshot.stamps(file: path, sidecar: sidecar) }
+            }
+            let stamp = Stamp(file: mtimes[path], sidecar: mtimes[sidecar], inputs: inputs)
             stamps.append(stamp)
             if let old = previousIndex[path], known.stamps[old] == stamp {
                 if known.slots[old] >= 0 { kept.append((i, known.slots[old])) }
@@ -937,6 +1013,7 @@ public actor LibraryRecallSource {
             }
         }
         if stale.isEmpty && previousIndex.count == paths.count { return library }
+        clk.mark("stamps")
 
         let keptRaw = kept.reduce(0) { $0 + library.rawByteCount(of: $1.slot) }
         let keptFolded = kept.reduce(0) { $0 + library.foldedByteCount(of: $1.slot) }
@@ -986,13 +1063,19 @@ public actor LibraryRecallSource {
         return library
     }
 
+    /// JSON identity line; the known files and the notes follow as
+    /// `RecallCacheWriter` fields, then each note's payload bytes.
     private struct CacheHeader: Codable {
         let version: Int
         let base: String
         let fingerprints: Bool
         let producer: String
-        let known: KnownFiles
+        let listing: DirectoryFingerprint
     }
+
+    static let cacheVersion = 2
+    /// Inside `cacheDirectory`; Studio's warm-up watches its age.
+    public static let cacheFileName = "recall-v2.stream"
 
     private func cacheProducer() -> String {
         let executable: URL?
@@ -1004,62 +1087,98 @@ public actor LibraryRecallSource {
     private func restoreCache() {
         guard let cacheDirectory else { return }
         do {
-            let data = try Data(contentsOf: cacheDirectory.appendingPathComponent("recall-v1.stream"), options: .mappedIfSafe)
+            let rc = TmpStageClock("restore")
+            let file = cacheDirectory.appendingPathComponent(Self.cacheFileName)
+            let data = try Data(contentsOf: file, options: .mappedIfSafe)
+            rc.mark("map")
             guard let newline = data.firstIndex(of: 10) else { return }
             let header = try JSONDecoder().decode(CacheHeader.self, from: data.prefix(upTo: newline))
-            guard header.version == 1, header.base == StoragePaths.baseDirectory().path,
-                  header.fingerprints == includeFingerprints, header.producer == cacheProducer(),
-                  header.known.hasValidStorage else { return }
-            var stream = BuildStream(), builder: RecallLibrary.Builder?, received = 0, expected = 0
-            try stream.feed(data.suffix(from: newline + 1), onHeader: { value in
-                guard value.count >= 0, value.count <= header.known.count,
-                      value.rawBytes >= 0, value.foldedBytes >= 0,
-                      value.rawBytes <= data.count, value.foldedBytes <= data.count else { throw RecallBuildError.invalidRecord }
-                expected = value.count
-                builder = RecallLibrary.Builder(rawCapacity: value.rawBytes, foldedCapacity: value.foldedBytes)
-            }, onRecord: { item, payload in
-                guard item.position == received, let layout = item.note else { throw RecallBuildError.invalidRecord }
-                builder!.append(layout, payload: payload); received += 1
-            })
-            guard stream.isComplete, received == expected, let built = builder?.build() else { return }
-            for i in 0..<header.known.count {
-                let slot = header.known.slots[i]
-                guard slot == -1 || (slot >= 0 && slot < built.count && built[slot].filePath == header.known.path(i)) else { return }
+            guard header.version == Self.cacheVersion, header.base == StoragePaths.baseDirectory().path,
+                  header.fingerprints == includeFingerprints, header.producer == cacheProducer() else { return }
+            let bodyStart = newline + 1 - data.startIndex
+            // Only the small index part of the mapping is touched; the text goes
+            // straight from the file into the library's buffers below.
+            let index = try data.withUnsafeBytes { buffer -> (KnownFiles, [RecallLibrary.Layout], Int, Int, Int)? in
+                var input = RecallCacheReader(buffer, offset: bodyStart)
+                let known = try KnownFiles.read(&input)
+                guard known.hasValidStorage else { return nil }
+                let count = try input.count(), rawBytes = try input.count(), foldedBytes = try input.count()
+                guard count <= known.count else { return nil }
+                var layouts: [RecallLibrary.Layout] = []
+                layouts.reserveCapacity(count)
+                for _ in 0..<count { layouts.append(try .read(&input)) }
+                return (known, layouts, rawBytes, foldedBytes, input.offset)
             }
-            known = header.known; library = built; restoredFromDisk = true
+            rc.mark("index")
+            guard let (known, layouts, rawBytes, foldedBytes, textStart) = index,
+                  rawBytes <= data.count - textStart, foldedBytes == data.count - textStart - rawBytes else { return }
+            let descriptor = open(file.path, O_RDONLY)
+            guard descriptor >= 0 else { return }
+            defer { close(descriptor) }
+            guard let raw = Self.read(descriptor, offset: textStart, count: rawBytes),
+                  let folded = Self.read(descriptor, offset: textStart + rawBytes, count: foldedBytes),
+                  let built = RecallLibrary(raw: raw, folded: folded, layouts: layouts) else { return }
+            rc.mark("read+build")
+            for i in 0..<known.count {
+                let slot = known.slots[i]
+                guard slot == -1 || (slot >= 0 && slot < built.count && built.string(built.entries[slot].path) == known.path(i)) else { return }
+            }
+            rc.mark("verify")
+            self.known = known; library = built; snapshot = header.listing; restoredFromDisk = true
         } catch { /* Rebuild from canonical files; a cache never authorizes evidence. */ }
+    }
+
+    /// Exactly `count` bytes at `offset`, or nil.
+    private static func read(_ descriptor: Int32, offset: Int, count: Int) -> [UInt8]? {
+        var complete = true
+        let bytes = [UInt8](unsafeUninitializedCapacity: count) { buffer, initialized in
+            var done = 0
+            while done < count {
+                let n = pread(descriptor, buffer.baseAddress! + done, count - done, off_t(offset + done))
+                if n <= 0 { if n < 0, errno == EINTR { continue }; complete = false; break }
+                done += n
+            }
+            initialized = complete ? count : 0
+        }
+        return complete ? bytes : nil
     }
 
     private func saveCache() {
         guard let cacheDirectory else { return }
         // Avoid rewriting a large base snapshot on every dictation. A small
         // changed tail is rebuilt canonically until periodic/large compaction.
-        let target = cacheDirectory.appendingPathComponent("recall-v1.stream")
+        let target = cacheDirectory.appendingPathComponent(Self.cacheFileName)
         if restoredFromDisk, rebuiltNoteCount < max(64, library.count / 20),
            let modified = try? target.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
            Date().timeIntervalSince(modified) < 180 { return }
+        guard let snapshot else { return }
         do {
-            let header = CacheHeader(version: 1, base: StoragePaths.baseDirectory().path,
-                fingerprints: includeFingerprints, producer: cacheProducer(), known: known)
+            let header = CacheHeader(version: Self.cacheVersion, base: StoragePaths.baseDirectory().path,
+                fingerprints: includeFingerprints, producer: cacheProducer(), listing: snapshot)
             var data = try JSONEncoder().encode(header); data.append(10)
-            data.append(try JSONEncoder().encode(BuildHeader(count: library.count, rawBytes: library.raw.count, foldedBytes: library.folded.count))); data.append(10)
-            for i in 0..<library.count {
-                let e = library.entries[i]
-                let layout = RecallLibrary.Layout(date: e.date, updated: e.updated, fingerprintSnapshot: e.fingerprintSnapshot,
+            var out = RecallCacheWriter()
+            known.write(&out)
+            out.int(library.count); out.int(library.raw.count); out.int(library.folded.count)
+            for e in library.entries {
+                RecallLibrary.Layout(date: e.date, updated: e.updated, fingerprintSnapshot: e.fingerprintSnapshot,
                     kind: e.kind, duration: e.duration, speech: e.speech, chars: e.chars, device: e.device,
                     id: e.id.count, path: e.path.count, title: e.title?.count, summary: e.summary?.count,
                     text: e.text.count, attachments: e.attachments.map(\.count), foldedID: e.foldedID.count,
                     foldedTitle: e.foldedTitle.count, foldedSummary: e.foldedSummary.count, foldedBody: e.foldedBody.count)
-                data.append(try JSONEncoder().encode(BuildRecord(position: i, note: layout))); data.append(10)
-                data.append(contentsOf: library.raw[e.id.lowerBound..<(e.id.lowerBound + library.rawByteCount(of: i))])
-                data.append(contentsOf: library.folded[e.foldedID.lowerBound..<(e.foldedID.lowerBound + library.foldedByteCount(of: i))])
+                    .write(&out)
             }
+            data.append(out.data)
+            // Every note's bytes, in entry order, as two blocks: the builder fills
+            // `raw` and `folded` front to back, so they are exactly these.
+            data.append(contentsOf: library.raw)
+            data.append(contentsOf: library.folded)
             try FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true,
                                                     attributes: [.posixPermissions: 0o700])
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cacheDirectory.path)
-            let file = cacheDirectory.appendingPathComponent("recall-v1.stream")
-            try data.write(to: file, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+            try data.write(to: target, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+            // The v1 JSON-line cache is superseded; it is a derived copy, never evidence.
+            try? FileManager.default.removeItem(at: cacheDirectory.appendingPathComponent("recall-v1.stream"))
         } catch { /* Optional performance cache; authoritative data stays untouched. */ }
     }
 
@@ -1348,6 +1467,12 @@ public actor LibraryRecallSource {
     /// `URL` with a resource cache per entry — ~25k of them on every check,
     /// whose freed remains kept the server's heap fragmented.
     static func modificationDates(in directories: [URL]) -> [String: Date] {
+        var none: [String: NoteFingerprintSnapshot.Stamp]?
+        return modificationDates(in: directories, stamps: &none)
+    }
+
+    /// Also fills `stamps` (when non-nil) with each entry's `NoteFingerprintSnapshot` stamp.
+    static func modificationDates(in directories: [URL], stamps: inout [String: NoteFingerprintSnapshot.Stamp]?) -> [String: Date] {
         var out: [String: Date] = [:]
         for directory in directories {
             let base = directory.path
@@ -1364,7 +1489,9 @@ public actor LibraryRecallSource {
                 var info = stat()
                 guard fstatat(fd, name, &info, 0) == 0 else { continue }
                 let mtime = info.st_mtimespec
-                out[base + "/" + name] = Date(
+                let path = base + "/" + name
+                stamps?[path] = NoteFingerprintSnapshot.Stamp(info)
+                out[path] = Date(
                     timeIntervalSince1970: TimeInterval(mtime.tv_sec) + TimeInterval(mtime.tv_nsec) / 1e9)
             }
         }

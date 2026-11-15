@@ -22,9 +22,22 @@ final class VoiceMemosMergeTests: XCTestCase {
         for dir in [rec!, state!, me.appendingPathComponent("docs/wimm"), backups!] {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
+        // Trash is per test too: a copy another test left there would now
+        // (rightly) push this test's copy to a suffixed name.
+        previousBaseDir = ProcessInfo.processInfo.environment["WIMM_BASE_DIR"]
+        setenv("WIMM_BASE_DIR", root.path, 1)
     }
 
-    override func tearDown() { try? FileManager.default.removeItem(at: root) }
+    private var previousBaseDir: String?
+
+    private func restoreBaseDir() {
+        if let previousBaseDir { setenv("WIMM_BASE_DIR", previousBaseDir, 1) } else { unsetenv("WIMM_BASE_DIR") }
+    }
+
+    override func tearDown() {
+        restoreBaseDir()
+        try? FileManager.default.removeItem(at: root)
+    }
 
     private func write(_ dict: [String: Any], _ url: URL) throws {
         try JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]).write(to: url)
@@ -171,6 +184,36 @@ final class VoiceMemosMergeTests: XCTestCase {
         // The format the tombstone step reads.
         XCTAssertEqual(try TrashTombstoneBackfill.trashedNames(fromLog: backups.appendingPathComponent(second)
             .appendingPathComponent("trash_log.json")), [oldName])
+    }
+
+    /// Trash already holds another note with the old note's name (deleted
+    /// earlier from elsewhere). It is never overwritten; the old note goes in
+    /// under a suffixed name and a rerun after a lost log still finds it.
+    func testSameNameAlreadyInTrashIsKeptAndRerunFindsTheSuffixedCopy() throws {
+        let trash = FileStore.trashDirectory()
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        let stranger = trash.appendingPathComponent(oldName)
+        try Data("other".utf8).write(to: stranger)
+        try write(["originalPath": "/elsewhere/\(oldName)", "trashed": true], FileStore.metadataURL(forRecordingURL: stranger))
+        try setUpPair()
+
+        XCTAssertEqual(VoiceMemosMerge.run(pairs: [pair], options: options(apply: true)).map(\.outcome), [.merged])
+        let suffixed = trash.appendingPathComponent(oldName.replacingOccurrences(of: ".m4a", with: "_1.m4a"))
+        XCTAssertEqual(try Data(contentsOf: stranger), Data("other".utf8), "the other Trash note is never deleted")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: suffixed.path))
+        let first = try XCTUnwrap(FileManager.default.contentsOfDirectory(atPath: backups.path).first)
+        let firstLog = backups.appendingPathComponent(first).appendingPathComponent("trash_log.json")
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: Data(contentsOf: firstLog)) as? [[String]],
+                       [[rec.appendingPathComponent(oldName).path, suffixed.path]])
+        try FileManager.default.removeItem(at: firstLog)
+
+        var later = options(apply: true)
+        later.now = Date(timeIntervalSince1970: 1_800_000_600)
+        XCTAssertEqual(VoiceMemosMerge.run(pairs: [pair], options: later).map(\.outcome), [.alreadyDone])
+        let second = try XCTUnwrap(FileManager.default.contentsOfDirectory(atPath: backups.path).first { $0 != first })
+        let data = try Data(contentsOf: backups.appendingPathComponent(second).appendingPathComponent("trash_log.json"))
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: data) as? [[String]],
+                       [[rec.appendingPathComponent(oldName).path, suffixed.path]])
     }
 
     /// A Trash copy with the same name but another origin is not ours to log.

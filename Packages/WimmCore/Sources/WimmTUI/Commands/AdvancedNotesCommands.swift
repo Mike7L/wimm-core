@@ -200,7 +200,7 @@ extension WimmTUIRuntime {
         }
     }
 
-    /// `delete <id-prefix>` — permanently removes a note and its associated files.
+    /// `delete <id-prefix>` — moves a note and its associated files to `Trash/`.
     static func runDelete(args: [String], container: AppContainer) async throws {
         guard let prefix = args.first, !prefix.isEmpty else {
             print("Usage: delete <id-prefix>")
@@ -209,7 +209,14 @@ extension WimmTUIRuntime {
         try await withUniqueNote(prefix: prefix, container: container) { note in
             try await container.storage.deleteNote(id: note.id)
             let title = note.card?.title ?? note.title ?? note.id.uuidString
-            print("Deleted: \(note.id.uuidString) (\(title))")
+            print("Moved to Trash: \(note.id.uuidString) (\(title))")
+            printTombstoneHint()
         }
+    }
+
+    /// The CLI cannot reach iCloud (no CloudKit entitlement) and must not
+    /// write the sync ledger while Studio runs; the tombstone is sent later.
+    static func printTombstoneHint() {
+        print("iCloud: other devices drop it after `wimm-cli sync tombstone-trash --apply` (with Studio quit) or Studio's next sync of Trash.")
     }
 }

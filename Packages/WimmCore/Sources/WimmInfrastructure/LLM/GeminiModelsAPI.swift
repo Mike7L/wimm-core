@@ -45,6 +45,27 @@ public actor GeminiModelsAPI {
         try await shared.fetchInternal(forceReload: forceReload)
     }
 
+    /// One page of `models.list`. The key goes in the `x-goog-api-key` header,
+    /// never in the URL, so it cannot leak through logged URLs or errors.
+    static func makeListRequest(key: String, pageToken: String?) -> URLRequest {
+        var components = URLComponents(
+            string: "https://generativelanguage.googleapis.com/v1beta/models"
+        )!
+        var queryItems = [
+            URLQueryItem(name: "pageSize", value: "1000"),
+        ]
+        if let pageToken, !pageToken.isEmpty {
+            queryItems.append(URLQueryItem(name: "pageToken", value: pageToken))
+        }
+        components.queryItems = queryItems
+
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(key, forHTTPHeaderField: "x-goog-api-key")
+        return request
+    }
+
     private func fetchInternal(forceReload: Bool) async throws -> [GeminiModel] {
         let key = await APIKeyRotator.shared.currentKey()
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -69,22 +90,7 @@ public actor GeminiModelsAPI {
         var pageToken: String?
 
         repeat {
-            var components = URLComponents(
-                string: "https://generativelanguage.googleapis.com/v1beta/models"
-            )!
-            var queryItems = [
-                URLQueryItem(name: "key", value: key),
-                URLQueryItem(name: "pageSize", value: "1000"),
-            ]
-            if let pageToken, !pageToken.isEmpty {
-                queryItems.append(URLQueryItem(name: "pageToken", value: pageToken))
-            }
-            components.queryItems = queryItems
-
-            var request = URLRequest(url: components.url!)
-            request.httpMethod = "GET"
-            request.setValue("application/json", forHTTPHeaderField: "Accept")
-
+            let request = Self.makeListRequest(key: key, pageToken: pageToken)
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse,
                   (200..<300).contains(http.statusCode)

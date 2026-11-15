@@ -6,10 +6,16 @@ public actor FileSystemAdapter: StoragePort {
     private let fileManager = FileManager.default
     nonisolated private let rootDirectory: URL
     private var noteMetaURLByID: [UUID: URL] = [:]
+    /// Queues the iCloud tombstone after a delete. `nil` where the process
+    /// cannot sync (the CLI has no CloudKit entitlement and must not write the
+    /// sync ledger while Studio runs): the note still goes to `Trash/`, and
+    /// `wimm-cli sync tombstone-trash --apply` or the app's next sync of Trash
+    /// sends the tombstone later.
+    private let cloudSync: CloudRecordingSyncService?
 
-
-    public init(rootDirectory: URL) {
+    public init(rootDirectory: URL, cloudSync: CloudRecordingSyncService? = nil) {
         self.rootDirectory = rootDirectory
+        self.cloudSync = cloudSync
     }
 
     public func loadAll() async throws -> [CapturedNote] {
@@ -69,6 +75,10 @@ public actor FileSystemAdapter: StoragePort {
         return note
     }
 
+    /// A user's delete: the note's files go to `Trash/` (with the trash
+    /// marker, `RecordingTrashSupport`), never `removeItem`, and its iCloud
+    /// tombstone is queued when this adapter has a sync service. Throws when
+    /// nothing could be moved; the note then stays where it was.
     public func deleteNote(id: UUID) async throws {
         // Fast path: resolve from the in-memory URL cache (populated by loadAll).
         // Avoids a full directory scan when the caller already called loadAll().
@@ -90,11 +100,76 @@ public actor FileSystemAdapter: StoragePort {
             note = found
             metaURL = noteMetaURLByID[id] ?? sidecarURL(for: note)
         }
-        if let audioPath = note.audioPath {
-            try? fileManager.removeItem(at: rootDirectory.appendingPathComponent(audioPath))
+
+        if let mediaURL = existingMediaURL(for: note, metaURL: metaURL) {
+            guard let trashed = RecordingTrashSupport.moveToTrash(
+                file: mediaURL,
+                fileManager: fileManager,
+                onFailure: { source, error in
+                    log("Failed to move \(source.lastPathComponent) to trash: \(error)")
+                }
+            ) else {
+                throw StorageError.writeFailed("could not move \(mediaURL.lastPathComponent) to Trash")
+            }
+            // A sidecar that did not sit next to its media (legacy root-level
+            // layout) did not travel with it; it must not keep the note listed.
+            if fileManager.fileExists(atPath: metaURL.path) {
+                _ = try? moveSidecarOnlyToTrash(metaURL)
+            }
+            if let cloudSync {
+                do {
+                    try await cloudSync.markTrashed(trashedURL: trashed, originalURL: mediaURL)
+                } catch {
+                    log("[CloudSync] could not queue delete of \(mediaURL.lastPathComponent): \(error)")
+                }
+            }
+        } else if fileManager.fileExists(atPath: metaURL.path) {
+            // No media on disk: only the sidecar is left. It never synced as a
+            // record of its own, so there is no tombstone to queue.
+            try moveSidecarOnlyToTrash(metaURL)
+        } else {
+            throw StorageError.noteNotFound(id.uuidString)
         }
-        try? fileManager.removeItem(at: metaURL)
         noteMetaURLByID.removeValue(forKey: id)
+    }
+
+    /// The note's media file as it is on disk: next to the sidecar, in
+    /// `Recordings/` (where `saveRecording` writes it) or, legacy, in the root.
+    private func existingMediaURL(for note: CapturedNote, metaURL: URL) -> URL? {
+        guard let audioPath = note.audioPath, !audioPath.isEmpty else { return nil }
+        let candidates: [URL]
+        if audioPath.hasPrefix("/") {
+            candidates = [URL(fileURLWithPath: audioPath)]
+        } else {
+            candidates = [
+                metaURL.deletingLastPathComponent().appendingPathComponent(audioPath),
+                recordingsDirectory().appendingPathComponent(audioPath),
+                rootDirectory.appendingPathComponent(audioPath),
+            ]
+        }
+        return candidates.first { fileManager.fileExists(atPath: $0.path) }
+    }
+
+    /// Moves a lone sidecar into `Trash/` under a name no trashed file holds
+    /// yet, and stamps the same trash marker `RecordingTrashSupport` writes.
+    @discardableResult
+    private func moveSidecarOnlyToTrash(_ metaURL: URL) throws -> URL {
+        let trashDir = FileStore.trashDirectory()
+        try fileManager.createDirectory(at: trashDir, withIntermediateDirectories: true)
+        var destination = trashDir.appendingPathComponent(metaURL.lastPathComponent)
+        if fileManager.fileExists(atPath: destination.path) {
+            let stem = metaURL.lastPathComponent.replacingOccurrences(of: ".meta.json", with: "")
+                .replacingOccurrences(of: ".metadata.json", with: "")
+            destination = trashDir.appendingPathComponent("\(stem)_\(UUID().uuidString.prefix(6)).meta.json")
+        }
+        try fileManager.moveItem(at: metaURL, to: destination)
+        try FileStore.mutateSidecar(at: destination) { sidecar in
+            sidecar["trashed"] = true
+            sidecar["trashedAt"] = ISO8601.now
+            sidecar["originalPath"] = metaURL.path
+            return true
+        }
+        return destination
     }
 
     public func updateNote(_ note: CapturedNote) async throws {

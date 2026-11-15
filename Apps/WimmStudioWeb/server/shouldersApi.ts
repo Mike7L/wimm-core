@@ -13,7 +13,7 @@ import type {
   ShouldersStatus,
   ShouldersStyleId,
   ShouldersThinkingId,
-} from '../src/types';
+} from '../src/types.ts';
 
 const HOME = os.homedir();
 const WIMM_APP_SUPPORT =
@@ -1059,7 +1059,7 @@ export async function handleShouldersTurnSse(
 
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
       model
-    )}:streamGenerateContent?key=${encodeURIComponent(apiKey)}&alt=sse`;
+    )}:streamGenerateContent?alt=sse`;
 
     const requestBody = JSON.stringify({
       systemInstruction: { parts: [{ text: systemText }] },
@@ -1076,7 +1076,7 @@ export async function handleShouldersTurnSse(
       try {
         upstreamRes = await fetch(endpoint, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
           body: requestBody,
           signal: abortController.signal,
         });

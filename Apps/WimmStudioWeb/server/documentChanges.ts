@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import type { DocumentChanges, DiffHunk } from '../src/documentChanges';
+import type { DocumentChanges, DiffHunk } from '../src/documentChanges.ts';
 
 export async function documentChanges(docPath: string, selected: string | null): Promise<DocumentChanges> {
   const folder = path.join(path.dirname(docPath), '.backups');

@@ -128,6 +128,39 @@ final class CloudSyncTombstoneTests: XCTestCase {
         XCTAssertEqual(transport.lastUploadIsDeleted, false)
     }
 
+    func testSameNameInTrashIsKeptAndLedgerStillFindsTheNote() async throws {
+        let transport = TombstoneFakeTransport()
+        let service = makeService(transport)
+        let (note, syncId) = try await makeSyncedNote("twice.m4a", service: service)
+        // An earlier note with the same name, deleted before.
+        let older = FileStore.trashDirectory().appendingPathComponent("twice.m4a")
+        try Data("older".utf8).write(to: older)
+        let olderMeta = FileStore.metadataURL(forRecordingURL: older)
+        try Data(#"{"recordingId":"OLD"}"#.utf8).write(to: olderMeta)
+
+        let trash = TrashRepository()
+        let trashed = try await trash.moveToTrash(file: note).unwrapped()
+        XCTAssertEqual(trashed.lastPathComponent, "twice_1.m4a")
+        XCTAssertEqual(try Data(contentsOf: older), Data("older".utf8), "the older Trash file is never deleted")
+        XCTAssertTrue(try String(contentsOf: olderMeta, encoding: .utf8).contains("OLD"))
+
+        let sent = try await service.markTrashed(trashedURL: trashed, originalURL: note)
+        XCTAssertTrue(sent)
+        XCTAssertEqual(transport.deleted, [syncId])
+        let entry = await SyncStateStore(stateURL: stateURL).entry(for: syncId)
+        XCTAssertEqual(entry?.localRelativePath, FileStore.relativePath(for: note))
+
+        let restored = try await trash.restoreFromTrash(file: trashed).unwrapped()
+        XCTAssertEqual(restored.standardizedFileURL, note.standardizedFileURL, "restore goes back to the old name")
+        let queued = try await service.markRestored(recordingURL: restored)
+        XCTAssertTrue(queued)
+        try await service.uploadPending()
+        XCTAssertEqual(transport.uploaded, [syncId, syncId])
+        let back = await SyncStateStore(stateURL: stateURL).entry(for: syncId)
+        XCTAssertEqual(back?.localRelativePath, FileStore.relativePath(for: note))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: older.path))
+    }
+
     func testRestoreBeforeTheTombstoneLeftCancelsIt() async throws {
         let transport = TombstoneFakeTransport()
         let service = makeService(transport)

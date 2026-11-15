@@ -125,4 +125,106 @@ final class SidecarWriterTests: XCTestCase {
         })
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
     }
+
+    // MARK: Cross-process lock
+
+    private final class Intervals: @unchecked Sendable {
+        private let lock = NSLock()
+        private var items: [(Date, Date)] = []
+        func add(_ start: Date, _ end: Date) { lock.lock(); items.append((start, end)); lock.unlock() }
+        var all: [(Date, Date)] { lock.lock(); defer { lock.unlock() }; return items }
+    }
+
+    func testLockFileLivesOutsideTheLibrary() {
+        let sidecar = tempDir.appendingPathComponent("a.meta.json")
+        let lockURL = SidecarFileLock.lockFileURL(forSidecar: sidecar)
+        XCTAssertFalse(lockURL.path.hasPrefix(tempDir.resolvingSymlinksInPath().path))
+        XCTAssertFalse(lockURL.path.hasPrefix(tempDir.path))
+        XCTAssertFalse(FileStore.isSupportedRecordingFile(lockURL))
+        // One file, two spellings of its directory: one lock.
+        let viaPrivate = URL(fileURLWithPath: tempDir.resolvingSymlinksInPath().path)
+            .appendingPathComponent("a.meta.json")
+        XCTAssertEqual(lockURL, SidecarFileLock.lockFileURL(forSidecar: viaPrivate))
+    }
+
+    /// Each holder opens its own descriptor, as a separate process does, and
+    /// skips the in-process `NSLock`; the `flock` alone must serialize them.
+    func testIndependentLockHoldersOnOneSidecarSerialize() {
+        let sidecar = tempDir.appendingPathComponent("shared.meta.json")
+        let intervals = Intervals()
+        DispatchQueue.concurrentPerform(iterations: 4) { _ in
+            SidecarFileLock.withLock(forSidecar: sidecar) {
+                let start = Date()
+                Thread.sleep(forTimeInterval: 0.1)
+                intervals.add(start, Date())
+            }
+        }
+        let sorted = intervals.all.sorted { $0.0 < $1.0 }
+        XCTAssertEqual(sorted.count, 4)
+        for (earlier, later) in zip(sorted, sorted.dropFirst()) {
+            XCTAssertLessThanOrEqual(earlier.1, later.0, "lock holders overlapped")
+        }
+    }
+
+    #if os(macOS)
+    /// A real second process holds the sidecar's lock; `mutateSidecar` must
+    /// wait for it instead of writing at once.
+    func testMutateSidecarWaitsForAnotherProcessHoldingTheLock() throws {
+        let perl = URL(fileURLWithPath: "/usr/bin/perl")
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: perl.path), "no /usr/bin/perl")
+        let sidecar = tempDir.appendingPathComponent("other-process.meta.json")
+        let lockURL = SidecarFileLock.lockFileURL(forSidecar: sidecar)
+        try FileManager.default.createDirectory(
+            at: lockURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        let holder = Process()
+        holder.executableURL = perl
+        holder.arguments = ["-e", #"use Fcntl qw(:flock); open(my $f, ">>", $ARGV[0]) or die; flock($f, LOCK_EX) or die; $| = 1; print "locked\n"; select(undef, undef, undef, 0.8);"#, lockURL.path]
+        let out = Pipe()
+        holder.standardOutput = out
+        try holder.run()
+        defer { if holder.isRunning { holder.terminate() } }
+        let line = String(decoding: out.fileHandleForReading.availableData, as: UTF8.self)
+        XCTAssertEqual(line, "locked\n")
+
+        let start = Date()
+        try FileStore.mutateSidecar(at: sidecar) { $0["after"] = true; return true }
+        let waited = Date().timeIntervalSince(start)
+        holder.waitUntilExit()
+        XCTAssertGreaterThan(waited, 0.5, "wrote while another process held the lock")
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: sidecar)) as? [String: Any])
+        XCTAssertEqual(json["after"] as? Bool, true)
+    }
+    #endif
+
+    func testSwallowedMetadataFailureIsLogged() throws {
+        let recording = tempDir.appendingPathComponent("corrupt.m4a")
+        try Data().write(to: recording)
+        let sidecarURL = FileStore.metadataURL(forRecordingURL: recording)
+        let garbage = Data("{\"broken\": ".utf8)
+        try garbage.write(to: sidecarURL)
+
+        FileStore.upsertMetadata(for: recording, updates: ["x": 1])
+        XCTAssertEqual(try Data(contentsOf: sidecarURL), garbage)
+
+        let eventsDir = UnifiedEventLogger.eventsDirectoryURL()
+        let deadline = Date().addingTimeInterval(5)
+        var found: [String: Any]?
+        while found == nil, Date() < deadline {
+            let files = (try? FileManager.default.contentsOfDirectory(at: eventsDir, includingPropertiesForKeys: nil)) ?? []
+            for file in files where file.pathExtension == "jsonl" {
+                let text = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+                for line in text.split(separator: "\n") {
+                    guard let event = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                          event["kind"] as? String == FileStore.sidecarWriteFailedEventKind else { continue }
+                    found = event
+                }
+            }
+            if found == nil { Thread.sleep(forTimeInterval: 0.05) }
+        }
+        let event = try XCTUnwrap(found, "no sidecar_write_failed event in \(eventsDir.path)")
+        // The logger may redact digit runs in the temp path; the file name stays.
+        XCTAssertTrue((event["message"] as? String)?.hasSuffix("corrupt.meta.json") == true)
+        XCTAssertNotNil(event["error"] as? String)
+    }
 }

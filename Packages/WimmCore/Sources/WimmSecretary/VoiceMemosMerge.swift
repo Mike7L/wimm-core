@@ -238,16 +238,32 @@ public enum VoiceMemosMerge {
     }
 
     /// The old note's copy in Trash, if this merge (or an earlier interrupted
-    /// run of it) put it there: same file name, and its trash marker points
-    /// back at the old path.
+    /// run of it) put it there: its own name, or the suffixed name Trash gives
+    /// when that name was already taken (`base_1.m4a`, …), and its trash
+    /// marker points back at the old path.
     static func trashedCopy(of oldURL: URL) -> URL? {
-        let candidate = FileStore.trashDirectory().appendingPathComponent(oldURL.lastPathComponent)
-        guard FileManager.default.fileExists(atPath: candidate.path),
-              let meta = readDict(sidecar(candidate)),
-              let original = meta["originalPath"] as? String,
-              URL(fileURLWithPath: original).standardizedFileURL.path == oldURL.standardizedFileURL.path
-        else { return nil }
-        return candidate
+        let trash = FileStore.trashDirectory()
+        let name = oldURL.lastPathComponent
+        let base = (name as NSString).deletingPathExtension
+        let ext = (name as NSString).pathExtension
+        let suffixed = ((try? FileManager.default.contentsOfDirectory(atPath: trash.path)) ?? [])
+            .filter { candidate in
+                guard candidate.hasPrefix(base + "_"),
+                      (candidate as NSString).pathExtension == ext else { return false }
+                let suffix = (candidate as NSString).deletingPathExtension.dropFirst(base.count + 1)
+                return !suffix.isEmpty && suffix.allSatisfy(\.isNumber)
+            }
+            .sorted { $0.count != $1.count ? $0.count < $1.count : $0 < $1 }
+        for candidateName in [name] + suffixed {
+            let candidate = trash.appendingPathComponent(candidateName)
+            guard FileManager.default.fileExists(atPath: candidate.path),
+                  let meta = readDict(sidecar(candidate)),
+                  let original = meta["originalPath"] as? String,
+                  URL(fileURLWithPath: original).standardizedFileURL.path == oldURL.standardizedFileURL.path
+            else { continue }
+            return candidate
+        }
+        return nil
     }
 
     // MARK: - Checks (no writes)

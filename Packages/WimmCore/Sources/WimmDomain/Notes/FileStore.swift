@@ -434,9 +434,9 @@ public enum FileStore {
 
 // MARK: - Metadata sidecar helpers
 
-/// Serializes in-process read-modify-write operations on adjacent metadata
-/// sidecars. This intentionally does not claim to coordinate with another
-/// process (for example a simultaneously running `wimm-cli`).
+/// Serializes in-process read-modify-write operations on metadata sidecars.
+/// Other processes (`wimm-cli`, the MCP server, the drain worker) are
+/// excluded by `SidecarFileLock`, taken inside this lock.
 private let metadataSidecarMutationLock = NSLock()
 
 extension FileStore {
@@ -475,8 +475,10 @@ extension FileStore {
     /// value, which would crash rather than throw. Do not call another sidecar
     /// writer from inside `mutation`: the lock is not recursive.
     ///
-    /// In-process only; it does not coordinate with a concurrently running
-    /// `wimm-cli`.
+    /// Two locks are held for the whole read-modify-write: the in-process
+    /// `NSLock` (threads) and then a cross-process `flock`
+    /// (`SidecarFileLock`), so Studio, `wimm-cli`, the MCP server and the
+    /// drain worker serialize on one sidecar.
     public static let sidecarDidChange = Notification.Name("Wimm.sidecarDidChange")
 
     public static func mutateSidecar(
@@ -489,7 +491,17 @@ extension FileStore {
             metadataSidecarMutationLock.unlock()
             if didWrite { NotificationCenter.default.post(name: sidecarDidChange, object: sidecarURL) }
         }
+        didWrite = try SidecarFileLock.withLock(forSidecar: sidecarURL) {
+            try readModifyWriteSidecar(at: sidecarURL, mutation)
+        }
+    }
 
+    /// The body of `mutateSidecar`; call only with both locks held.
+    /// Returns whether the file was written.
+    private static func readModifyWriteSidecar(
+        at sidecarURL: URL,
+        _ mutation: (inout [String: Any]) throws -> Bool
+    ) throws -> Bool {
         // Only a missing or empty file starts from nothing; an unreadable one
         // throws, or the write below would replace everything it held.
         var current: [String: Any] = [:]
@@ -506,7 +518,7 @@ extension FileStore {
             current = json
         }
 
-        guard try mutation(&current) else { return }
+        guard try mutation(&current) else { return false }
         guard JSONSerialization.isValidJSONObject(current) else {
             throw CocoaError(.propertyListWriteInvalid)
         }
@@ -515,16 +527,36 @@ extension FileStore {
             options: [.prettyPrinted, .sortedKeys]
         )
         try data.write(to: sidecarURL, options: .atomic)
-        didWrite = true
+        return true
     }
 
-    /// `mutateSidecar` for a recording, resolving its sidecar path, with errors
-    /// swallowed — the historical contract of the metadata helpers here.
+    /// Event-log kind of a swallowed `mutateMetadata` failure.
+    static let sidecarWriteFailedEventKind = "sidecar_write_failed"
+
+    /// `mutateSidecar` for a recording, resolving its sidecar path. Errors do
+    /// not reach the caller — the historical contract of the metadata helpers
+    /// here — but each one is logged with the sidecar path (stderr and the
+    /// event log), so a lost update is visible.
     private static func mutateMetadata(
         for recordingURL: URL,
         _ mutation: (inout [String: Any]) -> Bool
     ) {
-        try? mutateSidecar(at: metadataURL(forRecordingURL: recordingURL), mutation)
+        let sidecarURL = metadataURL(forRecordingURL: recordingURL)
+        do {
+            try mutateSidecar(at: sidecarURL, mutation)
+        } catch {
+            // stderr, never stdout: the MCP server's stdout is the protocol.
+            fputs("[Wimm] sidecar write failed (\(sidecarURL.path)): \(error)\n", stderr)
+            UnifiedEventLogger.shared.logAppEvent(
+                kind: sidecarWriteFailedEventKind,
+                phase: "error",
+                origin: "FileStore.mutateMetadata",
+                message: sidecarURL.path,
+                attributes: ["path": StoragePaths.relativePath(for: sidecarURL)],
+                error: String(describing: error),
+                source: "FileStore"
+            )
+        }
     }
 
     /// The single in-process mutation door for the nested `transcription`

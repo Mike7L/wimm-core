@@ -262,8 +262,16 @@ extension WimmTUIRuntime {
                 }
                 continue
             }
-            let fullURL = container.storageRoot.appendingPathComponent(audioPath)
-            if !fm.fileExists(atPath: fullURL.path) {
+            // Media lives in `Recordings/` (legacy: the root); checking only
+            // the root called every real note an orphan.
+            let candidates = audioPath.hasPrefix("/")
+                ? [URL(fileURLWithPath: audioPath)]
+                : [
+                    container.storageRoot.appendingPathComponent("Recordings", isDirectory: true)
+                        .appendingPathComponent(audioPath),
+                    container.storageRoot.appendingPathComponent(audioPath),
+                ]
+            if !candidates.contains(where: { fm.fileExists(atPath: $0.path) }) {
                 ghosts.append(note)
             }
         }
@@ -286,17 +294,18 @@ extension WimmTUIRuntime {
             for ghost in ghosts {
                 do {
                     try await container.storage.deleteNote(id: ghost.id)
-                    print("Deleted: [\(ghost.shortID)]")
+                    print("Moved to Trash: [\(ghost.shortID)]")
                     deleted += 1
                 } catch {
                     print("Failed to delete [\(ghost.shortID)]: \(error)")
                     deleteFailed += 1
                 }
             }
-            print("Done: deleted=\(deleted)  failed=\(deleteFailed)")
+            print("Done: trashed=\(deleted)  failed=\(deleteFailed)")
+            if deleted > 0 { printTombstoneHint() }
         } else {
             print("")
-            print("Run with --force to delete.")
+            print("Run with --force to move them to Trash.")
         }
     }
 }

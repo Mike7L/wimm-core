@@ -5,6 +5,36 @@ import WimmDomain
 import WimmInfrastructure
 import WimmSecretary
 
+/// A link in the document that is neither a note nor a local file. Web and
+/// mail links open at once; any other scheme (an app's URL handler, `ssh:`,
+/// `x-apple…`) can start something on this Mac, so it is shown first and
+/// opens only after the user says so.
+enum StudioExternalLink {
+    static let directSchemes: Set<String> = ["http", "https", "mailto"]
+
+    static func opensWithoutAsking(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased() else { return false }
+        return directSchemes.contains(scheme)
+    }
+
+    @MainActor
+    static func open(_ url: URL) {
+        if opensWithoutAsking(url) {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Открыть ссылку?"
+        alert.informativeText = "Ссылка ведёт не на сайт и не на почту и может запустить другое приложение:\n\n\(url.absoluteString)"
+        alert.addButton(withTitle: "Отмена")
+        alert.addButton(withTitle: "Открыть")
+        if alert.runModal() == .alertSecondButtonReturn {
+            NSWorkspace.shared.open(url)
+        }
+    }
+}
+
 struct StudioDocumentNode: Identifiable {
     let block: PersonalDocument.Block
     var children: [StudioDocumentNode] = []
@@ -803,7 +833,7 @@ struct StudioDocumentView: View {
                 }
             }
         } else {
-            NSWorkspace.shared.open(url)
+            StudioExternalLink.open(url)
         }
     }
 

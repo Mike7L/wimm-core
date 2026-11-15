@@ -14,7 +14,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { CommentThread, DocumentBlock, SourceDetail } from '../src/types';
+import type { CommentThread, DocumentBlock, SourceDetail } from '../src/types.ts';
 import type {
   InboxChange,
   InboxPass,
@@ -22,7 +22,7 @@ import type {
   InboxQuestion,
   InboxReply,
   InboxSource,
-} from '../src/inboxTypes';
+} from '../src/inboxTypes.ts';
 
 const HOME = os.homedir();
 

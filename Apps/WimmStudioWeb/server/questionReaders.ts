@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import type { DocumentBlock } from '../src/types';
-import { resolveWimmCliBinary } from './shouldersApi';
+import type { DocumentBlock } from '../src/types.ts';
+import { resolveWimmCliBinary } from './shouldersApi.ts';
 
 // Two ways for the question agent to read the personal document, compared side by side:
 //

@@ -87,6 +87,92 @@ final class GeminiTranscriptionAdapterTests: XCTestCase {
         XCTAssertEqual(text, "Recovered transcript")
         let captured = lock.withLock { requests }
         XCTAssertEqual(captured.map(\.httpMethod), ["POST", "POST", "POST", "DELETE"])
+        // The resumable session URL Google hands back is pre-authorized: it
+        // carries no key at all. Every other call carries it only as a header.
+        Self.assertKeyOnlyInHeader(captured.filter { $0.url?.host != "upload.test" }, key: "test-key")
+        for request in captured where request.url?.host == "upload.test" {
+            XCTAssertFalse(request.url?.absoluteString.contains("test-key") ?? true)
+            XCTAssertNil(request.value(forHTTPHeaderField: "x-goog-api-key"))
+        }
+    }
+
+    func testInlineGenerateSendsKeyInHeaderNotURL() async throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Wimm_inline_\(UUID().uuidString)_micro.m4a")
+        try Data([0x1]).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        let lock = NSLock()
+        var requests: [URLRequest] = []
+        GeminiAdapterURLProtocol.handler = { request in
+            lock.withLock { requests.append(request) }
+            return try Self.jsonResponse(url: try XCTUnwrap(request.url), object: [
+                "candidates": [["content": ["parts": [["text": "Inline transcript"]]]]],
+            ])
+        }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GeminiAdapterURLProtocol.self]
+        let adapter = GeminiTranscriptionAdapter(
+            apiKey: "test-key",
+            modelName: "gemini-test",
+            session: URLSession(configuration: configuration)
+        )
+
+        let text = try await adapter.transcribeFile(at: file)
+
+        XCTAssertEqual(text, "Inline transcript")
+        let captured = lock.withLock { requests }
+        XCTAssertEqual(captured.count, 1)
+        XCTAssertEqual(captured.first?.url?.path, "/v1beta/models/gemini-test:generateContent")
+        Self.assertKeyOnlyInHeader(captured, key: "test-key")
+    }
+
+    func testTextGenerationSendsKeyInHeaderNotURL() async throws {
+        let lock = NSLock()
+        var requests: [URLRequest] = []
+        GeminiAdapterURLProtocol.handler = { request in
+            lock.withLock { requests.append(request) }
+            return try Self.jsonResponse(url: try XCTUnwrap(request.url), object: [
+                "candidates": [["content": ["parts": [["text": "answer"]]]]],
+            ])
+        }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GeminiAdapterURLProtocol.self]
+        let generate = GeminiTextGeneration(
+            apiKey: "test-key",
+            modelName: "gemini-test",
+            session: URLSession(configuration: configuration),
+            errorDomain: "test"
+        )
+
+        let text = try await generate(prompt: "hello")
+
+        XCTAssertEqual(text, "answer")
+        let captured = lock.withLock { requests }
+        XCTAssertEqual(captured.count, 1)
+        Self.assertKeyOnlyInHeader(captured, key: "test-key")
+    }
+
+    func testModelsListRequestSendsKeyInHeaderNotURL() throws {
+        let request = GeminiModelsAPI.makeListRequest(key: "test-key", pageToken: "next")
+
+        let components = try XCTUnwrap(request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) })
+        XCTAssertEqual(components.path, "/v1beta/models")
+        XCTAssertEqual(components.queryItems?.map(\.name), ["pageSize", "pageToken"])
+        Self.assertKeyOnlyInHeader([request], key: "test-key")
+    }
+
+    private static func assertKeyOnlyInHeader(
+        _ requests: [URLRequest], key: String, file: StaticString = #filePath, line: UInt = #line
+    ) {
+        for request in requests {
+            let url = request.url?.absoluteString ?? ""
+            XCTAssertFalse(url.contains("key="), "key in URL: \(url)", file: file, line: line)
+            XCTAssertFalse(url.contains(key), "key in URL: \(url)", file: file, line: line)
+            XCTAssertEqual(request.value(forHTTPHeaderField: "x-goog-api-key"), key, url, file: file, line: line)
+        }
     }
 
     func testEmptyGenerateResponseThrowsNoText() async throws {

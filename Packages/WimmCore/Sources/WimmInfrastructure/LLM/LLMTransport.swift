@@ -15,7 +15,8 @@ open class LLMTransport {
     }
 
     /// Build a POST request for the Gemini generateContent endpoint with the given model.
-    /// The returned request has the API key embedded as a query item and `Content-Type`
+    /// The returned request carries the API key in the `x-goog-api-key` header (never in
+    /// the URL, where it would end up in logs and error messages) and has `Content-Type`
     /// preconfigured. Callers should assign the HTTP body before execution.
     public func makeGeminiRequest(model: String, timeout: TimeInterval, contentType: String = "application/json", apiKey: String? = nil, endpoint: String = "generateContent") async throws -> URLRequest {
         try PrivateMode.checkCloudEgress(provider: "gemini")
@@ -30,12 +31,13 @@ open class LLMTransport {
             throw NSError(domain: ErrorDomain.badStatus, code: 401, userInfo: [NSLocalizedDescriptionKey: "No Gemini API key configured", "Provider": "gemini"])
         }
 
-        let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(model):\(endpoint)?key=\(trimmedKey)"
+        let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(model):\(endpoint)"
         guard let url = URL(string: urlString) else { throw URLError(.badURL) }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.timeoutInterval = timeout
         req.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        req.setValue(trimmedKey, forHTTPHeaderField: "x-goog-api-key")
         return req
     }
 

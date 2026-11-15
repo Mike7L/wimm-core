@@ -21,21 +21,27 @@ public enum RecordingTrashSupport {
         let fileName = file.lastPathComponent
         let relatedFiles = collectRelatedFiles(for: file, fileManager: fileManager)
 
-        var movedFiles: [URL] = []
+        // A same-name file already in Trash (an earlier note with this name,
+        // deleted before) is never overwritten: the whole group moves under
+        // one free base name, so the sidecar still sits next to its media.
+        let destinations = freeDestinations(
+            for: relatedFiles,
+            mainFile: file.resolvingSymlinksInPath(),
+            desiredBase: file.deletingPathExtension().lastPathComponent,
+            in: trashDir,
+            fileManager: fileManager
+        )
+
         var movedFilesBySource: [URL: URL] = [:]
+        var mainDestination: URL?
         var success = true
 
         for sourceURL in relatedFiles {
-            let destinationURL = trashDir.appendingPathComponent(sourceURL.lastPathComponent)
-
+            guard let destinationURL = destinations[sourceURL] else { continue }
             do {
-                if fileManager.fileExists(atPath: destinationURL.path) {
-                    try fileManager.removeItem(at: destinationURL)
-                }
-
                 try fileManager.moveItem(at: sourceURL, to: destinationURL)
-                movedFiles.append(destinationURL)
                 movedFilesBySource[sourceURL] = destinationURL
+                if sourceURL.lastPathComponent == fileName { mainDestination = destinationURL }
             } catch {
                 onFailure?(sourceURL, error)
                 success = false
@@ -44,16 +50,13 @@ public enum RecordingTrashSupport {
         }
 
         if !success {
-            for movedURL in movedFiles {
-                let originalURL = file.deletingLastPathComponent().appendingPathComponent(movedURL.lastPathComponent)
-                try? fileManager.moveItem(at: movedURL, to: originalURL)
+            for (sourceURL, movedURL) in movedFilesBySource {
+                try? fileManager.moveItem(at: movedURL, to: sourceURL)
             }
             return nil
         }
 
-        guard let mainDestination = movedFiles.first(where: { $0.lastPathComponent == fileName }) else {
-            return nil
-        }
+        guard let mainDestination else { return nil }
 
         rewriteAttachmentURLs(inMetadataFor: mainDestination, movedFilesBySource: movedFilesBySource)
         FileStore.upsertMetadata(for: mainDestination, updates: [
@@ -76,25 +79,26 @@ public enum RecordingTrashSupport {
         let fileName = trashedFile.lastPathComponent
         let relatedFiles = collectRelatedFiles(for: trashedFile, fileManager: fileManager)
 
-        var restoredFiles: [URL] = []
+        // A note trashed under a suffixed name (its name was taken in Trash)
+        // goes back under the name it had, read from the trash marker.
+        let desiredBase = originalBase(forTrashed: trashedFile)
+            ?? trashedFile.deletingPathExtension().lastPathComponent
+        let destinations = freeDestinations(
+            for: relatedFiles,
+            mainFile: trashedFile.resolvingSymlinksInPath(),
+            desiredBase: desiredBase,
+            in: recordingsDir,
+            fileManager: fileManager
+        )
+
         var restoredFilesBySource: [URL: URL] = [:]
         var success = true
         var mainRestoredURL: URL? = nil
 
         for sourceURL in relatedFiles {
-            let destinationURL = recordingsDir.appendingPathComponent(sourceURL.lastPathComponent)
-
+            guard let actualDestinationURL = destinations[sourceURL] else { continue }
             do {
-                let actualDestinationURL: URL
-                if fileManager.fileExists(atPath: destinationURL.path) {
-                    let uniqueName = makeUniqueName(for: sourceURL.lastPathComponent, in: recordingsDir, fileManager: fileManager)
-                    actualDestinationURL = recordingsDir.appendingPathComponent(uniqueName)
-                } else {
-                    actualDestinationURL = destinationURL
-                }
-
                 try fileManager.moveItem(at: sourceURL, to: actualDestinationURL)
-                restoredFiles.append(actualDestinationURL)
                 restoredFilesBySource[sourceURL] = actualDestinationURL
 
                 if sourceURL.lastPathComponent == fileName {
@@ -108,9 +112,8 @@ public enum RecordingTrashSupport {
         }
 
         if !success {
-            for restoredURL in restoredFiles {
-                let trashURL = FileStore.trashDirectory().appendingPathComponent(restoredURL.lastPathComponent)
-                try? fileManager.moveItem(at: restoredURL, to: trashURL)
+            for (sourceURL, restoredURL) in restoredFilesBySource {
+                try? fileManager.moveItem(at: restoredURL, to: sourceURL)
             }
             return nil
         }
@@ -222,15 +225,85 @@ public enum RecordingTrashSupport {
         }
     }
 
-    private static func makeUniqueName(for fileName: String, in directory: URL, fileManager: FileManager) -> String {
+    /// Destination for every file of a note's group in `directory`. Files
+    /// named after the main file's base keep their suffix under one shared
+    /// base: `desiredBase` if all those names are free, else `desiredBase_1`,
+    /// `_2`, … Any other file (an attachment with its own name) gets its own
+    /// free name. Nothing existing is ever overwritten.
+    static func freeDestinations(
+        for files: [URL],
+        mainFile: URL,
+        desiredBase: String,
+        in directory: URL,
+        fileManager: FileManager = .default
+    ) -> [URL: URL] {
+        let sourceBase = mainFile.deletingPathExtension().lastPathComponent
+        let grouped = files.filter { $0.lastPathComponent.hasPrefix(sourceBase) }
+        let others = files.filter { !$0.lastPathComponent.hasPrefix(sourceBase) }
+
+        func taken(_ name: String) -> Bool {
+            fileManager.fileExists(atPath: directory.appendingPathComponent(name).path)
+        }
+
+        // The note's companions are found by name, so a base is only free if
+        // no orphan sidecar or derived copy under it waits there either.
+        let companionSuffixes = [".meta.json", ".metadata.json", ".heic", ".png", "_micro.m4a", "_mini.m4a"]
+        func baseIsTaken(_ base: String) -> Bool {
+            grouped.contains { taken(base + $0.lastPathComponent.dropFirst(sourceBase.count)) }
+                || companionSuffixes.contains { taken(base + $0) }
+        }
+
+        var counter = 0
+        var base = desiredBase
+        while baseIsTaken(base) {
+            counter += 1
+            base = "\(desiredBase)_\(counter)"
+        }
+
+        var result: [URL: URL] = [:]
+        var claimed = Set<String>()
+        for source in grouped {
+            let name = base + source.lastPathComponent.dropFirst(sourceBase.count)
+            claimed.insert(name)
+            result[source] = directory.appendingPathComponent(name)
+        }
+        for source in others {
+            let name = makeUniqueName(for: source.lastPathComponent, in: directory, fileManager: fileManager, claimed: claimed)
+            claimed.insert(name)
+            result[source] = directory.appendingPathComponent(name)
+        }
+        return result
+    }
+
+    /// The base name the note had before it went to Trash, from the marker's
+    /// `originalPath`, when it has the same extension as the trashed file.
+    private static func originalBase(forTrashed trashedFile: URL) -> String? {
+        let metaURL = FileStore.metadataURL(forRecordingURL: trashedFile)
+        guard let data = try? Data(contentsOf: metaURL),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let path = json["originalPath"] as? String, !path.isEmpty else { return nil }
+        let original = URL(fileURLWithPath: path)
+        guard original.pathExtension == trashedFile.pathExtension else { return nil }
+        let base = original.deletingPathExtension().lastPathComponent
+        guard !base.isEmpty, base != ".", base != "..", !base.contains("/") else { return nil }
+        return base
+    }
+
+    private static func makeUniqueName(
+        for fileName: String,
+        in directory: URL,
+        fileManager: FileManager,
+        claimed: Set<String> = []
+    ) -> String {
         let ext = (fileName as NSString).pathExtension
         let base = (fileName as NSString).deletingPathExtension
 
         var counter = 1
         var uniqueName = fileName
 
-        while fileManager.fileExists(atPath: directory.appendingPathComponent(uniqueName).path) {
-            uniqueName = "\(base)_\(counter).\(ext)"
+        while claimed.contains(uniqueName)
+            || fileManager.fileExists(atPath: directory.appendingPathComponent(uniqueName).path) {
+            uniqueName = ext.isEmpty ? "\(base)_\(counter)" : "\(base)_\(counter).\(ext)"
             counter += 1
         }
 

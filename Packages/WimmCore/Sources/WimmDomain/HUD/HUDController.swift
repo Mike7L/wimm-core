@@ -224,7 +224,7 @@ public actor HUDController {
             reviewNote = nil
             reviewState = nil
             await refreshSnapshot(
-                successMessage: "Deleted note [\(note.shortID)].",
+                successMessage: "Moved note [\(note.shortID)] to Trash.",
                 failurePrefix: "Refresh failed"
             )
         } catch {

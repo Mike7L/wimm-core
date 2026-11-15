@@ -26,7 +26,8 @@ public enum SecretaryPacketFiles {
     static func supplementSelectedFiles(_ library: RecallLibrary, rows: [[String: Any]], ids: Set<String>, root: URL, documentDirectory: URL) async throws -> RecallLibrary {
         try requirePublicAccess()
         let owned = root.appendingPathComponent("recordings").resolvingSymlinksInPath()
-        let present = Set((0..<library.count).map { URL(fileURLWithPath: library[$0].filePath).resolvingSymlinksInPath().path })
+        var resolver = SecretaryPathResolver()
+        let present = Set((0..<library.count).map { resolver.resolve(absolute: library[$0].filePath) })
         var files: [URL] = []
         for row in rows {
             guard let id = row["source_id"] as? String, ids.contains(id),
@@ -226,8 +227,9 @@ public enum SecretaryPacketFiles {
                                              "unfinished_sources": packet.payload["unfinished_sources"] ?? []])
         // Store before exporting: exported files cannot create or alter a trusted session.
         try save(state, marks: marks)
+        TmpStageClock("files").mark("save_state(after state build)")
         do {
-            let result = try export(&state, marks: marks, timing: timing)
+            let result = try export(&state, marks: marks, timing: timing, stored: true)
             timing.checkpoint("export")
             return try timing.finish(editorBundle ? bundle(state, manifest: result) : result)
         }
@@ -442,10 +444,13 @@ public enum SecretaryPacketFiles {
             "read_order": (1...max(1, pageCount)).map { directory.appendingPathComponent(pageName($0)).path },
             "document_sha256": SecretaryBookkeeping.digest(state.documentData)] as [String: Any])
     }
+    /// `stored`: the caller saved exactly this state just before; export does not change it.
     private static func export(_ state: inout State, marks: AgentMarkStore,
-                               changedSources: Set<String>? = nil, timing: SecretaryFileTiming? = nil) throws -> Data {
+                               changedSources: Set<String>? = nil, timing: SecretaryFileTiming? = nil,
+                               stored: Bool = false) throws -> Data {
         let packet = try state.packet(), directory = packet.task.workspace.runDirectory(state.id).appendingPathComponent("export")
         try FileManager.default.createDirectory(at: directory.appendingPathComponent("sources"), withIntermediateDirectories: true)
+        let clk = TmpStageClock("export")
         try Data(masked(String(decoding: state.input, as: UTF8.self)).utf8).write(to: directory.appendingPathComponent("input.json"), options: .atomic)
         timing?.count("export_files_written", 1)
         if changedSources == nil {
@@ -466,6 +471,7 @@ public enum SecretaryPacketFiles {
             }
         }
         // Pages reflect the current packet, so rewrite them on any export.
+        clk.mark("files")
         let pages = try packetPages(state)
         for (index, page) in pages.enumerated() {
             try Data(masked(page).utf8).write(to: directory.appendingPathComponent(pageName(index + 1)), options: .atomic)
@@ -475,10 +481,11 @@ public enum SecretaryPacketFiles {
             try FileManager.default.removeItem(at: directory.appendingPathComponent(stale))
         }
         timing?.count("packet_pages_written", pages.count)
+        clk.mark("pages")
         let result = try manifest(state, pageCount: pages.count)
         try result.write(to: directory.appendingPathComponent("manifest.json"), options: .atomic)
         timing?.count("export_files_written", 1)
-        try save(state, marks: marks)
+        if !stored { try save(state, marks: marks) }
         return result
     }
 

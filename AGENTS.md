@@ -70,7 +70,9 @@ follow; experiment results and design history do not belong in this file.
 - **Every `.meta.json` write goes through `FileStore.mutateSidecar(at:_:)`**
   (or `upsertMetadata` / `mutateTranscription`). Never read-then-write a
   sidecar, never write one whole without merging, never call another sidecar
-  writer inside the closure (lock is not recursive, in-process only).
+  writer inside the closure (locks are not recursive). It holds an `NSLock`
+  plus a cross-process `flock` (`SidecarFileLock`, stripe files in the Darwin
+  user temp dir, never in the library).
   `RecordingMetadata.save()` writes only its own keys and never replaces a
   dictionary `transcription`.
 - **A test process never resolves to the real library.** Never compute a
@@ -79,12 +81,12 @@ follow; experiment results and design history do not belong in this file.
 - **Keep Studio originals compressed.** Use AAC at the existing 96 kbps target
   in a format readable after a crash. Do not switch persistent capture to
   uncompressed PCM to avoid container finalization.
-- **Originals are never cut.** Silence → `AudioSilenceMap`; uploads get a
+- **Originals are never cut or deleted.** Silence → `AudioSilenceMap`; uploads get a
   throwaway trimmed temp copy (`MicroAudio.makeUploadCopy`). No new persistent
   `_micro.m4a`, but old ones remain (some are a note's only audio):
   `FileStore.isDerivedAudioFile` must recognize `_micro` and legacy `_mini`.
-  `clean derived` keeps orphan derived files; `clean originals` needs
-  `--accept-micro-as-only-copy`. PDF preview `{base}.heic` is not a note.
+  `clean derived` keeps orphan derived files; no command deletes an original
+  (`clean originals` was removed; do not re-add it). PDF preview `{base}.heic` is not a note.
 - Transcripts: a re-run moves the old text to `transcription.previousRuns`
   (`recordRunSuccess`); `[[NO_SPEECH]]` never replaces text; a failed manual
   re-run never writes the failure placeholder over a good run. Clearing a

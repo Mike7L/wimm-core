@@ -24,6 +24,16 @@ final class VoiceMemosMergeTwinTests: XCTestCase {
         for dir in [rec!, state!, me.appendingPathComponent("docs/wimm"), backups!] {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
+        // Trash is per test too: a copy another test left there would now
+        // (rightly) push this test's copy to a suffixed name.
+        previousBaseDir = ProcessInfo.processInfo.environment["WIMM_BASE_DIR"]
+        setenv("WIMM_BASE_DIR", root.path, 1)
+    }
+
+    private var previousBaseDir: String?
+
+    private func restoreBaseDir() {
+        if let previousBaseDir { setenv("WIMM_BASE_DIR", previousBaseDir, 1) } else { unsetenv("WIMM_BASE_DIR") }
     }
 
     override func tearDown() {
@@ -32,6 +42,7 @@ final class VoiceMemosMergeTwinTests: XCTestCase {
             try? FileManager.default.removeItem(at: trash)
             try? FileManager.default.removeItem(at: FileStore.metadataURL(forRecordingURL: trash))
         }
+        restoreBaseDir()
         try? FileManager.default.removeItem(at: root)
     }
 

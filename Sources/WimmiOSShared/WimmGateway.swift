@@ -36,7 +36,9 @@ final class WimmGateway: @unchecked Sendable, WimmHUDGatewayProtocol {
     private init() {
         let root = Self.resolveStorageRoot()
         self.storageRoot = root
-        let storage = FileSystemAdapter(rootDirectory: root)
+        // A HUD delete goes to Trash and queues the iCloud tombstone through
+        // the app's one shared sync service.
+        let storage = FileSystemAdapter(rootDirectory: root, cloudSync: CloudRecordingSyncService.live())
         let analysis = Self.makeAnalysis()
         let noteCollectionAnswering = Self.makeNoteCollectionAnswering()
         self.storage = storage

@@ -33,7 +33,7 @@ import WimmInfrastructure
         #if os(macOS)
         guard !StoragePaths.isTestProcess, !PrivateMode.isEnabled else { return }
         if warming { again = true; return }
-        let cache = AgentMarkStore().directory.appendingPathComponent("SecretaryRecallCache/recall-v1.stream")
+        let cache = AgentMarkStore().directory.appendingPathComponent("SecretaryRecallCache/" + LibraryRecallSource.cacheFileName)
         guard let changed = try? cache.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
               Date().timeIntervalSince(changed) > 20,
               let cli = SecretaryDispatcher.locateWimmCLI() else { return }

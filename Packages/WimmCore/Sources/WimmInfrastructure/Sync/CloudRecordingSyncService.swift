@@ -364,9 +364,10 @@ public actor CloudRecordingSyncService {
         return { manifest, descriptor in
             guard descriptor.role != .metadata else { return false }
             let remoteBase = remoteBase(of: manifest)
-            let local = directory.appendingPathComponent(
-                localFileName(for: descriptor, remoteBase: remoteBase, localBase: localBase)
-            )
+            guard let name = localFileName(for: descriptor, remoteBase: remoteBase, localBase: localBase) else {
+                return false
+            }
+            let local = directory.appendingPathComponent(name)
             guard let attributes = try? FileManager.default.attributesOfItem(atPath: local.path),
                   attributes[.size] as? UInt64 == descriptor.byteSize,
                   let modified = attributes[.modificationDate] as? Date else { return false }
@@ -513,11 +514,20 @@ public actor CloudRecordingSyncService {
 
         var nameMap: [String: String] = [:]
         for descriptor in remote.manifest.files + remote.files.map(\.descriptor) {
-            nameMap[descriptor.fileName] = Self.localFileName(
+            guard let localName = Self.localFileName(
                 for: descriptor,
                 remoteBase: remoteBase,
                 localBase: localBase
-            )
+            ) else {
+                // A name that is not a plain file name (a path, `.`, `..`)
+                // could write outside the recordings folder: skip that file.
+                log("[CloudSync] \(remote.manifest.syncId): skipped unsafe file name in manifest")
+                continue
+            }
+            nameMap[descriptor.fileName] = localName
+        }
+        guard nameMap[primary.fileName] != nil else {
+            throw RecordingSyncError.invalidCloudPayload("primary file name is not a plain file name")
         }
 
         var primaryURL: URL? = nameMap[primary.fileName].map { directory.appendingPathComponent($0) }
@@ -631,19 +641,40 @@ public actor CloudRecordingSyncService {
         }
     }
 
+    /// A name usable as one file inside the recordings folder: not empty,
+    /// not `.`/`..`, and its own last path component (no `/`).
+    static func isPlainFileName(_ name: String) -> Bool {
+        !name.isEmpty && name != "." && name != ".."
+            && !name.contains("/") && !name.contains("\0")
+            && (name as NSString).lastPathComponent == name
+    }
+
+    /// The local name for a manifest file, or nil when the manifest's name
+    /// (or the name it maps to) is not a plain file name.
     static func localFileName(
         for descriptor: RecordingBundleFile,
         remoteBase: String,
         localBase: String
-    ) -> String {
+    ) -> String? {
         let name = descriptor.fileName
+        guard isPlainFileName(name) else { return nil }
+        let mapped = mappedFileName(name, role: descriptor.role, remoteBase: remoteBase, localBase: localBase)
+        return isPlainFileName(mapped) ? mapped : nil
+    }
+
+    private static func mappedFileName(
+        _ name: String,
+        role: RecordingBundleFileRole,
+        remoteBase: String,
+        localBase: String
+    ) -> String {
         if name == remoteBase
             || name.hasPrefix("\(remoteBase).")
             || name.hasPrefix("\(remoteBase)_") {
             return localBase + name.dropFirst(remoteBase.count)
         }
 
-        switch descriptor.role {
+        switch role {
         case .primary:
             return URL(fileURLWithPath: localBase)
                 .appendingPathExtension(name.pathExtension)

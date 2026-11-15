@@ -61,11 +61,20 @@ final class HUDControllerTests: XCTestCase {
         let editedNote = try await firstNote()
         XCTAssertEqual(editedNote.text, "edited transcript")
 
+        let audioName = try XCTUnwrap(editedNote.audioPath)
         _ = await controller.dispatch(.deleteLastNote)
         state = await controller.viewState()
         XCTAssertNil(state.reviewState)
+        XCTAssertEqual(state.lastMessage, "Moved note [\(note.shortID)] to Trash.")
         let notes = try await storage.loadAll()
         XCTAssertEqual(notes.count, 0)
+        // A HUD delete goes to Trash, never `removeItem`.
+        let trashedAudio = FileStore.trashDirectory().appendingPathComponent(audioName)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: trashedAudio.path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: tempDir.appendingPathComponent("Recordings").appendingPathComponent(audioName).path))
+        try? FileManager.default.removeItem(at: trashedAudio)
+        try? FileManager.default.removeItem(at: FileStore.metadataURL(forRecordingURL: trashedAudio))
     }
 
     func testControllerCompletesExternalActionWithMessages() async throws {

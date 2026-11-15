@@ -155,9 +155,49 @@ public struct AgentMarkStore: Sendable {
 
     static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        // `.iso8601`, with the encoder's own `yyyy-MM-ddTHH:mm:ssZ` parsed directly:
+        // a formatter call per mark was most of reading ~8k marks.
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let string = try container.decode(String.self)
+            if let date = MarkDate.parseUTC(string) ?? MarkDate.formatter.date(from: string) { return date }
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Expected date string to be ISO8601-formatted.")
+        }
         return decoder
     }()
+
+    enum MarkDate {
+        nonisolated(unsafe) static let formatter: ISO8601DateFormatter = {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = .withInternetDateTime
+            return formatter
+        }()
+
+        /// Exactly `yyyy-MM-ddTHH:mm:ssZ` with in-range fields; anything else is nil.
+        static func parseUTC(_ string: String) -> Date? {
+            let b = Array(string.utf8)
+            guard b.count == 20, b[4] == 45, b[7] == 45, b[10] == 84, b[13] == 58, b[16] == 58, b[19] == 90 else { return nil }
+            func number(_ range: Range<Int>) -> Int? {
+                var value = 0
+                for i in range { guard (48...57).contains(b[i]) else { return nil }; value = value * 10 + Int(b[i] - 48) }
+                return value
+            }
+            guard let year = number(0..<4), let month = number(5..<7), let day = number(8..<10),
+                  let hour = number(11..<13), let minute = number(14..<16), let second = number(17..<19),
+                  year >= 1, (1...12).contains(month), (0...23).contains(hour), (0...59).contains(minute), (0...59).contains(second) else { return nil }
+            let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+            let lengths = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+            guard (1...lengths[month - 1]).contains(day) else { return nil }
+            // Days from 1970-01-01 in the proleptic Gregorian calendar.
+            let y = month <= 2 ? year - 1 : year
+            let era = (y >= 0 ? y : y - 399) / 400
+            let yoe = y - era * 400
+            let doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1
+            let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+            let days = era * 146_097 + doe - 719_468
+            return Date(timeIntervalSince1970: TimeInterval(days * 86_400 + hour * 3_600 + minute * 60 + second))
+        }
+    }
 }
 
 /// Cross-process lock for the `AgentState` files: the MCP server and the
@@ -313,9 +353,24 @@ public struct NoteFingerprintSnapshot: Sendable, Equatable, Codable {
         let changedSeconds: Int64
         let changedNanos: Int64
 
-        init?(_ url: URL) {
+        init(inode: UInt64, size: Int64, modifiedSeconds: Int64, modifiedNanos: Int64,
+             changedSeconds: Int64, changedNanos: Int64) {
+            self.inode = inode; self.size = size
+            self.modifiedSeconds = modifiedSeconds; self.modifiedNanos = modifiedNanos
+            self.changedSeconds = changedSeconds; self.changedNanos = changedNanos
+        }
+
+        init?(_ url: URL) { self.init(path: url.path) }
+
+        init(_ info: stat) {
+            self.init(inode: UInt64(info.st_ino), size: Int64(info.st_size),
+                      modifiedSeconds: Int64(info.st_mtimespec.tv_sec), modifiedNanos: Int64(info.st_mtimespec.tv_nsec),
+                      changedSeconds: Int64(info.st_ctimespec.tv_sec), changedNanos: Int64(info.st_ctimespec.tv_nsec))
+        }
+
+        init?(path: String) {
             var info = stat()
-            guard stat(url.path, &info) == 0 else { return nil }
+            guard stat(path, &info) == 0 else { return nil }
             inode = UInt64(info.st_ino)
             size = Int64(info.st_size)
             modifiedSeconds = Int64(info.st_mtimespec.tv_sec)
@@ -331,6 +386,12 @@ public struct NoteFingerprintSnapshot: Sendable, Equatable, Codable {
     static func stamps(for file: URL) -> [Stamp]? {
         guard let media = Stamp(file),
               let sidecar = Stamp(FileStore.metadataURL(forRecordingURL: file)) else { return nil }
+        return [media, sidecar]
+    }
+
+    /// `stamps(for:)` when the caller already resolved the sidecar path.
+    static func stamps(file: String, sidecar: String) -> [Stamp]? {
+        guard let media = Stamp(path: file), let sidecar = Stamp(path: sidecar) else { return nil }
         return [media, sidecar]
     }
 

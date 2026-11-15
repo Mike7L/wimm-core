@@ -6,7 +6,7 @@ import WimmInfrastructure
 struct Clean: ParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Cleanup invalid files and reclaim disk space",
-        subcommands: [CleanGhosts.self, CleanOriginals.self, CleanDerived.self],
+        subcommands: [CleanGhosts.self, CleanDerived.self],
         defaultSubcommand: CleanGhosts.self
     )
 }
@@ -185,118 +185,5 @@ struct CleanGhosts: ParsableCommand {
             if ghostMeta.count > 10 { print(" ... and \(ghostMeta.count - 10) more") }
             print("\n⚠️ Run with --force to actually delete these files.")
         }
-    }
-}
-
-struct CleanOriginals: ParsableCommand {
-    static let configuration = CommandConfiguration(
-        commandName: "originals",
-        abstract: "Delete large original audio files when a _micro copy exists (requires --accept-micro-as-only-copy)",
-        discussion: """
-        Refuses to run by default. This command used to delete originals whenever a \
-        _mini existed; the _mini tier is retired, and `clean derived --mini` later \
-        deleted those minis — for 267 notes that was the last audio. A _mini never \
-        qualifies any more. _micro is 16 kHz mono and may have its silences cut, so \
-        it is a lossy, shortened stand-in: deleting the original makes _micro the \
-        only copy, and `clean derived` will then keep it as an orphan. Pass \
-        --accept-micro-as-only-copy to opt in.
-        """
-    )
-
-    @Flag(name: .long, help: "Delete the files immediately")
-    var force: Bool = false
-
-    @Option(name: .long, help: "Minimum original size to delete, in MB")
-    var minMB: Double = 1.0
-
-    @Flag(name: .long, help: "Accept that the 16 kHz, possibly silence-trimmed _micro becomes the only audio of each affected note")
-    var acceptMicroAsOnlyCopy: Bool = false
-
-    func run() throws {
-        guard acceptMicroAsOnlyCopy else {
-            print("Refusing: `clean originals` would leave a derived file as the only audio of each note.")
-            print("_mini no longer counts as a copy (retired tier). To delete originals that have a")
-            print("_micro copy, re-run with --accept-micro-as-only-copy (dry-run first, then --force).")
-            throw ExitCode.failure
-        }
-        let fm = FileManager.default
-        let recDir = FileStore.recordingsDirectory()
-        let minBytes = Int64(max(0, minMB) * 1024 * 1024)
-
-        print("🧹 WIMM Original Audio Cleaner")
-        print("Scanning: \(recDir.path)")
-        print("Threshold: \(String(format: "%.2f", minMB)) MB")
-
-        let files = try fm.contentsOfDirectory(
-            at: recDir,
-            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
-            options: [.skipsHiddenFiles]
-        )
-
-        let candidates = try files.compactMap { url -> Candidate? in
-            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
-            guard values.isRegularFile == true else { return nil }
-            guard FileStore.isAudioFile(url) else { return nil }
-            guard !FileStore.isDerivedAudioFile(url) else { return nil }
-            guard !FileStore.isAttachmentFile(url) else { return nil }
-
-            let size = Int64(values.fileSize ?? 0)
-            guard size > minBytes else { return nil }
-
-            let micro = FileStore.microURL(forRecordingURL: url)
-            guard let microSize = try? micro.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-                  microSize > 0 else { return nil }
-
-            return Candidate(original: url, micro: micro, bytes: size)
-        }.sorted { $0.original.lastPathComponent < $1.original.lastPathComponent }
-
-        guard !candidates.isEmpty else {
-            print("✅ No large originals with _micro copies found.")
-            return
-        }
-
-        let reclaimable = candidates.reduce(Int64(0)) { $0 + $1.bytes }
-        print("Found \(candidates.count) original files reclaiming \(formatBytes(reclaimable)).")
-
-        if force {
-            print("\n🗑️ Deleting originals...")
-            var deletedCount = 0
-            var deletedBytes: Int64 = 0
-
-            for candidate in candidates {
-                do {
-                    try fm.removeItem(at: candidate.original)
-                    deletedCount += 1
-                    deletedBytes += candidate.bytes
-                    print("   Deleted: \(candidate.original.lastPathComponent) (\(formatBytes(candidate.bytes)))")
-                } catch {
-                    print("   ❌ Failed to delete \(candidate.original.lastPathComponent): \(error)")
-                }
-            }
-
-            print("\n✅ Deleted \(deletedCount) files, reclaimed \(formatBytes(deletedBytes)).")
-        } else {
-            print("\nPreview of originals to delete:")
-            for candidate in candidates.prefix(20) {
-                print(" - \(candidate.original.lastPathComponent) (\(formatBytes(candidate.bytes)))")
-            }
-            if candidates.count > 20 {
-                print(" ... and \(candidates.count - 20) more")
-            }
-            print("\n⚠️ Run with --force to actually delete these files.")
-        }
-    }
-
-    private struct Candidate {
-        let original: URL
-        let micro: URL
-        let bytes: Int64
-    }
-
-    private func formatBytes(_ bytes: Int64) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.allowedUnits = [.useKB, .useMB, .useGB]
-        formatter.countStyle = .file
-        return formatter.string(fromByteCount: bytes)
     }
 }

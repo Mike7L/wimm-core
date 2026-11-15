@@ -59,7 +59,39 @@ private func formatLogLine(level: LogLevel, subsystem: String, message: String, 
     return "[Wimm] \(time) | \(message)"
 }
 
-@inline(__always) public func log(_ msg: String) {
+/// Backstop for plain `log()`/`logDebug()`: masks API-key-shaped strings
+/// before they reach stderr or the unified log, the same patterns
+/// `UnifiedEventLogger` already masks in event files. Keys should never be
+/// logged in the first place; this only catches a slip (e.g. a URL or an
+/// error body that still carries one).
+public enum LogSecretMask {
+    private static let geminiKeyRegex = try! NSRegularExpression(
+        pattern: #"\bAIza[0-9A-Za-z\-_]{20,}"#)
+    private static let openAIKeyRegex = try! NSRegularExpression(
+        pattern: #"\bsk-[A-Za-z0-9\-_]{12,}"#)
+    private static let bearerRegex = try! NSRegularExpression(
+        pattern: #"(?i)\bBearer\s+[A-Za-z0-9._\-+/=]+"#)
+
+    public static func mask(_ value: String) -> String {
+        // Cheap prefilter: nearly every log line has none of these.
+        guard value.contains("AIza") || value.contains("sk-")
+                || value.range(of: "bearer", options: .caseInsensitive) != nil
+        else { return value }
+        var out = value
+        out = replace(geminiKeyRegex, with: "AIza<redacted>", in: out)
+        out = replace(openAIKeyRegex, with: "sk-<redacted>", in: out)
+        out = replace(bearerRegex, with: "Bearer <token>", in: out)
+        return out
+    }
+
+    private static func replace(_ regex: NSRegularExpression, with template: String, in value: String) -> String {
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        return regex.stringByReplacingMatches(in: value, options: [], range: range, withTemplate: template)
+    }
+}
+
+@inline(__always) public func log(_ rawMessage: String) {
+    let msg = LogSecretMask.mask(rawMessage)
     let line = formatLogLine(level: .info, subsystem: "core", message: msg, correlationId: nil)
     // Console output for stable text logs
     fputs(line + "\n", stderr)
@@ -74,8 +106,9 @@ private func formatLogLine(level: LogLevel, subsystem: String, message: String, 
     _wimmLogger.info("\(msg, privacy: .public)")
 }
 
-@inline(__always) public func logDebug(_ msg: String) {
+@inline(__always) public func logDebug(_ rawMessage: String) {
 #if DEBUG
+    let msg = LogSecretMask.mask(rawMessage)
     let line = formatLogLine(level: .debug, subsystem: "core", message: msg, correlationId: nil)
     fputs(line + "\n", stderr)
     UnifiedEventLogger.shared.logAppEvent(
@@ -88,7 +121,7 @@ private func formatLogLine(level: LogLevel, subsystem: String, message: String, 
     _wimmLogger.debug("\(msg, privacy: .public)")
 #else
     // No-op in release builds
-    _ = msg
+    _ = rawMessage
 #endif
 }
 

@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import SQLite3
 import os
+import WimmInfrastructure // TMP-PROFILE
 
 /// File-session state is immutable evidence between saves. Keep a small atomic manifest
 /// at the legacy path, with shared, compressed binary data in a transactional store.
@@ -90,9 +91,12 @@ enum SecretarySessionStorage {
         let root = directory(for: session)
         try FileManager.default.createDirectory(at: session.deletingLastPathComponent(), withIntermediateDirectories: true)
         try locked(root) {
+            let sc = TmpStageClock("save")
             let database = try Database(root: root, create: true)
+            sc.mark("open")
             let original = try canonical(state)
             let stateHash = hash(original)
+            sc.mark("canonical+hash")
             try database.execute("BEGIN IMMEDIATE")
             do {
                 let references = OSAllocatedUnfairLock(initialState: Set<String>())
@@ -103,6 +107,7 @@ enum SecretarySessionStorage {
                     try reference.encode(to: encoder)
                 }
                 let payload = try compactEncoder.encode(state)
+                sc.mark("store")
                 let report = state.report.flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
                 let bookkeeping = report?["bookkeeping"] as? [String: Any]
                 let manifest = Manifest(storage: format, payload: payload, payloadSHA256: hash(payload),
@@ -113,13 +118,16 @@ enum SecretarySessionStorage {
                         storedSources: bookkeeping?["storedSources"] as? [String] ?? report?["stored_sources"] as? [String]))
                 // Reconstruct and verify before an old full JSON can be replaced.
                 _ = try decode(manifest, database: database)
+                sc.mark("verify")
                 try database.execute("COMMIT")
+                sc.mark("commit")
                 // Chunks are durable before this atomic publication. A crash leaves
                 // either the old manifest or the new manifest; both remain readable.
                 try encoder().encode(manifest).write(to: session, options: .atomic)
                 do {
                     try checkpoints(state, original: original, hash: stateHash, root: root)
                     try collectIfDue(sessions: session.deletingLastPathComponent(), root: root, database: database)
+                    sc.mark("manifest+maintenance")
                 } catch {
                     NSLog("Secretary archive maintenance failed; verified session remains available: %@", error.localizedDescription)
                 }
@@ -335,8 +343,15 @@ enum SecretarySessionStorage {
         return try operation()
     }
 
+    private static let hexDigits = Array("0123456789abcdef".utf8)
+
+    /// Lower-case hex SHA-256; `String(format:)` per byte was a visible share of a save.
     private static func hash(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        var hex = [UInt8](); hex.reserveCapacity(64)
+        for byte in SHA256.hash(data: data) {
+            hex.append(hexDigits[Int(byte >> 4)]); hex.append(hexDigits[Int(byte & 0x0f)])
+        }
+        return String(decoding: hex, as: UTF8.self)
     }
 
     /// Coder callbacks are Sendable: serialize caches and handle access even if
@@ -345,8 +360,11 @@ enum SecretarySessionStorage {
     private final class Database: @unchecked Sendable {
         private let access = NSRecursiveLock()
         private var handle: OpaquePointer?
+        /// Chunks and blobs looked up by hash on demand: loading every row of a
+        /// growing archive made each save slower than the last.
         private var chunkIDs: [String: Int64] = [:]
         private var blobHashes = Set<String>()
+        private var statements: [String: OpaquePointer] = [:]
 
         init(root: URL, create: Bool, writable: Bool = false) throws {
             let flags = create ? SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE : writable ? SQLITE_OPEN_READWRITE : SQLITE_OPEN_READONLY
@@ -361,12 +379,48 @@ enum SecretarySessionStorage {
                 try execute("PRAGMA synchronous=FULL")
                 try execute("CREATE TABLE IF NOT EXISTS chunks(id INTEGER PRIMARY KEY, sha TEXT UNIQUE NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL)")
                 try execute("CREATE TABLE IF NOT EXISTS blobs(sha TEXT PRIMARY KEY, size INTEGER NOT NULL, refs BLOB NOT NULL)")
-                try query("SELECT id,sha FROM chunks") { row in chunkIDs[text(row, 1)] = sqlite3_column_int64(row, 0) }
-                try query("SELECT sha FROM blobs") { row in blobHashes.insert(text(row, 0)) }
             }
         }
 
-        deinit { sqlite3_close(handle) }
+        deinit {
+            for statement in statements.values { sqlite3_finalize(statement) }
+            sqlite3_close(handle)
+        }
+
+        /// One compiled statement per SQL text, reset before each use.
+        private func cached(_ sql: String) throws -> OpaquePointer {
+            if let statement = statements[sql] {
+                sqlite3_reset(statement); sqlite3_clear_bindings(statement)
+                return statement
+            }
+            let statement = try prepare(sql)
+            statements[sql] = statement
+            return statement
+        }
+
+        private func chunkID(_ sha: String) throws -> Int64? {
+            if let id = chunkIDs[sha] { return id }
+            let statement = try cached("SELECT id FROM chunks WHERE sha=?")
+            defer { sqlite3_reset(statement) }
+            bind(sha, to: statement, at: 1)
+            switch sqlite3_step(statement) {
+            case SQLITE_ROW: let id = sqlite3_column_int64(statement, 0); chunkIDs[sha] = id; return id
+            case SQLITE_DONE: return nil
+            default: throw Failure("Secretary archive read failed.")
+            }
+        }
+
+        private func hasBlob(_ sha: String) throws -> Bool {
+            if blobHashes.contains(sha) { return true }
+            let statement = try cached("SELECT 1 FROM blobs WHERE sha=?")
+            defer { sqlite3_reset(statement) }
+            bind(sha, to: statement, at: 1)
+            switch sqlite3_step(statement) {
+            case SQLITE_ROW: blobHashes.insert(sha); return true
+            case SQLITE_DONE: return false
+            default: throw Failure("Secretary archive read failed.")
+            }
+        }
 
         func execute(_ sql: String) throws {
             access.lock(); defer { access.unlock() }
@@ -376,7 +430,7 @@ enum SecretarySessionStorage {
         func store(_ bytes: Data, field: String) throws -> Reference {
             access.lock(); defer { access.unlock() }
             let sha = hash(bytes)
-            if blobHashes.contains(sha) {
+            if try hasBlob(sha) {
                 var reference: Reference?
                 try query("SELECT size,refs FROM blobs WHERE sha=?", parameter: sha) { row in
                     guard bytes.count == Int(sqlite3_column_int64(row, 0)) else { throw Failure("Invalid secretary archive object size.") }
@@ -403,7 +457,7 @@ enum SecretarySessionStorage {
             var ids: [Int64] = []
             for range in ranges {
                 let part = bytes.subdata(in: range), key = hash(part)
-                if let id = chunkIDs[key] { ids.append(id); continue }
+                if let id = try chunkID(key) { ids.append(id); continue }
                 let compressed = try (part as NSData).compressed(using: .lzfse) as Data
                 try update("INSERT INTO chunks(sha,size,data) VALUES(?,?,?)", text: key, size: part.count, bytes: compressed)
                 let id = sqlite3_last_insert_rowid(handle); chunkIDs[key] = id; ids.append(id)
@@ -427,17 +481,19 @@ enum SecretarySessionStorage {
             guard reference.mapSHA256 == nil || reference.mapSHA256 == hash(map) else { throw Failure("Secretary archive chunk inventory checksum mismatch.") }
             let ids = try JSONDecoder().decode([Int64].self, from: map)
             var result = Data(); result.reserveCapacity(reference.bytes)
+            let statement = try cached("SELECT sha,size,data FROM chunks WHERE id=?")
+            defer { sqlite3_reset(statement) }
             for id in ids {
-                var part: Data?
-                try query("SELECT sha,size,data FROM chunks WHERE id=\(id)") { row in
-                    let decoded = try (data(row, 2) as NSData).decompressed(using: .lzfse) as Data
-                    guard decoded.count == Int(sqlite3_column_int64(row, 1)), hash(decoded) == text(row, 0) else {
-                        throw Failure("Secretary archive chunk checksum mismatch.")
-                    }
-                    part = decoded
+                sqlite3_reset(statement)
+                sqlite3_bind_int64(statement, 1, id)
+                guard sqlite3_step(statement) == SQLITE_ROW else { throw Failure("Missing secretary archive chunk.") }
+                let decoded = try (data(statement, 2) as NSData).decompressed(using: .lzfse) as Data
+                // Content is checked once for the whole object below (`reference.sha256`);
+                // hashing each of thousands of chunks again doubled a save's verification.
+                guard decoded.count == Int(sqlite3_column_int64(statement, 1)) else {
+                    throw Failure("Secretary archive chunk checksum mismatch.")
                 }
-                guard let part else { throw Failure("Missing secretary archive chunk.") }
-                result.append(part)
+                result.append(decoded)
             }
             guard result.count == reference.bytes, hash(result) == reference.sha256 else {
                 throw Failure("Secretary archive data checksum mismatch.")

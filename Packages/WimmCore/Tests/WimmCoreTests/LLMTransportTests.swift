@@ -22,7 +22,21 @@ final class LLMTransportTests: XCTestCase {
         XCTAssertEqual(request.httpMethod, "POST")
         XCTAssertEqual(request.timeoutInterval, 12.5)
         XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
-        XCTAssertEqual(request.url?.absoluteString, "https://generativelanguage.googleapis.com/v1beta/models/gemini-test:generateContent?key=test-key")
+        XCTAssertEqual(request.url?.absoluteString, "https://generativelanguage.googleapis.com/v1beta/models/gemini-test:generateContent")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-goog-api-key"), "test-key")
+    }
+
+    func testMakeGeminiRequestNeverPutsKeyInURL() async throws {
+        let transport = try XCTUnwrap(transport)
+        let key = "AIzaTestOnlyNotARealKey000000000"
+        let request = try await transport.makeGeminiRequest(
+            model: "gemini-test", timeout: 5, apiKey: key, endpoint: "streamGenerateContent")
+
+        let url = try XCTUnwrap(request.url?.absoluteString)
+        XCTAssertFalse(url.contains(key))
+        XCTAssertFalse(url.contains("key="))
+        XCTAssertNil(URLComponents(string: url)?.queryItems)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "x-goog-api-key"), key)
     }
 
     func testMakeGeminiRequestFallsBackToRotatorWhenKeyMissing() async throws {

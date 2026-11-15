@@ -23,7 +23,15 @@ export MACOSX_DEPLOYMENT_TARGET=14.0
 STARTED=$SECONDS
 mkdir -p "$ROOT_DIR/logs"
 exec > >(tee "$ROOT_DIR/logs/studio_build_log.txt") 2>&1
-APP_DIR="$ROOT_DIR/Wimm Studio.app"
+# Install location: WIMM_STUDIO_APP from the environment, else the same key in
+# the untracked .env (read as a single line, never sourced), else the checkout.
+if [[ -z "${WIMM_STUDIO_APP:-}" && -f "$ROOT_DIR/.env" ]]; then
+  WIMM_STUDIO_APP=$(sed -nE 's/^WIMM_STUDIO_APP=["'\'']?([^"'\'']*)["'\'']?[[:space:]]*$/\1/p' "$ROOT_DIR/.env" | tail -n1)
+fi
+APP_DIR="${WIMM_STUDIO_APP:-$ROOT_DIR/Wimm Studio.app}"
+APP_DIR="${APP_DIR/#\~/$HOME}"
+[[ "$APP_DIR" == *.app ]] || { echo "WIMM_STUDIO_APP must end in .app: $APP_DIR" >&2; exit 2; }
+echo "📦 Studio install target: $APP_DIR"
 BIN="$ROOT_DIR/.build/arm64-apple-macosx/$CONFIG/wimm-studio"
 # Resolve signing before the cache check: a newly available certificate must
 # invalidate a previously ad-hoc package, even when its executable is unchanged.
@@ -55,7 +63,7 @@ BUILD_DONE=$SECONDS
 echo "⏱ Studio build: $((BUILD_DONE - STARTED)) s"
 update_receipt() {
   python3 "$ROOT_DIR/scripts/app_update_cache.py" "$1" \
-    --kind studio --root "$ROOT_DIR" --binary "$BIN"
+    --kind studio --root "$ROOT_DIR" --binary "$BIN" --app "$APP_DIR"
 }
 if update_receipt check; then
   echo '✓ Studio is unchanged; keeping the running app.'

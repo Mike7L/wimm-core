@@ -104,9 +104,14 @@ def input_digest(root, binary, cli, kind='wimm'):
     return hashlib.sha256(json.dumps(metadata, sort_keys=True).encode()).hexdigest()
 
 
-def output_digest(root, kind='wimm'):
-    names = ('Wimm Studio.app',) if kind == 'studio' else ('Wimm.app', 'WimmCLI.app')
-    return digest_paths({name: root / name for name in names})
+def app_paths(root, kind='wimm', app=None):
+    if kind == 'studio':
+        return {'Wimm Studio.app': app or root / 'Wimm Studio.app'}
+    return {name: root / name for name in ('Wimm.app', 'WimmCLI.app')}
+
+
+def output_digest(root, kind='wimm', app=None):
+    return digest_paths(app_paths(root, kind, app))
 
 
 def main():
@@ -116,21 +121,21 @@ def main():
     parser.add_argument('--binary', type=Path, required=True)
     parser.add_argument('--cli', type=Path)
     parser.add_argument('--kind', choices=('wimm', 'studio'), default='wimm')
+    parser.add_argument('--app', type=Path, help='installed Studio bundle (default: <root>/Wimm Studio.app)')
     args = parser.parse_args()
     if args.kind == 'wimm' and args.cli is None:
         parser.error('--cli is required for Wimm')
     receipt = args.root / f'.build/{args.kind}-update-receipt.json'
     try:
         current = {'schema': 1, 'inputs': input_digest(args.root, args.binary, args.cli, args.kind),
-                   'outputs': output_digest(args.root, args.kind)}
+                   'outputs': output_digest(args.root, args.kind, args.app)}
         if args.action == 'check':
             if json.loads(receipt.read_text()) != current:
                 return 1
         # A receipt never substitutes for checking the installed signatures.
-        names = ('Wimm Studio.app',) if args.kind == 'studio' else ('Wimm.app', 'WimmCLI.app')
-        for name in names:
+        for path in app_paths(args.root, args.kind, args.app).values():
             result = subprocess.run(
-                ['codesign', '--verify', '--deep', '--strict', str(args.root / name)],
+                ['codesign', '--verify', '--deep', '--strict', str(path)],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             if result.returncode:
