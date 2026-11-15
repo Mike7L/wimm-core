@@ -3,6 +3,7 @@ import Foundation
 import AVFoundation
 import Combine
 import WimmDomain
+import WimmInfrastructure
 
 /// Reliable wrapper around IOSAudioRecorder that auto-saves metadata during recording.
 /// Ensures that transcriptions and metadata are persisted to disk every 5 seconds,
@@ -146,10 +147,11 @@ class ReliableRecorder: ObservableObject {
         
         // 4. Save final metadata for this segment with isComplete=true
         if let url = finalizedURL {
+            let duration = await Self.savedDuration(clock: accumulatedDuration, url: url)
             let metadata = RecordingMetadata(
                 recordingURL: url,
                 transcription: finalTranscription,
-                duration: accumulatedDuration,
+                duration: duration,
                 timestamp: recordingStartTime ?? Date(),
                 isComplete: true,
                 lastSaved: Date()
@@ -195,8 +197,12 @@ class ReliableRecorder: ObservableObject {
         await baseRecorder.stopRecording()
         BatteryProbe.shared.recordingStopped()
 
-        // Save final metadata with isComplete=true
-        await saveMetadataSnapshot(isComplete: true)
+        // Save final metadata with isComplete=true, stating what the file holds
+        var finalDuration: TimeInterval?
+        if let url = currentRecordingURL {
+            finalDuration = await Self.savedDuration(clock: accumulatedDuration, url: url)
+        }
+        await saveMetadataSnapshot(isComplete: true, duration: finalDuration)
         
         // Update state
         isRecording = false
@@ -225,7 +231,8 @@ class ReliableRecorder: ObservableObject {
     
     /// Saves a snapshot of current recording metadata to disk
     /// - Parameter isComplete: Whether this is the final save (recording complete)
-    private func saveMetadataSnapshot(isComplete: Bool = false) async {
+    /// - Parameter finalDuration: the reconciled duration of a finished file
+    private func saveMetadataSnapshot(isComplete: Bool = false, duration finalDuration: TimeInterval? = nil) async {
         guard let recordingURL = currentRecordingURL else { return }
         
         isSaving = true
@@ -233,7 +240,9 @@ class ReliableRecorder: ObservableObject {
         
         // Calculate duration
         let duration: TimeInterval
-        if isPaused {
+        if let finalDuration {
+            duration = finalDuration
+        } else if isPaused {
             duration = accumulatedDuration
         } else if let lastResume = lastResumeTime {
             duration = accumulatedDuration + Date().timeIntervalSince(lastResume)
@@ -261,6 +270,16 @@ class ReliableRecorder: ObservableObject {
         }
     }
     
+    /// The finalized file's length, not the clock's: an old build kept counting
+    /// after the file stopped growing and promised minutes that were never saved.
+    private static func savedDuration(clock: TimeInterval, url: URL) async -> TimeInterval {
+        let verdict = RecordedDuration.reconcile(clock: clock, file: await RecordedDuration.fileSeconds(of: url))
+        if verdict.unsavedSeconds > 0 {
+            log("[IOSRecording] file holds \(Int(verdict.seconds)) s of \(Int(clock)) s recorded; \(Int(verdict.unsavedSeconds)) s were not saved (\(url.lastPathComponent))")
+        }
+        return verdict.seconds
+    }
+
     // MARK: - Cleanup
     
     deinit {
