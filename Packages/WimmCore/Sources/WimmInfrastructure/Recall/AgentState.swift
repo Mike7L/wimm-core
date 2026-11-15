@@ -96,6 +96,20 @@ public struct AgentMarkStore: Sendable {
         }
     }
 
+    /// Clears each mark only while it still equals the expected one (no other
+    /// process re-marked it since it was read); returns the files cleared.
+    @discardableResult
+    public func clear(ifUnchanged expected: [String: Mark]) throws -> [String] {
+        var cleared: [String] = []
+        try mutate { doc in
+            for (file, mark) in expected where doc.marks[file] == mark {
+                doc.marks[file] = nil
+                cleared.append(file)
+            }
+        }
+        return cleared.sorted()
+    }
+
     public func setPass(_ pass: PassBoundary) throws {
         try mutate { $0.pass = pass }
     }
