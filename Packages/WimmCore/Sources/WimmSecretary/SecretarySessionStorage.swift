@@ -3,7 +3,6 @@ import Darwin
 import Foundation
 import SQLite3
 import os
-import WimmInfrastructure // TMP-PROFILE
 
 /// File-session state is immutable evidence between saves. Keep a small atomic manifest
 /// at the legacy path, with shared, compressed binary data in a transactional store.
@@ -91,12 +90,9 @@ enum SecretarySessionStorage {
         let root = directory(for: session)
         try FileManager.default.createDirectory(at: session.deletingLastPathComponent(), withIntermediateDirectories: true)
         try locked(root) {
-            let sc = TmpStageClock("save")
             let database = try Database(root: root, create: true)
-            sc.mark("open")
             let original = try canonical(state)
             let stateHash = hash(original)
-            sc.mark("canonical+hash")
             try database.execute("BEGIN IMMEDIATE")
             do {
                 let references = OSAllocatedUnfairLock(initialState: Set<String>())
@@ -107,7 +103,6 @@ enum SecretarySessionStorage {
                     try reference.encode(to: encoder)
                 }
                 let payload = try compactEncoder.encode(state)
-                sc.mark("store")
                 let report = state.report.flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
                 let bookkeeping = report?["bookkeeping"] as? [String: Any]
                 let manifest = Manifest(storage: format, payload: payload, payloadSHA256: hash(payload),
@@ -118,16 +113,13 @@ enum SecretarySessionStorage {
                         storedSources: bookkeeping?["storedSources"] as? [String] ?? report?["stored_sources"] as? [String]))
                 // Reconstruct and verify before an old full JSON can be replaced.
                 _ = try decode(manifest, database: database)
-                sc.mark("verify")
                 try database.execute("COMMIT")
-                sc.mark("commit")
                 // Chunks are durable before this atomic publication. A crash leaves
                 // either the old manifest or the new manifest; both remain readable.
                 try encoder().encode(manifest).write(to: session, options: .atomic)
                 do {
                     try checkpoints(state, original: original, hash: stateHash, root: root)
                     try collectIfDue(sessions: session.deletingLastPathComponent(), root: root, database: database)
-                    sc.mark("manifest+maintenance")
                 } catch {
                     NSLog("Secretary archive maintenance failed; verified session remains available: %@", error.localizedDescription)
                 }

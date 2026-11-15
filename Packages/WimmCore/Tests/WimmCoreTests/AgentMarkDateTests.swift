@@ -26,7 +26,7 @@ final class AgentMarkDateTests: XCTestCase {
         let date = Date(timeIntervalSince1970: 1_763_175_413)
         try store.update(["a.txt": .init(status: .applied, source: "S1", markedAt: date, noteId: "n", text: "t", analysis: "a")])
         XCTAssertEqual(store.mark(forFile: "a.txt")?.markedAt, date)
-        let json = #"{"schema":"AgentState@v1","marks":{"b.txt":{"status":"noise","markedAt":"2025-11-15T04:16:53+01:00","noteId":"n","text":"t","analysis":"a"}}}"#
+        let json = #"{"schema":"AgentState@v1","marks":{"b.txt":{"status":"noise","markedAt":"2025-11-15T03:56:53+01:00","noteId":"n","text":"t","analysis":"a"}}}"#
         try Data(json.utf8).write(to: directory.appendingPathComponent("marks.json"))
         XCTAssertEqual(AgentMarkStore(directory: directory).mark(forFile: "b.txt")?.markedAt, date)
     }

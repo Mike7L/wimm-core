@@ -71,6 +71,15 @@ final class SecretaryRecallCacheTests: XCTestCase {
         XCTAssertEqual(result.count, 2); XCTAssertFalse(restored); XCTAssertEqual(rebuilt, 2)
     }
 
+    func testListingFingerprintSurvivesTheJSONHeaderForAnyHash() throws {
+        // Half of all hash sums exceed Int64.max; the header must still decode them.
+        for seed in 0..<64 {
+            let listing = LibraryRecallSource.DirectoryFingerprint(["/a/\(seed)": Date(timeIntervalSince1970: Double(seed))])
+            let decoded = try JSONDecoder().decode(LibraryRecallSource.DirectoryFingerprint.self, from: JSONEncoder().encode(listing))
+            XCTAssertEqual(decoded, listing)
+        }
+    }
+
     func testTruncatedRecordRebuildsFromCanonicalFiles() async throws {
         _ = await loader().load()
         let file = cache.appendingPathComponent(LibraryRecallSource.cacheFileName)

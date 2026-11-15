@@ -76,7 +76,11 @@ struct SecretaryRegistry {
 
     /// `S<n>` → n, within `Int` and below `Int.max` so the next id still fits.
     static func number(_ id: String) -> Int? {
-        guard id.range(of: #"^S[0-9]+$"#, options: .regularExpression) != nil,
+        // `^S[0-9]+$` byte by byte: a regular expression per row was measurable on ~8k rows.
+        // (`$` also matched before a final newline, which `Int` then rejected anyway.)
+        let digits = id.utf8.dropFirst()
+        guard id.utf8.first == UInt8(ascii: "S"), !digits.isEmpty,
+              digits.allSatisfy({ (UInt8(ascii: "0")...UInt8(ascii: "9")).contains($0) }),
               let number = Int(id.dropFirst()), number < Int.max else { return nil }
         return number
     }

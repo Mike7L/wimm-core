@@ -227,7 +227,6 @@ public enum SecretaryPacketFiles {
                                              "unfinished_sources": packet.payload["unfinished_sources"] ?? []])
         // Store before exporting: exported files cannot create or alter a trusted session.
         try save(state, marks: marks)
-        TmpStageClock("files").mark("save_state(after state build)")
         do {
             let result = try export(&state, marks: marks, timing: timing, stored: true)
             timing.checkpoint("export")
@@ -456,7 +455,6 @@ public enum SecretaryPacketFiles {
                                stored: Bool = false) throws -> Data {
         let packet = try state.packet(), directory = packet.task.workspace.runDirectory(state.id).appendingPathComponent("export")
         try FileManager.default.createDirectory(at: directory.appendingPathComponent("sources"), withIntermediateDirectories: true)
-        let clk = TmpStageClock("export")
         try Data(masked(String(decoding: state.input, as: UTF8.self)).utf8).write(to: directory.appendingPathComponent("input.json"), options: .atomic)
         timing?.count("export_files_written", 1)
         if changedSources == nil {
@@ -477,7 +475,6 @@ public enum SecretaryPacketFiles {
             }
         }
         // Pages reflect the current packet, so rewrite them on any export.
-        clk.mark("files")
         let pages = try packetPages(state)
         for (index, page) in pages.enumerated() {
             try Data(masked(page).utf8).write(to: directory.appendingPathComponent(pageName(index + 1)), options: .atomic)
@@ -487,7 +484,6 @@ public enum SecretaryPacketFiles {
             try FileManager.default.removeItem(at: directory.appendingPathComponent(stale))
         }
         timing?.count("packet_pages_written", pages.count)
-        clk.mark("pages")
         let result = try manifest(state, pageCount: pages.count)
         try result.write(to: directory.appendingPathComponent("manifest.json"), options: .atomic)
         timing?.count("export_files_written", 1)

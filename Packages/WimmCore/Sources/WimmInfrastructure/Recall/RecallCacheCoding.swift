@@ -144,19 +144,6 @@ extension RecallLibrary.Layout {
                     foldedSummary: try input.int(), foldedBody: try input.int())
     }
 }
-// TEMPORARY profiling aid; remove before finishing.
-public final class TmpStageClock: @unchecked Sendable {
-    public static let enabled = ProcessInfo.processInfo.environment["WIMM_SECRETARY_PROFILE"] == "1"
-    private var last = DispatchTime.now().uptimeNanoseconds
-    private let label: String
-    public init(_ label: String) { self.label = label }
-    public func mark(_ name: String) {
-        guard Self.enabled else { return }
-        let now = DispatchTime.now().uptimeNanoseconds
-        FileHandle.standardError.write(Data("STAGE \(label).\(name) \(Double(now - last) / 1e6) ms\n".utf8))
-        last = now
-    }
-}
 
 extension RecallLibrary {
     /// A library over buffers whose bytes are the notes' fields back to back in

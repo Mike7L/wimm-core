@@ -73,7 +73,6 @@ struct SecretaryPacket {
         guard sourceByteLimit > 0 else { throw Failure("Packet source budget must be positive.") }
         guard !PrivateMode.isEnabled else { throw SecretaryError.privateMode }
         guard task.kind == .pass, task.threads.isEmpty else { throw Failure("Packet passes require no open comment threads; use the regular agent workflow for comments.") }
-        let clk = TmpStageClock("packet")
         let root = task.workspace.root
         let policyURL = root.appendingPathComponent(FileManager.default.fileExists(atPath: root.appendingPathComponent(editsPolicyPath).path) ? editsPolicyPath : "secretary/protocol/packet.md")
         let policy = try String(contentsOf: policyURL, encoding: .utf8)
@@ -82,7 +81,6 @@ struct SecretaryPacket {
         let registryData = try Data(contentsOf: registryURL)
         let registry = try SecretaryRegistry.parse(registryData)
         try registry.checkCounts()
-        clk.mark("registry")
         let sources = registry.rows
         let sampleRows = sources.filter { ($0["source_id"] as? String).map(sampleSourceIDs.contains) == true }
         let sampleFiles = Set(sampleRows.compactMap { $0["note_file"] as? String })
@@ -90,9 +88,7 @@ struct SecretaryPacket {
             throw Failure("Sample IDs must identify distinct registry notes with a media file.")
         }
         let known = marks.marks(), since = marks.pass()?.asOf ?? .distantPast
-        clk.mark("marks")
         let snapshots = library.fingerprintSnapshotsByPath()
-        clk.mark("snapshots")
         let changed = NoteRecall.changed(library, since: sampleSourceIDs.isEmpty ? since : nil,
                                          limit: sampleSourceIDs.isEmpty ? Int.max : sampleSourceIDs.count, newestFirst: true) { path in
             if !sampleSourceIDs.isEmpty { return sampleFiles.contains(URL(fileURLWithPath: path).lastPathComponent) }
@@ -105,18 +101,17 @@ struct SecretaryPacket {
                 && !Set(NoteChangeKind.kinds(forRecordingURL: url, since: since)).isDisjoint(with: [.transcript, .edited])
         }
         // Registry rows by resolved sidecar path, built once: resolving every
-        clk.mark("changed")
         // row's path per note cost O(notes × registry) file-system calls (~25 s).
         let documentDirectory = task.workspace.document.deletingLastPathComponent()
         var rowsBySidecar: [String: [[String: Any]]] = [:]
         var resolver = SecretaryPathResolver()
+        let documentDirectoryPath = documentDirectory.path
         for row in sources {
             guard let raw = row["path"] as? String,
                   let path = raw.utf8.contains(UInt8(ascii: "%")) ? raw.removingPercentEncoding : raw else { continue }
-            rowsBySidecar[resolver.resolve(path, relativeTo: documentDirectory), default: []].append(row)
+            rowsBySidecar[resolver.resolve(path, relativeTo: documentDirectoryPath), default: []].append(row)
         }
         let server = MCPRecallServer(marks: marks, library: { library })
-        clk.mark("rowsBySidecar")
         var noteObjects: [[String: Any]] = [], receipts: [SecretaryReadReceipt] = [], newSources: [[String: Any]] = []
         var fullSourcesByID: [String: String] = [:]
         var selected: [String] = [], projectedSourceIDs: [String] = [], bytes = 0
@@ -141,7 +136,6 @@ struct SecretaryPacket {
         }, by: { $0["note_file"] as? String ?? "" })
         var pool = SecretaryEvidencePool(), routing: [String] = []
         var number = sources.compactMap { ($0["source_id"] as? String).flatMap { Int($0.dropFirst()) } }.max() ?? 0
-        clk.mark("waiting_skipped_held")
         for note in changed.notes {
             if let maxSources, selected.count >= maxSources { break }
             let candidateSidecar = FileStore.metadataURL(forRecordingURL: URL(fileURLWithPath: note.filePath)).resolvingSymlinksInPath()
@@ -313,12 +307,10 @@ struct SecretaryPacket {
         }
         let documentData = try Data(contentsOf: task.workspace.document)
         let blocks = Self.blocks(String(decoding: documentData, as: UTF8.self))
-        clk.mark("notes_loop_and_blocks")
         let text = editorBundle ? routing.joined(separator: "\n") : noteObjects.map { $0["full_text"] as! String }.joined(separator: "\n")
         let ownTerms = editorBundle ? [] : noteObjects.map { evidenceTerms($0["full_text"] as! String) }
         let supplied = select(blocks: blocks, sourceIDs: selected, terms: terms(text), limit: documentByteLimit,
                               excluding: [], sourceTerms: ownTerms).sorted { $0.start < $1.start }
-        clk.mark("select")
         let queueURL = root.appendingPathComponent("secretary/review_queue.md")
         let queue = (try? Data(contentsOf: queueURL)) ?? Data()
         let openQueue = Self.openQuestions(String(decoding: queue, as: UTF8.self))
@@ -437,31 +429,57 @@ struct SecretaryPacket {
         return regex.firstMatch(in: queue, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range) } ?? queue
     }
     static func terms(_ text: String) -> Set<String> {
+        if let terms = simpleTerms(text) { return terms }
         let stop = stopTerms
         return Set(text.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count >= 4 && !stop.contains($0) })
     }
-    /// `Set(terms(block.text).map(stem))` per block. Large blocks (the citation definitions at
-    /// a document's end run to hundreds of KB) are cut at newlines, which are never part of a
-    /// term, so the parts run in parallel and their union is the same set.
-    static func blockTokens(_ blocks: [Block]) -> [Set<String>] {
-        var parts: [(block: Int, text: Substring)] = []
-        for (index, block) in blocks.enumerated() {
-            let text = block.text[...]
-            guard text.utf8.count > 16_384 else { parts.append((index, text)); continue }
-            var start = text.startIndex, length = 0
-            for position in text.indices {
-                length += text[position].utf8.count
-                if length >= 8_192, text[position] == "\n" {
-                    let end = text.index(after: position)
-                    parts.append((index, text[start..<end])); start = end; length = 0
-                }
+
+    /// Scalars that are always a character of their own (none extends or joins a
+    /// neighbour) and whose lower-case form is one scalar of the same kind: ASCII,
+    /// Latin-1, Cyrillic letters and common punctuation. A text made only of these
+    /// splits into the same terms scalar by scalar, without grapheme breaking.
+    private static func isSimpleScalar(_ value: UInt32) -> Bool {
+        value < 0x80 || (0xA0...0xFF).contains(value) && value != 0xAD
+            || (0x400...0x482).contains(value) || (0x48A...0x4FF).contains(value)
+            || (0x2010...0x2027).contains(value) || (0x2030...0x205E).contains(value) || value == 0x2116
+    }
+
+    /// `Character.isLetter || isNumber` per simple scalar, computed by those same properties.
+    private static let wordScalars: [Bool] = (0...0x2116).map { value in
+        guard isSimpleScalar(UInt32(value)), let scalar = Unicode.Scalar(UInt32(value)) else { return false }
+        let character = Character(scalar)
+        return character.isLetter || character.isNumber
+    }
+
+    /// `terms(text)` for a text of simple scalars only; nil otherwise.
+    private static func simpleTerms(_ text: String) -> Set<String>? {
+        let scalars = text.unicodeScalars, word = wordScalars, stop = stopTerms
+        var out = Set<String>()
+        var start: String.Index?, length = 0
+        func finish(_ end: String.Index) {
+            if let begin = start, length >= 4 {
+                let term = String(text[begin..<end]).lowercased()
+                if !stop.contains(term) { out.insert(term) }
             }
-            if start < text.endIndex || parts.last?.block != index { parts.append((index, text[start...])) }
+            start = nil; length = 0
         }
-        let sets = SecretaryParallel.map(parts) { Set(Self.terms(String($0.text)).map(stem)) }
-        var out = [Set<String>](repeating: [], count: blocks.count)
-        for (part, set) in zip(parts, sets) { out[part.block].formUnion(set) }
+        var index = scalars.startIndex
+        while index < scalars.endIndex {
+            let value = scalars[index].value
+            guard isSimpleScalar(value) else { return nil }
+            if word[Int(value)] {
+                if start == nil { start = index }
+                length += 1
+            } else { finish(index) }
+            index = scalars.index(after: index)
+        }
+        finish(scalars.endIndex)
         return out
+    }
+
+    /// `Set(terms(block.text).map(stem))` per block.
+    static func blockTokens(_ blocks: [Block]) -> [Set<String>] {
+        blocks.map { Set(terms($0.text).map(stem)) }
     }
     /// Russian inflects; the first five letters match "Марина/Марину", "балет/балета".
     static func stem(_ word: String) -> String { String(word.prefix(5)) }
@@ -495,12 +513,9 @@ struct SecretaryPacket {
         if !phrases.isEmpty {
             return contextSelection(blocks: blocks, requests: phrases, existing: excluding, limit: limit).blocks
         }
-        let sc = TmpStageClock("select")
         var frequency: [String: Int] = [:]
         let tokens = Self.blockTokens(blocks)
-        sc.mark("tokens")
         for words in tokens { for word in words { frequency[word, default: 0] += 1 } }
-        sc.mark("frequency")
         // Repeated boilerplate is a poor retrieval signal. This is a local
         // document-frequency count, rebuilt per packet, never a stored index.
         func uncommon(_ words: Set<String>) -> Set<String> {
@@ -519,7 +534,6 @@ struct SecretaryPacket {
             for word in words { for index in postings[word] ?? [] { out[index, default: []].append(word) } }
             return out
         }
-        sc.mark("definitions+postings")
         let pooled = uncommon(terms)
         let pooledHits = hits(pooled)
         // Hits per length: a long block should not win merely by containing more words.
@@ -532,32 +546,39 @@ struct SecretaryPacket {
         /// Lower-casing never adds or removes brackets, so only that text is lower-cased.
         func cites(_ text: String) -> Bool {
             guard bracketFree else { return sourceIDs.contains { text.lowercased().contains("[\($0.lowercased())]") } }
-            guard !citedIDs.isEmpty, text.utf8.contains(UInt8(ascii: "[")) else { return false }
+            guard !citedIDs.isEmpty else { return false }
+            // `[` and `]` are ASCII, so their bytes are never inside another character.
+            let utf8 = text.utf8
             var open: String.Index?
-            for index in text.indices {
-                switch text[index] {
-                case "[": open = index
-                case "]":
-                    if let start = open, citedIDs.contains(String(text[text.index(after: start)..<index]).lowercased()) { return true }
+            var index = utf8.startIndex
+            while let found = utf8[index...].firstIndex(where: { $0 == 0x5B || $0 == 0x5D }) {
+                if utf8[found] == 0x5B { open = found } else {
+                    if let start = open, citedIDs.contains(String(text[utf8.index(after: start)..<found]).lowercased()) { return true }
                     open = nil
-                default: break
                 }
+                index = utf8.index(after: found)
             }
             return false
+        }
+        var requiredSections: [String: Bool] = [:]
+        func requiredSection(_ name: String) -> Bool {
+            if let known = requiredSections[name] { return known }
+            let section = name.lowercased()
+            let value = ["вопросы и наблюдения", "основания", "последняя известная картина"].contains { section.contains($0) }
+            requiredSections[name] = value
+            return value
         }
         var ranked: [(Int, Int)] = []
         for index in candidates {
             let block = blocks[index]
             let cites = cites(block.text)
             let startScore = index < 8 ? 200 : 0
-            let section = block.section.lowercased()
-            let required = ["вопросы и наблюдения", "основания", "последняя известная картина"].contains { section.contains($0) }
+            let required = requiredSection(block.section)
             let requiredScore = required ? 190 : 0
             let citationScore = cites ? 600 : 0
             let score = startScore + requiredScore + citationScore + min(50, Int((density(index) * 10).rounded()))
             if score > 0 { ranked.append((index, score)) }
         }
-        sc.mark("ranked")
         ranked.sort { $0.1 == $1.1 ? $0.0 < $1.0 : $0.1 > $1.1 }
         // Up to two blocks per source whose shared rare words weigh about two distinctive words
         // (≈ 8 on a 560-block document), taken round by round so every source gets its best first.
@@ -578,7 +599,6 @@ struct SecretaryPacket {
         let start = ranked.filter { $0.1 >= 200 && $0.1 < 600 && $0.0 < 8 }.map(\.0)
         let order = tier(600..<Int.max) + start + round(0)
             + ranked.filter { $0.1 >= 190 && $0.1 < 600 && $0.0 >= 8 }.map(\.0) + round(1) + tier(0..<190)
-        sc.mark("perSource")
         var chosen = Set<Int>(), bytes = 0
         for index in order {
             // Do not spend the last bytes on a neighbour before the match.

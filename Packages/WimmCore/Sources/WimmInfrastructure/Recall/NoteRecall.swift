@@ -916,17 +916,22 @@ public actor LibraryRecallSource {
     /// Stable across processes (unlike `hashValue`), so the disk cache keeps
     /// it and a restored library skips the full `FileRepository` listing.
     struct DirectoryFingerprint: Equatable, Codable {
+        // Signed so the JSON cache header round-trips them (`JSONDecoder` rejects
+        // integers above `Int64.max`); the sums are bit patterns, not quantities.
         var count = 0
-        var names: UInt64 = 0
-        var entries: UInt64 = 0
+        var names = 0
+        var entries = 0
 
         init(_ mtimes: [String: Date]) {
             count = mtimes.count
+            var names: UInt64 = 0, entries: UInt64 = 0
             for (path, date) in mtimes {
                 let name = Self.stableHash(path)
                 names &+= name
                 entries &+= Self.mix(name ^ date.timeIntervalSinceReferenceDate.bitPattern)
             }
+            self.names = Int(truncatingIfNeeded: names)
+            self.entries = Int(truncatingIfNeeded: entries)
         }
 
         /// FNV-1a over the UTF-8 path, then a SplitMix64 finalizer.
@@ -958,12 +963,10 @@ public actor LibraryRecallSource {
     }
 
     private func reload() async -> RecallLibrary {
-        let clk = TmpStageClock("library")
         if !cacheAttempted {
             cacheAttempted = true
             restoreCache()
         }
-        clk.mark("restore")
         rebuiltNoteCount = 0
         // One listing with mtimes per directory answers "did anything
         // change?". The note listing and per-note stamps behind it cost
@@ -973,7 +976,6 @@ public actor LibraryRecallSource {
         var listed: [String: NoteFingerprintSnapshot.Stamp]? = includeFingerprints ? [:] : nil
         let mtimes = Self.modificationDates(in: Self.libraryDirectories(), stamps: &listed)
         let current = DirectoryFingerprint(mtimes)
-        clk.mark("mtimes")
         if !known.isEmpty, current == snapshot, !includeFingerprints { return library }
         let paths: [String]
         if !known.isEmpty, current.count == snapshot?.count, current.names == snapshot?.names {
@@ -986,7 +988,6 @@ public actor LibraryRecallSource {
         }
         snapshot = current
 
-        clk.mark("paths")
         let previousIndex = known.index()
         var stamps: [Stamp] = []
         stamps.reserveCapacity(paths.count)
@@ -1013,7 +1014,6 @@ public actor LibraryRecallSource {
             }
         }
         if stale.isEmpty && previousIndex.count == paths.count { return library }
-        clk.mark("stamps")
 
         let keptRaw = kept.reduce(0) { $0 + library.rawByteCount(of: $1.slot) }
         let keptFolded = kept.reduce(0) { $0 + library.foldedByteCount(of: $1.slot) }
@@ -1087,10 +1087,8 @@ public actor LibraryRecallSource {
     private func restoreCache() {
         guard let cacheDirectory else { return }
         do {
-            let rc = TmpStageClock("restore")
             let file = cacheDirectory.appendingPathComponent(Self.cacheFileName)
             let data = try Data(contentsOf: file, options: .mappedIfSafe)
-            rc.mark("map")
             guard let newline = data.firstIndex(of: 10) else { return }
             let header = try JSONDecoder().decode(CacheHeader.self, from: data.prefix(upTo: newline))
             guard header.version == Self.cacheVersion, header.base == StoragePaths.baseDirectory().path,
@@ -1109,7 +1107,6 @@ public actor LibraryRecallSource {
                 for _ in 0..<count { layouts.append(try .read(&input)) }
                 return (known, layouts, rawBytes, foldedBytes, input.offset)
             }
-            rc.mark("index")
             guard let (known, layouts, rawBytes, foldedBytes, textStart) = index,
                   rawBytes <= data.count - textStart, foldedBytes == data.count - textStart - rawBytes else { return }
             let descriptor = open(file.path, O_RDONLY)
@@ -1118,12 +1115,10 @@ public actor LibraryRecallSource {
             guard let raw = Self.read(descriptor, offset: textStart, count: rawBytes),
                   let folded = Self.read(descriptor, offset: textStart + rawBytes, count: foldedBytes),
                   let built = RecallLibrary(raw: raw, folded: folded, layouts: layouts) else { return }
-            rc.mark("read+build")
             for i in 0..<known.count {
                 let slot = known.slots[i]
                 guard slot == -1 || (slot >= 0 && slot < built.count && built.string(built.entries[slot].path) == known.path(i)) else { return }
             }
-            rc.mark("verify")
             self.known = known; library = built; snapshot = header.listing; restoredFromDisk = true
         } catch { /* Rebuild from canonical files; a cache never authorizes evidence. */ }
     }

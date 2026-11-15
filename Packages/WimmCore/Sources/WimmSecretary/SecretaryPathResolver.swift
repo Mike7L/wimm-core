@@ -11,41 +11,66 @@ struct SecretaryPathResolver {
     private var relativeBase: String?
     /// Relative folder (`../recordings`) → resolved folder, for `relativeBase`.
     private var relativeFolders: [String: String] = [:]
+    /// Resolved folder → names in it that are not symbolic links (`nil`: unlistable).
+    private var plainNames: [String: Set<String>?] = [:]
 
     /// `relativeTo` + `path`, standardized and with symbolic links resolved.
     mutating func resolve(_ path: String, relativeTo base: URL) -> String {
-        let basePath = base.path
+        resolve(path, relativeTo: base.path)
+    }
+
+    mutating func resolve(_ path: String, relativeTo basePath: String) -> String {
         if relativeBase != basePath { relativeBase = basePath; relativeFolders = [:] }
+        let utf8 = path.utf8, slash = UInt8(ascii: "/")
+        func full() -> String { URL(fileURLWithPath: basePath + "/" + path).standardizedFileURL.resolvingSymlinksInPath().path }
+        guard utf8.first != slash, utf8.last != slash, !Self.hasDoubleSlash(utf8) else { return full() }
         let name: String, folder: String
-        if let slash = path.utf8.lastIndex(of: UInt8(ascii: "/")), !path.contains("//") {
+        if let last = utf8.lastIndex(of: slash) {
             // What NSString's path methods return for a path without doubled or trailing slashes.
-            name = String(path[path.index(after: slash)...]); folder = String(path[..<slash])
-        } else if !path.contains("/") {
-            name = path; folder = ""
-        } else {
-            let ns = path as NSString
-            name = ns.lastPathComponent; folder = ns.deletingLastPathComponent
-        }
-        guard !path.hasPrefix("/"), !path.hasSuffix("/"), !name.isEmpty, name != ".", name != ".." else {
-            return resolve(absolute: basePath + "/" + path, standardize: true)
-        }
+            name = String(path[utf8.index(after: last)...]); folder = String(path[..<last])
+        } else { name = path; folder = "" }
+        guard !name.isEmpty, name != ".", name != ".." else { return full() }
         let resolvedFolder: String
         if let known = relativeFolders[folder] { resolvedFolder = known } else {
-            // The same folder resolution `resolve(absolute:)` makes for this path.
+            // The same folder resolution the per-path call makes for this path.
             resolvedFolder = URL(fileURLWithPath: (basePath + "/" + path as NSString).deletingLastPathComponent)
                 .standardizedFileURL.resolvingSymlinksInPath().path
             relativeFolders[folder] = resolvedFolder
         }
-        return Self.existingPlainFile(in: resolvedFolder, name: name)
-            ?? URL(fileURLWithPath: basePath + "/" + path).standardizedFileURL.resolvingSymlinksInPath().path
+        return plainFile(in: resolvedFolder, name: name) ?? full()
     }
 
-    /// The path when `name` exists in `folder` and is not a symbolic link.
-    private static func existingPlainFile(in folder: String, name: String) -> String? {
+    private static func hasDoubleSlash(_ utf8: String.UTF8View) -> Bool {
+        var previous: UInt8 = 0
+        for byte in utf8 { if byte == 0x2F, previous == 0x2F { return true }; previous = byte }
+        return false
+    }
+
+    /// The path when `name` exists in `folder` and is not a symbolic link. One
+    /// directory listing per folder answers what an `lstat` per row did.
+    private mutating func plainFile(in folder: String, name: String) -> String? {
         let candidate = (folder == "/" ? "" : folder) + "/" + name
+        if plainNames[folder] == nil { plainNames[folder] = Self.listPlainNames(folder) }
+        if let names = plainNames[folder]!, names.contains(name) { return candidate }
+        // Not listed (new since, or an unknown entry type): ask the file system directly.
         var info = stat()
         guard lstat(candidate, &info) == 0, (info.st_mode & S_IFMT) != S_IFLNK else { return nil }
         return candidate
+    }
+
+    private static func listPlainNames(_ folder: String) -> Set<String>? {
+        guard let directory = opendir(folder) else { return nil }
+        defer { closedir(directory) }
+        var names = Set<String>()
+        while let entry = readdir(directory) {
+            // DT_UNKNOWN and links stay out; `plainFile` checks those with `lstat`.
+            guard entry.pointee.d_type != UInt8(DT_LNK), entry.pointee.d_type != UInt8(DT_UNKNOWN) else { continue }
+            let name = withUnsafePointer(to: entry.pointee.d_name) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(entry.pointee.d_namlen) + 1) { String(cString: $0) }
+            }
+            names.insert(name)
+        }
+        return names
     }
 
     /// `URL(fileURLWithPath: path)` (`standardizedFileURL` first when `standardize`) `.resolvingSymlinksInPath().path`.
@@ -62,35 +87,6 @@ struct SecretaryPathResolver {
         if let known = folders[folder] { resolvedFolder = known } else {
             resolvedFolder = full(folder); folders[folder] = resolvedFolder
         }
-        return Self.existingPlainFile(in: resolvedFolder, name: name) ?? full(path)
+        return plainFile(in: resolvedFolder, name: name) ?? full(path)
     }
-}
-
-/// Order-preserving map over all cores for pure per-element work (block terms of
-/// a large document). Same results as `map`, in the same order.
-enum SecretaryParallel {
-    private final class Slots<T>: @unchecked Sendable {
-        var values: [T?]
-        init(_ count: Int) { values = Array(repeating: nil, count: count) }
-    }
-
-    static func map<T, U>(_ items: [T], minimumPerTask: Int = 256, _ transform: (T) -> U) -> [U] {
-        let tasks = min(ProcessInfo.processInfo.activeProcessorCount, items.count / max(1, minimumPerTask))
-        guard tasks > 1 else { return items.map(transform) }
-        let slots = Slots<U>(items.count)
-        slots.values.withUnsafeMutableBufferPointer { buffer in
-            let out = UnsafeSendableBuffer(buffer)
-            withoutActuallyEscaping(transform) { transform in
-                let work = UnsafeSendableClosure(transform)
-                DispatchQueue.concurrentPerform(iterations: tasks) { task in
-                    let lower = items.count * task / tasks, upper = items.count * (task + 1) / tasks
-                    for index in lower..<upper { out.buffer[index] = work.closure(items[index]) }
-                }
-            }
-        }
-        return slots.values.map { $0! }
-    }
-
-    private struct UnsafeSendableBuffer<U>: @unchecked Sendable { let buffer: UnsafeMutableBufferPointer<U?>; init(_ b: UnsafeMutableBufferPointer<U?>) { buffer = b } }
-    private struct UnsafeSendableClosure<T, U>: @unchecked Sendable { let closure: (T) -> U; init(_ c: @escaping (T) -> U) { closure = c } }
 }

@@ -58,33 +58,6 @@ public enum SecretaryContext {
         return try JSONSerialization.data(withJSONObject: out, options: [.sortedKeys, .withoutEscapingSlashes])
     }
 
-    /// The checks `registry` makes, for a caller that already parsed the file.
-    static func validateRegistry(_ parsed: Any) throws { _ = try validatedRegistry(parsed) }
-
-    private static func validatedRegistry(_ parsed: Any) throws
-        -> (object: [String: Any], sources: [[String: Any]], counts: [String: Int], maximum: Int) {
-        guard let object = parsed as? [String: Any],
-              let sources = object["sources"] as? [[String: Any]] else { throw Failure("Registry has no sources array.") }
-        var ids = Set<String>(), maximum = 0
-        var counts: [String: Int] = [:]
-        for source in sources {
-            guard let id = source["source_id"] as? String,
-                  id.utf8.count > 1, id.utf8.first == UInt8(ascii: "S"),
-                  id.utf8.dropFirst().allSatisfy({ (UInt8(ascii: "0")...UInt8(ascii: "9")).contains($0) }),
-                  let number = Int(id.dropFirst()), number < Int.max, ids.insert(id).inserted,
-                  let status = source["status"] as? String,
-                  ["applied", "duplicate", "noise", "pending", "failed"].contains(status), source["path"] is String else {
-                throw Failure("Invalid/duplicate source in registry.")
-            }
-            maximum = max(maximum, number)
-            counts[status, default: 0] += 1
-        }
-        guard object["source_count"] as? Int == sources.count, object["counts"] as? [String: Int] == counts else {
-            throw Failure("Registry source_count/counts disagree with sources.")
-        }
-        return (object, sources, counts, maximum)
-    }
-
     /// Generated once per managed run. Headings carry line numbers, never hidden body excerpts.
     static func write(task: SecretaryTask, directory: URL) throws {
         var context: [String: Any] = ["document": task.workspace.doc]
