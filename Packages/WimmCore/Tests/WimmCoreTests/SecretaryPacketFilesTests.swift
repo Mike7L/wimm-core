@@ -312,6 +312,11 @@ final class SecretaryPacketFilesTests: XCTestCase {
         coverage: no_speech в тексте пользователя
         """)
         XCTAssertEqual(SecretaryPacketFiles.attention(header), ["перерасшифровка: no_speech", "coverage: ~6 s text for 139 s audio"])
+        let short = SecretaryPacketFiles.headerLines("""
+        audio_file: 186 s saved of 785 s recorded — the file stopped growing early; the rest was never saved
+        --- transcript (parakeet/ultra, 253 words) ---
+        """)
+        XCTAssertEqual(SecretaryPacketFiles.attention(short), ["audio_file: 186 s saved of 785 s recorded"])
     }
 
     func testUtf8PagingReassemblesEveryByteAndNeverAcknowledgesSource() async throws {
