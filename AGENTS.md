@@ -1,7 +1,8 @@
 # Agent Notes
 
 Live rules and traps only. Add a note here only if it is a rule an agent must
-follow; experiment results and design history do not belong in this file.
+follow; experiment results and design history do not belong in this file. The
+reasons behind the rules are in `docs/` (index: `docs/README.md`).
 
 ## Product and apps
 
