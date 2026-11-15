@@ -750,6 +750,36 @@ final class SecretaryPacketTests: XCTestCase {
               edits: edits, questions: [], needsContext: needs, reason: "Причина и следующий шаг")
     }
 
+    /// 2026-11-15: five notes marked `failed` while their transcript was empty got text from a
+    /// parakeet re-run (`changes: transcript`) but never came back into a packet.
+    func testFailedNoteWithNewTranscriptReturnsToThePacket() throws {
+        let audio = root.appendingPathComponent("recordings/retried.m4a")
+        try Data().write(to: audio)
+        let sidecar = FileStore.metadataURL(forRecordingURL: audio)
+        let markedAt = Date().addingTimeInterval(-7200)
+        try FileStore.mutateSidecar(at: sidecar) {
+            $0["recordingId"] = "retried"
+            $0["transcription"] = ["speechStatus": "failed", "transcript": "", "startedAt": ISO8601.string(from: markedAt.addingTimeInterval(-60))]
+            return true
+        }
+        let before = NoteFingerprint.read(forRecordingURL: audio)
+        try store.update(["retried.m4a": .init(status: .failed, source: "S2", markedAt: markedAt, noteId: "retried",
+                                               text: before.text, analysis: before.analysis, wording: before.wording)])
+        try store.setPass(.init(asOf: markedAt, cursor: nil, comment: nil, setAt: markedAt))
+        try writeRegistry(sources: [["source_id": "S2", "path": "../recordings/retried.meta.json", "note_file": "retried.m4a",
+                                     "status": "failed", "reason": "empty transcript"]])
+        try FileStore.mutateSidecar(at: sidecar) {
+            $0["transcription"] = ["speechStatus": "speech", "provider": "parakeet", "model": "parakeet:ultra",
+                                   "transcript": "Начать сначала, идея для бота услуг.",
+                                   "startedAt": ISO8601.string(from: Date())]
+            return true
+        }
+        let notes = RecallLibrary([RecallNote(id: "retried", date: markedAt, kind: "audio", title: nil, summary: nil,
+            text: "Начать сначала, идея для бота услуг.", filePath: audio.path, speech: "speech", updated: Date())])
+        let packet = try SecretaryPacket.prepare(task: task, library: notes, marks: store)
+        XCTAssertEqual(packet.selected, ["S2"])
+    }
+
     func testNoteWithoutTextStaysOutOfThePacket() throws {
         let silent = root.appendingPathComponent("recordings/silent.m4a")
         try Data().write(to: silent)

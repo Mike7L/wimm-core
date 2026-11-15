@@ -7,10 +7,14 @@ import WimmInfrastructure
 public enum SecretaryPacketFiles {
     static let packetOnlyDocumentBudget = 30_000
 
-    static func unreadPendingSourceIDs(_ sources: [[String: Any]], excluding: Set<String> = []) -> Set<String> {
+    /// `retranscribedFailed(note_file)`: a `failed` row whose note got new text since its mark.
+    /// The failure was about the old (empty) text, so its read flag says nothing about the new one.
+    static func unreadPendingSourceIDs(_ sources: [[String: Any]], excluding: Set<String> = [],
+                                       retranscribedFailed: (String) -> Bool = { _ in false }) -> Set<String> {
         Set(sources.compactMap { row in
-            guard row["status"] as? String == "pending",
-                  !SecretaryBookkeeping.flag(row["primary_text_read"]),
+            let status = row["status"] as? String
+            guard status == "pending" && !SecretaryBookkeeping.flag(row["primary_text_read"])
+                    || status == "failed" && (row["note_file"] as? String).map(retranscribedFailed) == true,
                   !SecretaryBookkeeping.flag(row["removed_from_wimm"]),
                   !SecretaryBookkeeping.flag(row["wimm_unindexed"]),
                   let file = row["note_file"] as? String, !file.isEmpty else { return nil }
@@ -19,6 +23,17 @@ public enum SecretaryPacketFiles {
             guard let id = row["source_id"] as? String, !excluding.contains(id) else { return nil }
             return id
         })
+    }
+
+    /// A `failed` mark whose note has a new transcript (or a human edit) after the mark and text that
+    /// differs from it. Unlike noise/applied, a punctuation-only change also counts: the mark recorded
+    /// a failure to read, not a decision about the words.
+    static func retranscribedSinceFailedMark(_ media: URL, marks: AgentMarkStore) -> Bool {
+        guard let mark = marks.mark(forFile: media.lastPathComponent), mark.status == .failed,
+              FileManager.default.fileExists(atPath: media.path) else { return false }
+        let kinds = NoteChangeKind.kinds(forRecordingURL: media, since: mark.markedAt)
+        guard kinds.contains(.transcript) || kinds.contains(.edited) else { return false }
+        return NoteFingerprint.read(forRecordingURL: media).text != mark.text
     }
 
     /// Explicit pending registry entries may be attachments hidden by the grouped journal.
@@ -186,7 +201,11 @@ public enum SecretaryPacketFiles {
         let selectedIDs: Set<String>
         if unreadPending {
             let data = try Data(contentsOf: document.deletingPathExtension().appendingPathExtension("sources.json"))
-            selectedIDs = unreadPendingSourceIDs(try object(data)["sources"] as? [[String: Any]] ?? [], excluding: excludedSourceIDs)
+            let recordings = workspace.root.appendingPathComponent("recordings")
+            selectedIDs = unreadPendingSourceIDs(try object(data)["sources"] as? [[String: Any]] ?? [], excluding: excludedSourceIDs) { file in
+                (file as NSString).lastPathComponent == file
+                    && Self.retranscribedSinceFailedMark(recordings.appendingPathComponent(file), marks: marks)
+            }
             guard !selectedIDs.isEmpty else { throw SecretaryError.nothingToDo }
         } else { selectedIDs = sampleSourceIDs }
         let packetLibrary: RecallLibrary
