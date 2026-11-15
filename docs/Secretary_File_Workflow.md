@@ -115,6 +115,24 @@ they are wall time, not CPU time. `total` in the reply stops before final reply
 serialization/persistence. Process startup, CLI parsing, transmission and external
 editor/model work are outside these measurements.
 
+Session loading and apply bookkeeping (2026-11-15). A `read` or `apply` decodes
+the session once: after taking the run lock it re-reads the session file, and
+identical bytes mean the state decoded before the lock is the current one (the
+state is a pure function of those bytes; every object is checked by hash). The
+chunks of one state are read in a single SQLite read transaction. Bookkeeping
+resolves each directory, receipt sidecar and citation once instead of once per
+source. On an invented library (3,000 notes, 1.7 MB document, 77 sources, 39
+edits, release build): `read` 208–220 → 86 ms, `apply --dry-run` 232 → 150 ms,
+`apply` 1,548 → 1,231 ms wall. Document, registry, `input.json` and
+`result.json` were byte-identical between the two builds; marks differed only
+in `markedAt` and the per-library note IDs. What remains in `apply` is mostly
+the final document check, the session save and the daily checkpoint.
+
+`scripts/bench_secretary_files.py` repeats this kind of measurement: it builds
+an invented library from a fixed seed, runs prepare → read → apply and prints
+wall time and the largest stages. It is not a CI check. `--keep` leaves the
+workspace so two builds can be compared byte for byte.
+
 Each invocation with an available run ID attempts to write a separate diagnostic
 JSON under `AgentState/SecretaryFileSessions/<id>.timings/`. Its total includes
 final state/report persistence and precedes diagnostic persistence itself.

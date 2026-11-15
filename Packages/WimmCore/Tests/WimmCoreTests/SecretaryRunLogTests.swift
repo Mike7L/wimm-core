@@ -82,4 +82,15 @@ final class SecretaryRunLogTests: XCTestCase {
         XCTAssertTrue(SecretaryRunLog.entry(id: a, in: workspace).problems.contains { $0.contains("finding") })
         XCTAssertTrue(SecretaryRunLog.entry(id: b, in: workspace).problems.contains { $0.contains("without error or finding") })
     }
+
+    func testTimingLineNamesTheSlowestStageAndTheModelShare() throws {
+        XCTAssertNil(SecretaryRunLog.timingLine(nil))
+        let line = try XCTUnwrap(SecretaryRunLog.timingLine(["total": 100_000, "model_round_1": 80_000, "model_status": 10_000,
+                                                             "library_load": 6_000, "bookkeeping": 4_000]))
+        XCTAssertEqual(line, "time 1m40s, model wait 90%: model_round_1 1m20s (80%), model_status 10s (10%), library_load 6.0s (6%), bookkeeping 4.0s (4%)")
+        var record = SecretaryRunRecord(id: "x", kind: .pass, doc: "docs/a.md", executor: "claude", threadIDs: [], startedAt: "t")
+        record.timingsMS = ["total": 12.5]
+        let decoded = try JSONDecoder().decode(SecretaryRunRecord.self, from: JSONEncoder().encode(record))
+        XCTAssertEqual(decoded.timingsMS, ["total": 12.5])
+    }
 }

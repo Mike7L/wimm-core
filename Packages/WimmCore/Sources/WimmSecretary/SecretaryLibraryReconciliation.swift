@@ -10,12 +10,23 @@ enum SecretaryLibraryReconciliation {
                          trash: URL = FileStore.trashDirectory()) -> [String: [String: Any]] {
         var updates: [String: [String: Any]] = [:]
         let manager = FileManager.default
+        // Nearly every source lives in one directory: its identity is compared with the
+        // library's once per directory, not once per source.
+        let documentDirectory = task.workspace.document.deletingLastPathComponent()
+        let activeDirectory = active.standardizedFileURL.resolvingSymlinksInPath()
+        var inActive: [String: Bool] = [:]
+        func isActive(_ directory: URL) -> Bool {
+            if let known = inActive[directory.path] { return known }
+            let same = sameDirectory(directory, activeDirectory)
+            inActive[directory.path] = same
+            return same
+        }
         for source in sources {
             if let flag = source["removed_from_wimm"], !(flag is NSNull), (flag as? Bool) != false { continue }
             guard let id = source["source_id"] as? String,
                   let path = (source["path"] as? String)?.removingPercentEncoding else { continue }
-            let url = task.workspace.document.deletingLastPathComponent().appendingPathComponent(path).standardizedFileURL.resolvingSymlinksInPath()
-            guard sameDirectory(url.deletingLastPathComponent(), active.standardizedFileURL.resolvingSymlinksInPath()),
+            let url = documentDirectory.appendingPathComponent(path).standardizedFileURL.resolvingSymlinksInPath()
+            guard isActive(url.deletingLastPathComponent()),
                   !manager.fileExists(atPath: url.path), url.lastPathComponent.hasSuffix(".meta.json") else { continue }
             let stem = String(url.lastPathComponent.dropLast(".meta.json".count))
             if manager.fileExists(atPath: active.appendingPathComponent(stem + ".metadata.json").path) { continue }

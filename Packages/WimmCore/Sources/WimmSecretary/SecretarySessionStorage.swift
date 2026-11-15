@@ -72,17 +72,29 @@ enum SecretarySessionStorage {
     }
 
     static func load(from session: URL) throws -> SecretaryPacketFiles.State {
+        try loadWithFile(from: session).state
+    }
+
+    /// The state and the session file's bytes it was decoded from. The state is a
+    /// pure function of those bytes (every object is addressed and checked by hash),
+    /// so a caller that re-reads identical bytes later — after taking the run lock —
+    /// holds the current state already and need not decode it again.
+    static func loadWithFile(from session: URL) throws -> (state: SecretaryPacketFiles.State, file: Data) {
         let root = directory(for: session)
         return try locked(root, exclusive: false) {
             // Read the manifest inside the same lock as its chunks, so collection
             // cannot remove an old version between these two reads.
             let bytes = try Data(contentsOf: session)
             guard let manifest = try? JSONDecoder().decode(Manifest.self, from: bytes) else {
-                return try JSONDecoder().decode(SecretaryPacketFiles.State.self, from: bytes)
+                return (try JSONDecoder().decode(SecretaryPacketFiles.State.self, from: bytes), bytes)
             }
             guard manifest.storage == format else { throw Failure("Unknown secretary session storage format.") }
             let database = try Database(root: root, create: false)
-            return try decode(manifest, database: database)
+            // One read transaction for the whole state: a document is thousands of
+            // chunks, and each lookup otherwise opens and closes its own.
+            try database.execute("BEGIN")
+            defer { try? database.execute("COMMIT") }
+            return (try decode(manifest, database: database), bytes)
         }
     }
 

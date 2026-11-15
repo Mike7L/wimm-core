@@ -30,6 +30,25 @@ public struct MCPRecallServer: Sendable {
     private let reviewContext: SecretaryCompletion.ReviewContext?
     private let allowedTools: Set<String>?
     private let noteDirectory: @Sendable () -> URL
+    private let extraTools: [ExtraTool]
+    private let extraInstructions: String?
+
+    /// A read tool supplied by a module above this one (the document tools live in
+    /// `WimmSecretary`). It is listed and called like a built-in tool: the same
+    /// `WIMM_MCP_TOOLS` filter and the same private-mode refusal apply before `call`.
+    public struct ExtraTool: @unchecked Sendable {
+        public let name: String
+        let definition: [String: Any]
+        /// JSON object of the call's arguments → the text result; throw `ToolError`.
+        let call: @Sendable (Data) async throws -> String
+
+        public init(name: String, description: String, inputSchema: [String: Any],
+                    call: @escaping @Sendable (Data) async throws -> String) {
+            self.name = name
+            self.definition = ["name": name, "description": description, "inputSchema": inputSchema]
+            self.call = call
+        }
+    }
     public static let toolsEnvironmentKey = "WIMM_MCP_TOOLS"
     public static let readLogEnvironmentKey = "WIMM_SECRETARY_READ_LOG"
 
@@ -53,9 +72,13 @@ public struct MCPRecallServer: Sendable {
         reviewConfiguration: String? = nil,
         allowedTools: Set<String>? = nil,
         noteDirectory: @escaping @Sendable () -> URL = { FileStore.recordingsDirectory() },
+        extraTools: [ExtraTool] = [],
+        extraInstructions: String? = nil,
         library: @escaping @Sendable () async -> RecallLibrary
     ) {
         self.allowedTools = allowedTools
+        self.extraTools = extraTools
+        self.extraInstructions = extraInstructions
         self.noteDirectory = noteDirectory
         self.readLog = readLog
         self.reviewContext = reviewConfiguration.flatMap { try? JSONDecoder().decode(SecretaryCompletion.ReviewContext.self, from: Data($0.utf8)) }
@@ -103,12 +126,12 @@ public struct MCPRecallServer: Sendable {
                 "protocolVersion": params["protocolVersion"] as? String ?? Self.defaultProtocolVersion,
                 "capabilities": ["tools": [String: Any]()],
                 "serverInfo": ["name": Self.serverName, "version": version],
-                "instructions": Self.instructions,
+                "instructions": extraInstructions.map { Self.instructions + "\n\n" + $0 } ?? Self.instructions,
             ]
         case "ping":
             result = [:]
         case "tools/list":
-            result = ["tools": Self.tools(pageLimit: pageLimit).filter { tool in
+            result = ["tools": (Self.tools(pageLimit: pageLimit) + extraTools.map(\.definition)).filter { tool in
                 let name = tool["name"] as? String ?? ""
                 // Capability probes explicitly request the run's tools. Normal
                 // library clients do not see a tool they cannot use.
@@ -540,7 +563,8 @@ public struct MCPRecallServer: Sendable {
                 try marks.setPass(pass)
                 text = "Pass boundary stored: \(describe(pass)). changed_notes with since: \"last_pass\" starts there."
             default:
-                throw ToolError("Unknown tool: \(name)")
+                guard let extra = extraTools.first(where: { $0.name == name }) else { throw ToolError("Unknown tool: \(name)") }
+                text = try await extra.call(try JSONSerialization.data(withJSONObject: arguments))
             }
             return ["content": [["type": "text", "text": text]]]
         } catch {
@@ -1269,9 +1293,9 @@ public struct MCPRecallServer: Sendable {
 
     // MARK: - Argument parsing
 
-    struct ToolError: Error {
-        let message: String
-        init(_ message: String) { self.message = message }
+    public struct ToolError: Error {
+        public let message: String
+        public init(_ message: String) { self.message = message }
     }
 
     private func int(_ value: Any?) -> Int? {

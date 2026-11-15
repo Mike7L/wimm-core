@@ -417,8 +417,22 @@ struct SecretaryPacket {
         let regex = blockRegex
         let ns = text as NSString
         var section = ""
+        // Blocks are cut from the Swift string, not from `ns`: an NSString substring is
+        // UTF-16 behind a message send per character, and every later scan of the block
+        // (terms, lowercasing, search) is several times slower on it. Matches come in
+        // order, so the UTF-16 position is advanced, never recomputed from the start.
+        let units = text.utf16
+        var position = units.startIndex, offset = 0
         return regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).enumerated().map { index, match in
-            let value = ns.substring(with: match.range)
+            let start = units.index(position, offsetBy: match.range.location - offset)
+            let end = units.index(start, offsetBy: match.range.length)
+            position = end; offset = match.range.location + match.range.length
+            let value: String
+            if let lower = start.samePosition(in: text), let upper = end.samePosition(in: text) {
+                value = String(text[lower..<upper])
+            } else {
+                value = ns.substring(with: match.range)
+            }
             if let heading = Self.heading(value) { section = String(heading.line.prefix(200)) }
             return Block(id: "b\(index)", section: section, text: value, start: match.range.location, length: match.range.length)
         }
@@ -624,8 +638,8 @@ struct SecretaryPacket {
     }
 
     static func isDefinition(_ text: String) -> Bool {
-        // Cheap precheck: every match contains "]:".
-        text.contains("]:") && definitionRegex.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length)) != nil
+        // Cheap precheck: every match contains the bytes "]:".
+        containsBytes(text, [0x5D, 0x3A]) && definitionRegex.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length)) != nil
     }
 
     static func contextIDs(_ text: String) -> Set<String> {
@@ -658,13 +672,75 @@ struct SecretaryPacket {
     /// Local document retrieval only. Round-robin across clauses prevents one large topic
     /// from consuming every byte; a heading and its first body block are admitted together.
     static func contextSelection(blocks: [Block], requests: [String], existing: Set<String>, limit: Int) -> ContextSelection {
-        let headings = blocks.map { heading($0.text) }
-        let words = blocks.map { terms($0.text) }
-        let citations = blocks.map { contextIDs($0.text) }
-        var frequency: [String: Int] = [:]
-        for (i, tokens) in words.enumerated() where !isDefinition(blocks[i].text) {
-            for word in tokens { frequency[word, default: 0] += 1 }
+        contextSelection(index: BlockIndex(blocks), requests: requests, existing: existing, limit: limit)
+    }
+
+    /// What the context search needs from every block, independent of the query. A
+    /// long-lived reader (the MCP server) builds it once per document version.
+    struct BlockIndex: Sendable {
+        typealias Heading = (line: String, title: String, depth: Int)
+        let blocks: [Block]
+        let headings: [Heading?]
+        let definitions: [Bool]
+        let words: [Set<String>]
+        let citations: [Set<String>]
+        let lowered: [String]
+        /// Blocks whose literal checks can run on the bytes of `lowered` (`isPlain`).
+        let plain: [Bool]
+        let frequency: [String: Int]
+
+        init(_ blocks: [Block], headings: [Heading?]? = nil, definitions: [Bool]? = nil) {
+            self.blocks = blocks
+            self.headings = headings ?? blocks.map { SecretaryPacket.heading($0.text) }
+            let definitions = definitions ?? blocks.map { SecretaryPacket.isDefinition($0.text) }
+            self.definitions = definitions
+            let words = blocks.map { SecretaryPacket.terms($0.text) }
+            self.words = words
+            citations = blocks.map { SecretaryPacket.contextIDs($0.text) }
+            lowered = blocks.map { $0.text.lowercased() }
+            plain = blocks.map { SecretaryPacket.isPlain($0.text) }
+            var frequency: [String: Int] = [:]
+            for (i, tokens) in words.enumerated() where !definitions[i] {
+                for word in tokens { frequency[word, default: 0] += 1 }
+            }
+            self.frequency = frequency
         }
+    }
+
+    /// Text in which a literal search may compare bytes: every scalar is a character
+    /// of its own, and lowercasing equals case folding and stays in the set — ASCII
+    /// without CR (CR LF is one character), Latin-1 without µ and ß (they fold to
+    /// other scalars), basic Cyrillic, common punctuation. For two such texts
+    /// `a.lowercased().contains(b.lowercased())` and `a.range(of: b, options:
+    /// .caseInsensitive) != nil` are both "the lowercased bytes of b occur in a's".
+    static func isPlain(_ text: String) -> Bool {
+        for scalar in text.unicodeScalars {
+            let value = scalar.value
+            if value < 0x80 { if value == 0x0D { return false }; continue }
+            guard (0xA0...0xFF).contains(value) && value != 0xAD && value != 0xB5 && value != 0xDF
+                || (0x400...0x45F).contains(value)
+                || (0x2010...0x2027).contains(value) || (0x2030...0x205E).contains(value) || value == 0x2116 else { return false }
+        }
+        return true
+    }
+
+    /// The lowercased bytes of a non-empty plain needle; nil sends the caller to the string path.
+    static func plainNeedle(_ text: String) -> [UInt8]? {
+        text.isEmpty || !isPlain(text) ? nil : Array(text.lowercased().utf8)
+    }
+
+    static func containsBytes(_ text: String, _ needle: [UInt8]) -> Bool {
+        text.utf8.withContiguousStorageIfAvailable { hay in
+            needle.withUnsafeBufferPointer { memmem(hay.baseAddress, hay.count, $0.baseAddress, $0.count) != nil }
+        } ?? Array(text.utf8).withUnsafeBufferPointer { hay in
+            needle.withUnsafeBufferPointer { memmem(hay.baseAddress, hay.count, $0.baseAddress, $0.count) != nil }
+        }
+    }
+
+    static func contextSelection(index: BlockIndex, requests: [String], existing: Set<String>, limit: Int) -> ContextSelection {
+        let blocks = index.blocks, headings = index.headings, words = index.words, citations = index.citations
+        let definitions = index.definitions, frequency = index.frequency
+        let lowered = index.lowered, plain = index.plain
         struct Lane { let candidates: [Int] }
         var lanes: [Lane] = []
         var matched = Array(repeating: Set<Int>(), count: requests.count)
@@ -689,10 +765,14 @@ struct SecretaryPacket {
                     }
                 }
                 var ranked: [(Int, Int)] = []
-                for (i, block) in blocks.enumerated() where !isDefinition(block.text) {
+                let needle = lower.trimmingCharacters(in: .whitespacesAndNewlines)
+                let needleBytes = plainNeedle(needle)
+                for i in blocks.indices where !definitions[i] {
                     let citation = !citations[i].isDisjoint(with: ids)
                     let hits = words[i].intersection(query).count
-                    let exact = block.text.lowercased().contains(lower.trimmingCharacters(in: .whitespacesAndNewlines))
+                    let exact: Bool
+                    if let needleBytes, plain[i] { exact = containsBytes(lowered[i], needleBytes) }
+                    else { exact = lowered[i].contains(needle) }
                     let score = (citation ? 1200 : 0) + (sections.contains(i) ? 800 : 0) + (exact ? 1000 : 0) + min(100, hits * 10)
                     if score > 0 { ranked.append((i, score)); matched[requestIndex].insert(i) }
                 }
@@ -712,7 +792,7 @@ struct SecretaryPacket {
                 var unit = Set([index])
                 if let heading = headings[index] {
                     for next in (index + 1)..<blocks.count {
-                        if isDefinition(blocks[next].text) { break }
+                        if definitions[next] { break }
                         if let child = headings[next] {
                             if child.depth <= heading.depth { break }
                             unit.insert(next)
@@ -736,7 +816,12 @@ struct SecretaryPacket {
                 unmatchedTerms: terms(request).filter { $0.contains(where: \.isLetter) && frequency[$0, default: 0] == 0 }.sorted(),
                 clauses: request.split(separator: ";").map { clause in
                     let query = String(clause).trimmingCharacters(in: .whitespacesAndNewlines)
-                    let exact = blocks.indices.filter { !isDefinition(blocks[$0].text) && blocks[$0].text.range(of: query, options: .caseInsensitive) != nil }
+                    let queryBytes = plainNeedle(query)
+                    let exact = blocks.indices.filter { i in
+                        guard !definitions[i] else { return false }
+                        if let queryBytes, plain[i] { return containsBytes(lowered[i], queryBytes) }
+                        return blocks[i].text.range(of: query, options: .caseInsensitive) != nil
+                    }
                     return ContextClause(query: query, status: exact.isEmpty ? "no_exact_document_mention" : "exact_document_mention",
                         exactMatches: exact.map { blocks[$0].id },
                         suppliedExactMatches: exact.filter { chosen.contains($0) || existing.contains(blocks[$0].id) }.map { blocks[$0].id })

@@ -36,7 +36,9 @@ public struct PseudonymizedPayload: Sendable {
         }
         let masked: String
         if let object = jsonObject(user) {
-            let maskedObject = try mapStrings(object) { try filter.mask($0, session: session) }
+            let maskedObject = try maskObject(
+                object, filter: filter, glossaryFilter: PseudonymFilter(dictionary: filter.dictionary, masksSuspects: false),
+                session: session)
             forEachString(maskedObject, collect)
             masked = try jsonString(maskedObject)
         } else {
@@ -56,6 +58,23 @@ public struct PseudonymizedPayload: Sendable {
             return try Self.jsonString(restored)
         }
         return try PseudonymFilter.unmask(response, map: map)
+    }
+
+    /// `glossary` is Wimm's own text plus vocabulary the user marked not
+    /// sensitive, not note text: the detectors and the dictionary apply to it,
+    /// the shape rules do not (they would mask its examples and product names).
+    private static func maskObject(_ object: Any, filter: PseudonymFilter, glossaryFilter: PseudonymFilter,
+                                   session: PseudonymSession) throws -> Any {
+        guard let dictionary = object as? [String: Any] else {
+            return try mapStrings(object) { try filter.mask($0, session: session) }
+        }
+        var result: [String: Any] = [:]
+        for (key, value) in dictionary {
+            result[key] = key == "glossary"
+                ? try mapStrings(value) { try glossaryFilter.mask($0, session: session) }
+                : try maskObject(value, filter: filter, glossaryFilter: glossaryFilter, session: session)
+        }
+        return result
     }
 
     // MARK: JSON walking

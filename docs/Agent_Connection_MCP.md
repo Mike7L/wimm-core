@@ -34,6 +34,48 @@ its `.meta.json`, the name without extension, or a relative path ending in
 one. Agents keep registries by file name; the id is `URL.stableUUID` of the
 full path and matches nothing in the name.
 
+### Personal document (2026-11-15)
+
+| Tool | Arguments | Returns |
+|---|---|---|
+| `document_outline` | optional `max_depth`, `offset` | Headings with block IDs, depth and subtree bytes |
+| `document_section` | `sections` (≤ 8 heading IDs or exact titles), optional `offset` (one section only), `limit_bytes` | Each section with its subsections; they share the byte budget in order, the ones not started come back in `not_read` |
+| `document_find` | `queries` (≤ 5), optional `limit_bytes` | Matching blocks under one budget, round-robin across queries; per query a status, the blocks left out and the words found nowhere |
+| `document_blocks` | `ids` (≤ 50) | Exact blocks; unknown IDs in `missing` |
+
+These are the reads of `wimm-cli doc` (`SecretaryDocumentReader`), served by the
+process that is already running. The reason is the agent's round trip: a tool
+call costs the agent seconds, so the gain is in fewer calls (several sections
+or searches in one) and in not re-parsing the document for each.
+
+- The document is parsed once per file version (`SecretaryDocumentTools.Cache`,
+  keyed by path, size and modification time; a check is one `stat`). The search
+  index (terms, citations, lowercased text per block) is built on the first
+  `document_find`.
+- Every result carries `version` (12 hex digits of the file's SHA-256). Block
+  IDs belong to one version: a call that passes an older `version` fails
+  instead of returning blocks that moved.
+- No path argument. The server reads `WIMM_DOCUMENT`, else the document open in
+  Studio, else the conventional workspace file; never an arbitrary file.
+- Read-only, refused in private mode like every reading tool, hidden from a
+  session whose `WIMM_MCP_TOOLS` does not list them (secretary runs).
+- Literal checks compare bytes when both texts are one scalar per character
+  with lowercase equal to case folding (`SecretaryPacket.isPlain`); anything
+  else takes the string path. The secretary's packet context search uses the
+  same code and returns the same blocks.
+
+Measured on an invented document (release build, 2026-11-15; 1 MB / 6 MB):
+
+| Read | `wimm-cli doc` before | `wimm-cli doc` now | MCP, document loaded |
+|---|---:|---:|---:|
+| outline | 49 / 215 ms | 51 / 227 ms | 1 / 4 ms |
+| section | 33 / 122 ms | 50 / 226 ms | 1 / 2 ms |
+| find | 194 / 1086 ms | 111 / 575 ms | 5–9 / 22–42 ms |
+
+The first MCP call after a change pays the parse (56 / 229 ms), the first
+`document_find` the index (about as much again). A one-shot `doc section` is
+slower than before because the snapshot classifies every block up front.
+
 ### Saving a discussion
 
 `create_note` takes a non-empty `title` (up to 1,000 UTF-8 bytes) and

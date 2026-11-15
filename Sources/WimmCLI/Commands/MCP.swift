@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import WimmInfrastructure
+import WimmSecretary
 
 /// `wimm-cli mcp` — connects Wimm to an agent. Register it once, e.g.
 /// `claude mcp add wimm -- /path/to/WimmCLI mcp`, and the agent can search
@@ -54,8 +55,20 @@ struct MCP: AsyncParsableCommand {
                                      readLog: ProcessInfo.processInfo.environment[MCPRecallServer.readLogEnvironmentKey].map { URL(fileURLWithPath: $0) },
                                      reviewConfiguration: ProcessInfo.processInfo.environment["WIMM_SECRETARY_REVIEW"],
                                      allowedTools: ProcessInfo.processInfo.environment[MCPRecallServer.toolsEnvironmentKey].map { Set($0.split(separator: ",").map(String.init)) },
+                                     extraTools: SecretaryDocumentTools.mcpTools(document: Self.personalDocument),
+                                     extraInstructions: SecretaryDocumentTools.instructions,
                                      library: { await library.load() })
         await server.serveStdio()
+    }
+
+    /// The document the document tools read: `WIMM_DOCUMENT`, else the one open in
+    /// Studio (the app's defaults domain), else the conventional workspace file.
+    /// Resolved per call, so a document chosen later is picked up.
+    static func personalDocument() -> URL? {
+        if let path = ProcessInfo.processInfo.environment["WIMM_DOCUMENT"], !path.isEmpty {
+            return URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        }
+        return PersonalDocumentLocation.current(defaults: UserDefaults(suiteName: appSettingsDefaultsDomain) ?? .standard)
     }
 
     /// `WIMM_MCP_IDLE_RELEASE_SECONDS`: 0 keeps the library for the server's

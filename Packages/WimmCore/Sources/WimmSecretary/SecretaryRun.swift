@@ -352,6 +352,9 @@ public struct SecretaryRunRecord: Codable, Sendable, Equatable {
     public var requeuedNotes: [String]?
     /// Sources the packet kept out: waiting for text, waiting for viewing, skipped.
     public var hostQueues: SecretaryHostQueues? = nil
+    /// Wall time per stage of the run in milliseconds (monotonic clock), `total` included.
+    /// `model_*` stages are time spent waiting for the editor; the rest is Wimm's own work.
+    public var timingsMS: [String: Double]? = nil
     public var error: String?
 
     enum CodingKeys: String, CodingKey {
@@ -359,7 +362,30 @@ public struct SecretaryRunRecord: Codable, Sendable, Equatable {
         case threadIDs = "thread_ids", startedAt = "started_at", finishedAt = "finished_at"
         case exitStatus = "exit_status", costUSD = "cost_usd", tokensIn = "tokens_in", tokensOut = "tokens_out"
         case sessionID = "session_id", finalText = "final_text", remainingNotes = "remaining_notes", requeuedNotes = "requeued_notes"
-        case hostQueues = "host_queues"
+        case hostQueues = "host_queues", timingsMS = "timings_ms"
+    }
+}
+
+/// Stage stopwatch of one run. Holds stage names and durations only, never evidence or usage.
+final class SecretaryStageClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private let started = DispatchTime.now().uptimeNanoseconds
+    private var previous = DispatchTime.now().uptimeNanoseconds
+    private var stages: [String: Double] = [:]
+
+    /// Books the time since the previous mark to `name` (added up when a stage repeats).
+    func mark(_ name: String) {
+        lock.lock(); defer { lock.unlock() }
+        let now = DispatchTime.now().uptimeNanoseconds
+        stages[name, default: 0] += Double(now - previous) / 1_000_000
+        previous = now
+    }
+
+    func durations() -> [String: Double] {
+        lock.lock(); defer { lock.unlock() }
+        var result = stages
+        result["total"] = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
+        return result
     }
 }
 

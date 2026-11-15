@@ -243,7 +243,8 @@ public enum SecretaryPacketFiles {
         let marks = AgentMarkStore()
         // This outer trace includes discovery before the short workspace lock.
         defer { timing.write(runID: runID, marks: marks) }
-        let state = try load(runID, marks: marks)
+        let loaded = try loadTracked(runID, marks: marks)
+        let state = loaded.state
         timing.checkpoint("state_load")
         let selected = try state.packet().selected
         let needsLibrary = operation == "source" && (refresh || !selected.contains(query))
@@ -257,27 +258,29 @@ public enum SecretaryPacketFiles {
             timing.count("library_note_count", library.count); timing.checkpoint("library_load")
         } else { library = RecallLibrary([]) }
         return try read(runID: runID, operation: operation, query: query, offset: offset, limit: limit,
-                        refresh: refresh, library: library, marks: marks, timing: timing)
+                        refresh: refresh, library: library, marks: marks, timing: timing, loaded: loaded)
     }
 
     static func read(runID: String, operation: String, query: String = "", offset: Int = 0, limit: Int = 8_000,
                      refresh: Bool = false, library: RecallLibrary, marks: AgentMarkStore,
-                     timing suppliedTiming: SecretaryFileTiming? = nil) throws -> Data {
+                     timing suppliedTiming: SecretaryFileTiming? = nil, loaded: Loaded? = nil) throws -> Data {
         let timing = suppliedTiming ?? SecretaryFileTiming("read.\(operation)")
         defer { if suppliedTiming == nil { timing.write(runID: runID, marks: marks) } }
         try requirePublicAccess()
         guard offset >= 0, (1...24_000).contains(limit), !refresh || operation == "source" else {
             throw SecretaryPacket.Failure("Invalid offset/limit; limit must be 1–24000 bytes and refresh requires source.")
         }
-        var state = try load(runID, marks: marks)
-        let workspace = try state.packet().task.workspace
+        let before = try loaded ?? loadTracked(runID, marks: marks)
+        guard let workspace = SecretaryWorkspace(document: before.state.document) else {
+            throw SecretaryPacket.Failure("Invalid file-session snapshot.")
+        }
         let lock = try SecretaryRunLock.acquire(in: workspace.runsDirectory, runID: runID)
         defer { lock.release() }
-        state = try load(runID, marks: marks)
+        var state = try current(runID, marks: marks, earlier: before)
         timing.checkpoint("state_load")
         guard state.phase == "prepared" else { throw SecretaryPacket.Failure("Session is \(state.phase); prepare a new packet.") }
-        try validateWorkspace(state)
         var packet = try state.packet()
+        try validateWorkspace(state, packet: packet)
         timing.checkpoint("workspace_validation")
         if operation == "part" {
             let value: Data
@@ -346,11 +349,13 @@ public enum SecretaryPacketFiles {
         let timing = SecretaryFileTiming(dryRun ? "apply.dry_run" : "apply")
         try requirePublicAccess()
         defer { timing.write(runID: runID, marks: marks) }
-        var state = try load(runID, marks: marks)
-        let workspace = try state.packet().task.workspace
+        let before = try loadTracked(runID, marks: marks)
+        guard let workspace = SecretaryWorkspace(document: before.state.document) else {
+            throw SecretaryPacket.Failure("Invalid file-session snapshot.")
+        }
         let lock = try SecretaryRunLock.acquire(in: workspace.runsDirectory, runID: runID)
         defer { lock.release() }
-        state = try load(runID, marks: marks)
+        let state = try current(runID, marks: marks, earlier: before)
         let packet = try state.packet()
         timing.checkpoint("state_load")
         guard state.packetOnly != true || dryRun else {
@@ -361,7 +366,7 @@ public enum SecretaryPacketFiles {
             timing.replayed(); return report
         }
         guard state.phase == "prepared" else { throw SecretaryPacket.Failure("Session is \(state.phase); cannot replay a different or interrupted apply.") }
-        try validateWorkspace(state)
+        try validateWorkspace(state, packet: packet)
         timing.checkpoint("workspace_validation")
         if let expectedInput {
             guard state.input == expectedInput else {
@@ -381,8 +386,8 @@ public enum SecretaryPacketFiles {
         }
         return try Data(contentsOf: workspace.root.appendingPathComponent("secretary/protocol/packet.md"))
     }
-    private static func validateWorkspace(_ state: State) throws {
-        let packet = try state.packet(), workspace = packet.task.workspace
+    private static func validateWorkspace(_ state: State, packet known: SecretaryPacket? = nil) throws {
+        let packet = try known ?? state.packet(), workspace = packet.task.workspace
         guard try Data(contentsOf: workspace.document) == state.documentData,
               try Data(contentsOf: workspace.document.deletingPathExtension().appendingPathExtension("sources.json")) == state.registryData,
               ((try? Data(contentsOf: workspace.root.appendingPathComponent("secretary/review_queue.md"))) ?? Data()) == state.queueData,
@@ -410,9 +415,27 @@ public enum SecretaryPacketFiles {
     }
 
     static func load(_ id: String, marks: AgentMarkStore) throws -> State {
-        let state = try SecretarySessionStorage.load(from: stateURL(id, marks: marks))
-        guard state.id == id else { throw SecretaryPacket.Failure("Session ID mismatch.") }
-        return state
+        try loadTracked(id, marks: marks).state
+    }
+
+    /// A loaded state with the session file bytes it came from (see `current`).
+    struct Loaded {
+        let state: State
+        let file: Data
+    }
+
+    static func loadTracked(_ id: String, marks: AgentMarkStore) throws -> Loaded {
+        let loaded = try SecretarySessionStorage.loadWithFile(from: stateURL(id, marks: marks))
+        guard loaded.state.id == id else { throw SecretaryPacket.Failure("Session ID mismatch.") }
+        return Loaded(state: loaded.state, file: loaded.file)
+    }
+
+    /// The state as it is on disk now — called after taking the run lock. When the
+    /// session file still holds the bytes `earlier` was decoded from, that state is
+    /// the current one; otherwise it is loaded again.
+    static func current(_ id: String, marks: AgentMarkStore, earlier: Loaded) throws -> State {
+        if try Data(contentsOf: stateURL(id, marks: marks)) == earlier.file { return earlier.state }
+        return try load(id, marks: marks)
     }
     private static func save(_ state: State, marks: AgentMarkStore) throws {
         let url = try stateURL(state.id, marks: marks)

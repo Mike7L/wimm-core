@@ -193,7 +193,11 @@ bookkeeping.
 `wimm-cli mcp` on stdio: stdout is the protocol, never `print` from code it
 reaches; register the binary, not a wrapper script. Reads via `FileRepository`
 + `NoteBuilder`, builds changed notes in a child process. It never edits note
-text.
+text. The `document_*` tools read only the configured personal document
+(`WIMM_DOCUMENT`, else Studio's): no path argument, read-only, parsed once per
+file version (`SecretaryDocumentTools`); tools from another module go through
+`MCPRecallServer.ExtraTool`, so the private-mode and `WIMM_MCP_TOOLS` checks
+still apply.
 
 ## UI traps
 

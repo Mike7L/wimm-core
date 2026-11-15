@@ -107,7 +107,9 @@ public struct SecretaryDispatcher: Sendable {
     public func run(_ task: SecretaryTask,
                     onEvent: @escaping @Sendable (SecretaryEvent) -> Void = { _ in }) async throws -> SecretaryRunRecord {
         guard !PrivateMode.isEnabled else { throw SecretaryError.privateMode }
+        let clock = SecretaryStageClock()
         let missing = await cliCheck(wimmCLI, task.kind)
+        clock.mark("cli_check")
         guard missing.isEmpty else { throw SecretaryError.wimmCLIStale(wimmCLI.path, missing) }
         let workspace = task.workspace
         let lock = try SecretaryRunLock.acquire(in: workspace.runsDirectory, runID: task.id)
@@ -132,6 +134,7 @@ public struct SecretaryDispatcher: Sendable {
                                                 model: model, timeout: timeout(for: task.kind), maxTurns: maxTurns, effort: effort)
         request.reviewBackup = backup
         request.reviewDocument = workspace.doc
+        clock.mark("setup")
         do {
             if !task.packetMode {
                 let receipts = SecretaryReadReceipt.logURL(runID: task.id)
@@ -141,9 +144,10 @@ public struct SecretaryDispatcher: Sendable {
             }
             let execution: SecretaryExecution
             if task.packetMode {
-                execution = try await runPacket(task: task, onEvent: onEvent)
+                execution = try await runPacket(task: task, clock: clock, onEvent: onEvent)
             } else {
                 execution = try await executor.run(request, onEvent: onEvent)
+                clock.mark("model_agent")
             }
             record.exitStatus = execution.exitStatus
             record.model = execution.model ?? model
@@ -162,16 +166,19 @@ public struct SecretaryDispatcher: Sendable {
             record.outcome = .failed
             record.error = error.localizedDescription
         }
+        clock.mark("interrupted") // Only a thrown run leaves time here; a completed one marked its last stage.
 
         let (result, resultError) = Self.readResult(directory.appendingPathComponent("result.json"))
         record.result = result
         record.findings = SecretaryVerification.findings(task: task, before: before, after: .take(workspace),
                                                          result: result, resultError: resultError)
         record.findings += SecretaryCompletion.findings(task: task, backup: backup)
+        clock.mark("verification")
         if task.kind == .pass, record.outcome == .succeeded, record.findings.isEmpty, let result {
             let report = await SecretaryBookkeeping.finish(task: task, result: result)
             record.bookkeeping = report
             record.findings += report.findings
+            clock.mark("bookkeeping")
             onEvent(.init(.info, "Wimm bookkeeping: \(report.stored)/\(report.requested) reviewed sources marked; registry \(report.registryUpdated ?? 0), references \(report.referencesAdded ?? 0)"))
         }
         if Task.isCancelled {
@@ -193,6 +200,7 @@ public struct SecretaryDispatcher: Sendable {
         }
         if task.kind == .pass, record.outcome == .succeeded, record.findings.isEmpty {
             record.remainingNotes = await Self.advanceBoundary(startedAt: task.createdAt)
+            clock.mark("boundary_scan")
             if record.remainingNotes == nil {
                 record.findings.append("Cannot determine remaining queue coverage after the pass.")
             } else if let remaining = record.remainingNotes, remaining > 0 {
@@ -202,21 +210,28 @@ public struct SecretaryDispatcher: Sendable {
         }
         if record.outcome == .succeeded, !record.findings.isEmpty { record.outcome = .failed }
         record.finishedAt = SecretaryClock.stamp(Date())
+        clock.mark("wrap_up")
+        record.timingsMS = clock.durations().filter { $0.value >= 0.5 || $0.key == "total" }
         try? Self.write(record, to: directory)
         Self.log(record)
         for finding in record.findings { onEvent(.init(.error, finding)) }
         onEvent(.init(.info, "\(record.outcome?.rawValue ?? "?")\(record.costUSD.map { String(format: " · $%.2f", $0) } ?? "")"))
+        if let line = SecretaryRunLog.timingLine(record.timingsMS) { onEvent(.init(.info, line)) }
         return record
     }
 
     func runPacket(task: SecretaryTask, library: RecallLibrary? = nil, marks: AgentMarkStore = AgentMarkStore(),
+                   clock: SecretaryStageClock = SecretaryStageClock(),
                    onEvent: @escaping @Sendable (SecretaryEvent) -> Void) async throws -> SecretaryExecution {
         let loaded: RecallLibrary
         if let library { loaded = library }
         else { loaded = await LibraryRecallSource(buildMode: .subprocess(executable: wimmCLI, arguments: ["mcp-build"]), includeFingerprints: true).load() }
+        clock.mark("library_load")
+        defer { clock.mark("packet_apply") } // Whatever follows the last model reply: decode, validate, apply.
         var packet = try SecretaryPacket.prepare(task: task, library: loaded, marks: marks, sourceByteLimit: packetSourceBytes, optimizationLevel: optimizationLevel)
         try packet.requireValidatedProjection() // Refuse before spending on an unacknowledgeable projection.
         var prompt = try packet.prompt(), aggregate = SecretaryExecution(exitStatus: 0, costUSD: 0)
+        clock.mark("packet_prepare")
         let queues = packet.hostQueues, runDirectory = task.workspace.runDirectory(task.id)
         try FileManager.default.createDirectory(at: runDirectory, withIntermediateDirectories: true)
         try JSONEncoder().encode(queues).write(to: runDirectory.appendingPathComponent(SecretaryHostQueues.fileName), options: .atomic)
@@ -253,7 +268,9 @@ public struct SecretaryDispatcher: Sendable {
             request.resumeSessionID = nil
             try packetAudit(directory, stage: "packet_request",
                 detail: "round=\(round); input_bytes=\(prompt.utf8.count)")
+            clock.mark("packet_apply")
             let execution = try await executor.run(request, onEvent: onEvent)
+            clock.mark("model_round_\(round)")
             try JSONEncoder().encode(execution).write(to: roundDirectory.appendingPathComponent("execution.json"), options: .atomic)
             aggregate.exitStatus = execution.exitStatus; aggregate.isError = execution.isError
             aggregate.finalText = execution.finalText; aggregate.error = execution.error; aggregate.model = execution.model
@@ -309,7 +326,9 @@ public struct SecretaryDispatcher: Sendable {
                         request.resumeSessionID = nil
                         try packetAudit(directory, stage: "status_request", detail: "lines=\(needed.joined(separator: ", ")); input_bytes=\(statusPrompt.utf8.count)")
                         onEvent(.init(.info, "status lines \(needed.joined(separator: ", ")): \(statusPrompt.utf8.count) input bytes"))
+                        clock.mark("packet_apply")
                         let execution = try await executor.run(request, onEvent: onEvent)
+                        clock.mark("model_status")
                         try JSONEncoder().encode(execution).write(to: statusDirectory.appendingPathComponent("execution.json"), options: .atomic)
                         // The main reply's text and status stay the run's; only the usage adds up.
                         aggregate.costUSD = aggregate.costUSD.flatMap { total in execution.costUSD.map { total + $0 } }

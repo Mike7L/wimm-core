@@ -90,7 +90,8 @@ public actor FileRepository: FileRepositoryProtocol {
         let unique = Array(byName.values)
         // Sort by filename ascending — Wimm_YYYY-MM-DD_HH-mm-ss embeds date in name.
         // Pure string compare, no stat syscalls.
-        let sorted = unique.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        // The name is taken once per file, not in every comparison (names are unique here).
+        let sorted = unique.map { (name: $0.lastPathComponent, url: $0) }.sorted { $0.name < $1.name }.map(\.url)
         
         // ATOMIC GROUPING: 
         // We group all files by their "Session ID" (base name).

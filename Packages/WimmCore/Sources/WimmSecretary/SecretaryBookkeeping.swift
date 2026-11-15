@@ -96,6 +96,8 @@ enum SecretaryBookkeeping {
             let allowed = Set(files.map { $0.standardizedFileURL.path })
             var changes: [String: AgentMarkStore.Mark?] = [:]
             let existing = store.marks()
+            // Resolved once per receipt, not once per receipt for every reviewed source.
+            let receiptSidecars = reviewed.isEmpty ? [] : receipts.map { URL(fileURLWithPath: $0.sidecar).resolvingSymlinksInPath() }
             for id in reviewed {
                 do {
                     guard var source = bySource[id] else { throw Failure("\(id): not in registry.") }
@@ -103,11 +105,12 @@ enum SecretaryBookkeeping {
                         throw Failure("\(id): registry says removed/unindexed; no mark written.")
                     }
                     let sourceURL = try sidecarURL(source, task: task)
-                    let matching = receipts.filter { receipt in
-                        guard URL(fileURLWithPath: receipt.sidecar).resolvingSymlinksInPath() == sourceURL.resolvingSymlinksInPath() else { return false }
+                    let resolvedSource = sourceURL.resolvingSymlinksInPath()
+                    let matching = receipts.indices.filter { index in
+                        guard receiptSidecars[index] == resolvedSource else { return false }
                         guard let file = source["note_file"] as? String else { return true }
-                        return URL(fileURLWithPath: receipt.file).lastPathComponent == file
-                    }
+                        return URL(fileURLWithPath: receipts[index].file).lastPathComponent == file
+                    }.map { receipts[$0] }
                     guard let receipt = matching.last else { throw Failure("\(id): no get_note receipt in this run.") }
                     let media = URL(fileURLWithPath: receipt.file).standardizedFileURL
                     guard allowed.contains(media.path), FileStore.metadataURL(forRecordingURL: media).resolvingSymlinksInPath() == sourceURL.resolvingSymlinksInPath(),
@@ -211,13 +214,13 @@ enum SecretaryBookkeeping {
         return report
     }
 
-    private static func sidecarURL(_ source: [String: Any], task: SecretaryTask) throws -> URL {
+    private static func sidecarURL(_ source: [String: Any], task: SecretaryTask, directory: URL? = nil) throws -> URL {
         guard let path = (source["path"] as? String)?.removingPercentEncoding,
               path.hasPrefix("../recordings/"), path.hasSuffix(".meta.json"),
               !path.dropFirst("../recordings/".count).contains("/"), !path.contains("\\") else {
             throw Failure("Invalid registry recording path.")
         }
-        return task.workspace.document.deletingLastPathComponent().appendingPathComponent(path).standardizedFileURL
+        return (directory ?? task.workspace.document.deletingLastPathComponent()).appendingPathComponent(path).standardizedFileURL
     }
 
     private static func checkDocument(task: SecretaryTask, sources: [[String: Any]], marks: [String: AgentMarkStore.Mark], documentData: Data? = nil,
@@ -225,17 +228,21 @@ enum SecretaryBookkeeping {
         var findings: [String] = []
         let document = try documentData.map { String(decoding: $0, as: UTF8.self) } ?? String(contentsOf: task.workspace.document, encoding: .utf8)
         let definitions = try NSRegularExpression(pattern: #"^\[([SUW][0-9]+)\]:\s*(\S+)"#, options: .anchorsMatchLines)
-        let range = NSRange(document.startIndex..., in: document)
+        // Captures are read through NSString: converting each UTF-16 range to String
+        // indices walks the document from its start, once per citation.
+        let text = document as NSString
+        let range = NSRange(location: 0, length: text.length)
+        let documentDirectory = task.workspace.document.deletingLastPathComponent()
         var refs: [String: String] = [:]
         for match in definitions.matches(in: document, range: range) {
-            let id = String(document[Range(match.range(at: 1), in: document)!])
-            let target = String(document[Range(match.range(at: 2), in: document)!])
+            let id = text.substring(with: match.range(at: 1))
+            let target = text.substring(with: match.range(at: 2))
             if refs[id] != nil { findings.append("Duplicate reference definition [\(id)].") }
             refs[id] = target
         }
         let used = try NSRegularExpression(pattern: #"\[([SUW][0-9]+)\](?!:)"#)
         for match in used.matches(in: document, range: range) {
-            let id = String(document[Range(match.range(at: 1), in: document)!])
+            let id = text.substring(with: match.range(at: 1))
             if refs[id] == nil { findings.append("Reference [\(id)] has no definition.") }
         }
         let ids = Set(sources.compactMap { $0["source_id"] as? String })
@@ -245,12 +252,12 @@ enum SecretaryBookkeeping {
             if id.hasPrefix("S"), !ids.contains(id) { findings.append("[\(id)] is not in registry.") }
             if target.hasPrefix("http://") || target.hasPrefix("https://") || removed.contains(id) { continue }
             let path = String(target.split(separator: "#", maxSplits: 1).first ?? "").removingPercentEncoding ?? target
+            let targetURL = documentDirectory.appendingPathComponent(path)
             if let expected = sourcePaths[id]?.removingPercentEncoding,
-               task.workspace.document.deletingLastPathComponent().appendingPathComponent(path).standardizedFileURL !=
-                task.workspace.document.deletingLastPathComponent().appendingPathComponent(expected).standardizedFileURL {
+               targetURL.standardizedFileURL != documentDirectory.appendingPathComponent(expected).standardizedFileURL {
                 findings.append("[\(id)] points to a different registry target.")
             }
-            if !FileManager.default.fileExists(atPath: task.workspace.document.deletingLastPathComponent().appendingPathComponent(path).path) {
+            if !FileManager.default.fileExists(atPath: targetURL.path) {
                 findings.append("[\(id)] references a missing file.")
             }
         }
@@ -279,7 +286,7 @@ enum SecretaryBookkeeping {
         for source in sources {
             guard let id = source["source_id"] as? String else { throw Failure("Registry source without a source_id.") }
             if flag(source["removed_from_wimm"]) { continue }
-            let sidecar = try sidecarURL(source, task: task)
+            let sidecar = try sidecarURL(source, task: task, directory: documentDirectory)
             if !FileManager.default.fileExists(atPath: sidecar.path) { findings.append("\(id): registry source file is missing.") }
             if flag(source["wimm_unindexed"]) { continue }
             guard let want = source["status"] as? String else { findings.append("\(id): registry status is missing."); continue }
