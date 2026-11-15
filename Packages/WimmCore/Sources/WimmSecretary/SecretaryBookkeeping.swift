@@ -76,23 +76,9 @@ enum SecretaryBookkeeping {
         let registry = task.workspace.document.deletingPathExtension().appendingPathExtension("sources.json")
         do {
             let registryData = try Data(contentsOf: registry)
-            guard let data = try JSONSerialization.jsonObject(with: registryData) as? [String: Any],
-                  let sources = data["sources"] as? [[String: Any]] else {
-                throw Failure("Registry has no sources array: \(registry.lastPathComponent)")
-            }
-            var bySource: [String: [String: Any]] = [:]
-            var counts: [String: Int] = [:]
-            for source in sources {
-                guard let id = source["source_id"] as? String, id.range(of: #"^S[0-9]+$"#, options: .regularExpression) != nil,
-                      bySource[id] == nil, let status = source["status"] as? String,
-                      ["applied", "duplicate", "pending", "noise", "failed"].contains(status),
-                      source["path"] is String else { throw Failure("Invalid or duplicate registry source.") }
-                bySource[id] = source
-                counts[status, default: 0] += 1
-            }
-            guard data["source_count"] as? Int == sources.count, data["counts"] as? [String: Int] == counts else {
-                throw Failure("Registry source_count/counts disagree with sources.")
-            }
+            let parsed = try SecretaryRegistry.parse(registryData)
+            try parsed.checkCounts()
+            let data = parsed.root, sources = parsed.rows, bySource = parsed.byID
             guard Set(reviewed).count == reviewed.count else { throw Failure("Duplicate reviewed_sources in result.json.") }
             let directory = task.workspace.runDirectory(task.id)
             let originalRegistry = try SecretaryRegistryRevision.originalRegistry(directory: directory)
@@ -158,8 +144,10 @@ enum SecretaryBookkeeping {
                     } else if task.usesSourceDecisions, originals?[id] != nil {
                         throw Failure("\(id): existing sources require source_decisions; no registry edits or hashes from the model.")
                     }
-                    let raw = source["status"] as! String
-                    let status = AgentMarkStore.Mark.Status(rawValue: raw == "duplicate" ? "applied" : raw)!
+                    guard let raw = source["status"] as? String,
+                          let status = AgentMarkStore.Mark.Status(rawValue: raw == "duplicate" ? "applied" : raw) else {
+                        throw Failure("\(id): registry status \(source["status"].map { "\($0)" } ?? "missing") cannot become a Wimm mark.")
+                    }
                     let target = source["duplicate_of"] ?? source["merged_with"]
                     let targetText = (target as? [String])?.joined(separator: ", ") ?? (target as? String)
                     changes[file] = AgentMarkStore.Mark(status: status, source: id,
@@ -179,7 +167,7 @@ enum SecretaryBookkeeping {
                 for (id, row) in visible where updates[id] == nil { updates[id] = row }
                 report.remappedSources = Set(aliases.keys).union(visible.keys).sorted()
             }
-            let nextSources = sources.map { updates[$0["source_id"] as! String] ?? $0 }
+            let nextSources = sources.map { row in (row["source_id"] as? String).flatMap { updates[$0] } ?? row }
             let nextRegistry = try SecretaryRegistryRevision.patched(data: registryData, original: data, sources: sources, updates: updates, task: task)
             timing?.checkpoint("registry_update_plan", subtotal: "bookkeeping")
             let documentData = try Data(contentsOf: task.workspace.document)
@@ -194,7 +182,7 @@ enum SecretaryBookkeeping {
                 let backup = directory.appendingPathComponent("registry-before-host.json")
                 if !FileManager.default.fileExists(atPath: backup.path) {
                     let audit: [String: Any] = ["run_id": task.id, "registry_sha256": digest(registryData),
-                        "sources": sources.filter { updates[$0["source_id"] as! String] != nil },
+                        "sources": sources.filter { ($0["source_id"] as? String).map { updates[$0] != nil } == true },
                         "counts": data["counts"] ?? NSNull(), "updated_on": data["updated_on"] ?? NSNull(),
                         "batches_count": (data["batches"] as? [Any])?.count ?? 0,
                         "document_sha256": digest(documentData), "document_bytes": documentData.count,
@@ -252,7 +240,7 @@ enum SecretaryBookkeeping {
         }
         let ids = Set(sources.compactMap { $0["source_id"] as? String })
         let removed = Set(sources.filter { flag($0["removed_from_wimm"]) }.compactMap { $0["source_id"] as? String })
-        let sourcePaths = Dictionary(uniqueKeysWithValues: sources.map { ($0["source_id"] as! String, $0["path"] as! String) })
+        let sourcePaths = try SecretaryRegistry.index(sources).compactMapValues { $0["path"] as? String }
         for (id, target) in refs {
             if id.hasPrefix("S"), !ids.contains(id) { findings.append("[\(id)] is not in registry.") }
             if target.hasPrefix("http://") || target.hasPrefix("https://") || removed.contains(id) { continue }
@@ -289,12 +277,12 @@ enum SecretaryBookkeeping {
         }
         let marksBySource = Dictionary(grouping: marks.compactMap { file, mark in mark.source.map { ($0, file, mark) } }, by: { $0.0 })
         for source in sources {
-            let id = source["source_id"] as! String
+            guard let id = source["source_id"] as? String else { throw Failure("Registry source without a source_id.") }
             if flag(source["removed_from_wimm"]) { continue }
             let sidecar = try sidecarURL(source, task: task)
             if !FileManager.default.fileExists(atPath: sidecar.path) { findings.append("\(id): registry source file is missing.") }
             if flag(source["wimm_unindexed"]) { continue }
-            let want = source["status"] as! String
+            guard let want = source["status"] as? String else { findings.append("\(id): registry status is missing."); continue }
             let matches = marksBySource[id] ?? []
             let awaitingTask = want == "pending" && matches.isEmpty && deferred.contains(id)
             if !awaitingTask && (matches.count != 1 || matches.first?.2.status.rawValue != (want == "duplicate" ? "applied" : want)) {

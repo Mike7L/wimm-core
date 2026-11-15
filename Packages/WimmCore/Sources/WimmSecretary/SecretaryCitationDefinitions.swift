@@ -13,7 +13,7 @@ enum SecretaryCitationDefinitions {
             Set(regex.matches(in: text, range: range).map { String(text[Range($0.range(at: 1), in: text)!]) })
         }
         let missing = ids(used).subtracting(ids(defined))
-        let known = Dictionary(uniqueKeysWithValues: sources.map { ($0["source_id"] as! String, $0) })
+        let known = try SecretaryRegistry.index(sources)
         var additions: [String] = [], added: [String] = []
         for id in missing.sorted() {
             guard let source = known[id] else { continue } // An unknown S number must fail verification.

@@ -24,7 +24,7 @@ final class SecretaryFileTiming {
 
     func finish(_ data: Data) throws -> Data {
         checkpoint("report")
-        var object = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        guard var object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return data }
         outcome = (object["findings"] as? [String])?.isEmpty == false ? "findings" : "succeeded"
         object["timings_ms"] = durations()
         object["work_counts"] = counts

@@ -296,7 +296,8 @@ public enum SecretaryPacketFiles {
             if refresh {
                 packet = try packet.refreshingSource(query, library: library, sourceLimit: state.sourceLimit)
                 var input = try object(state.input)
-                input["sources"] = (input["sources"] as! [[String: Any]]).map { row in
+                guard let rows = input["sources"] as? [[String: Any]] else { throw SecretaryPacket.Failure("Session input has no sources.") }
+                input["sources"] = rows.map { row in
                     var row = row
                     if row["source"] as? String == query { row["full_text"] = packet.fullSourcesByID[query] }
                     return row
@@ -418,7 +419,12 @@ public enum SecretaryPacketFiles {
         let url = try stateURL(state.id, marks: marks)
         try SecretarySessionStorage.save(state, to: url)
     }
-    private static func object(_ data: Data) throws -> [String: Any] { try JSONSerialization.jsonObject(with: data) as! [String: Any] }
+    private static func object(_ data: Data) throws -> [String: Any] {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw SecretaryPacket.Failure("Session JSON is not an object.")
+        }
+        return object
+    }
     private static func encodeObject(_ value: Any) throws -> Data {
         try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     }

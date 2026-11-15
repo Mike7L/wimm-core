@@ -31,14 +31,15 @@ public enum SecretaryGeminiBenchmark {
         try "Offline captured-text validation.".write(to: root.appendingPathComponent(SecretaryPacket.editsPolicyPath), atomically: true, encoding: .utf8)
         let queue = Data((input["review_queue"] as? String ?? "").utf8)
         try queue.write(to: root.appendingPathComponent("secretary/review_queue.md"), options: .atomic)
-        var reg = try JSONSerialization.jsonObject(with: Data(contentsOf: registry)) as! [String: Any]
-        var rows = reg["sources"] as! [[String: Any]]
-        var notes: [RecallNote] = [], ids: [String] = []
+        guard var reg = try JSONSerialization.jsonObject(with: Data(contentsOf: registry)) as? [String: Any],
+              var rows = reg["sources"] as? [[String: Any]] else { throw SecretaryPacket.Failure("registry: no sources array") }
+        var notes: [RecallNote] = [], ids: [String] = [], fullSourcesByID: [String: String] = [:]
         for source in sources {
             guard let id = source["source"] as? String, id.range(of: #"^S[0-9]+$"#, options: .regularExpression) != nil,
                   let text = source["full_text"] as? String, let index = rows.firstIndex(where: { $0["source_id"] as? String == id }) else {
                 throw SecretaryPacket.Failure("Missing captured source or registry ID.")
             }
+            guard fullSourcesByID.updateValue(text, forKey: id) == nil else { throw SecretaryPacket.Failure("Duplicate captured source \(id).") }
             let file = root.appendingPathComponent("recordings/\(id).txt")
             try text.write(to: file, atomically: true, encoding: .utf8)
             try FileStore.mutateSidecar(at: FileStore.metadataURL(forRecordingURL: file)) { $0["recordingId"] = "fixture-\(id)"; return true }
@@ -58,7 +59,7 @@ public enum SecretaryGeminiBenchmark {
         input["response_format"] = 2
         let packet = SecretaryPacket(task: task, documentData: documentData, registryData: registryData, queueData: queue,
             blocks: blocks, selected: ids, receipts: try ids.map { guard let r = receiptByID[$0] else { throw SecretaryPacket.Failure("Incomplete fixture read.") }; return r },
-            projectedSourceIDs: [], newSources: [], fullSourcesByID: Dictionary(uniqueKeysWithValues: sources.map { ($0["source"] as! String, $0["full_text"] as! String) }),
+            projectedSourceIDs: [], newSources: [], fullSourcesByID: fullSourcesByID,
             payload: input, system: "")
         let prompt = try String(contentsOf: promptFile, encoding: .utf8)
         var report: [String: Any] = ["committed": false, "sent": send, "model": model,

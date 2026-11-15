@@ -140,8 +140,8 @@ extension SecretaryPacket {
               Set(decisionIDs).isSubset(of: Set(selected)), Set(decisionIDs).count == decisionIDs.count else {
             throw Failure("Tasks and decisions must name supplied sources at most once each.")
         }
-        let allowed = Set((try JSONSerialization.jsonObject(with: Data(prompt.utf8)) as! [String: Any])["document_blocks"]
-            .flatMap { $0 as? [[String: Any]] }?.compactMap { $0["id"] as? String } ?? [])
+        let allowed = Set(((try JSONSerialization.jsonObject(with: Data(prompt.utf8)) as? [String: Any])?["document_blocks"]
+            as? [[String: Any]])?.compactMap { $0["id"] as? String } ?? [])
         for item in work {
             guard ["ready", "deferred"].contains(item.state), !item.sources.isEmpty,
                   !item.reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, item.reason.count <= 4000,
@@ -153,9 +153,7 @@ extension SecretaryPacket {
         }
         // Parse the large registry once for preflight; the actual write path always reloads
         // and validates its own rows. Temporary Foundation objects are released per task.
-        let registry = try JSONSerialization.jsonObject(with: registryData) as! [String: Any]
-        let rows = (registry["sources"] as! [[String: Any]]) + newSources
-        let validationRows = Dictionary(uniqueKeysWithValues: rows.map { ($0["source_id"] as! String, $0) })
+        let validationRows = try SecretaryRegistry.parse(registryData).indexed(adding: newSources)
         let decisions = Dictionary(uniqueKeysWithValues: plan.sourceDecisions.map { ($0.source, $0) })
         let sourceOwner = Dictionary(uniqueKeysWithValues: work.flatMap { item in item.sources.map { ($0, item.id) } })
         let receiptByID = Dictionary(uniqueKeysWithValues: zip(selected, receipts))

@@ -113,7 +113,7 @@ enum SecretaryRegistryRevision {
         var revised: [[String: Any]] = []
         var next = sources
         for (index, source) in sources.enumerated() {
-            let id = source["source_id"] as! String
+            guard let id = source["source_id"] as? String else { throw Failure("Registry source without a source_id.") }
             guard let update = updates[id], !equal(source, update) else { continue }
             next[index] = update
             edits.append((spans[index], try SecretaryJSONPatch.encode(update, indent: patch.indentation(at: spans[index].lowerBound))))
@@ -126,7 +126,12 @@ enum SecretaryRegistryRevision {
         }
         guard !revised.isEmpty else { return data }
         var counts: [String: Int] = [:]
-        for row in next { counts[row["status"] as! String, default: 0] += 1 }
+        for row in next {
+            guard let status = row["status"] as? String else {
+                throw Failure("\(row["source_id"] as? String ?? "Registry source"): status is not a string.")
+            }
+            counts[status, default: 0] += 1
+        }
         let batch: [String: Any] = ["kind": "host_review", "run_id": task.id, "date": day(task.createdAt),
                                     "method": method,
                                     "count": revised.count, "revised_sources": revised, "last_scan_changed": false]
@@ -152,7 +157,7 @@ enum SecretaryRegistryRevision {
             }
         }
         if !missing.isEmpty {
-            let close = patch.bytes.lastIndex(of: 125)!
+            guard let close = patch.bytes.lastIndex(of: 125) else { throw Failure("Registry JSON has no closing brace.") }
             edits.append((close..<close, Data((",\n  " + missing.joined(separator: ",\n  ") + "\n").utf8)))
         }
         return try patch.applying(edits)

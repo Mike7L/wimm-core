@@ -304,6 +304,8 @@ extension SecretaryPacket {
                                      analysis: receipt.analysis, outcome: outcome, reason: reason)
             }
         }
+        // The registry snapshot is host data, not the model's reply: a malformed one is an error, not a rejection.
+        let registryRows = try SecretaryRegistry.parse(registryData).rows + newSources
         var report = EditsReport(format: 2, accepted: false, rejection: nil, edits: [], sources: [], ignoredSources: [], lazyReply: false, summary: "")
         let previewed = Set(previewReceipts.keys)
         func previewOutcomes(_ noise: [String: DoneEntry]) -> [PreviewOutcome]? {
@@ -317,12 +319,13 @@ extension SecretaryPacket {
             guard reply.readSections.isEmpty else { throw Failure("A second read request; sections can be read once per pass.") }
             guard reply.questions.count <= 20, reply.questions.allSatisfy({ !$0.isEmpty && $0.count <= 2000 }),
                   reply.summary.count <= 2000, reply.edits.count <= 60 else { throw Failure("Invalid edits/questions/summary size.") }
-            let input = try JSONSerialization.jsonObject(with: Data(prompt.utf8)) as! [String: Any]
+            guard let input = try JSONSerialization.jsonObject(with: Data(prompt.utf8)) as? [String: Any] else {
+                throw Failure("Packet input is not a JSON object.")
+            }
             let allowed = Set((input["document_blocks"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String })
             let editions = Set((input["document_blocks"] as? [[String: Any]] ?? []).compactMap { block in
                 (block["text"] as? String).map(Self.isEdition) == true ? block["id"] as? String : nil })
-            let registry = try JSONSerialization.jsonObject(with: registryData) as! [String: Any]
-            let known = Set(((registry["sources"] as! [[String: Any]]) + newSources).compactMap { $0["source_id"] as? String })
+            let known = Set(registryRows.compactMap { $0["source_id"] as? String })
             let citation = try NSRegularExpression(pattern: #"\[(S[0-9]+)\]"#)
             func cited(_ text: String) -> Set<String> {
                 let ns = text as NSString
@@ -394,9 +397,8 @@ extension SecretaryPacket {
             }
             // Status lines of the topics the surviving edits touched: a rewrite of the whole line
             // is checked on its own and never takes an edit down with it.
-            let rows = (registry["sources"] as! [[String: Any]]) + newSources
             let status = resolveStatusUpdates(reply.statusUpdates, survivors: survivors.map { ($0.op, $0.edit, $0.named) },
-                                              edits: edits, rows: rows, original: original)
+                                              edits: edits, rows: registryRows, original: original)
             edits += status.edits
             report.statusUpdates = status.outcomes.isEmpty ? nil : status.outcomes
             report.statusNeeded = status.needed.isEmpty ? nil : status.needed
@@ -523,7 +525,9 @@ extension SecretaryPacket {
     /// Adds the requested sections (heading and own text) to the model input, once, within budget.
     func prompt(sections: [String], validationPrompt: String, note: String? = nil) throws -> String {
         guard !sections.isEmpty, sections.count <= Self.readSectionLimit else { throw Failure("Ask for one to \(Self.readSectionLimit) sections.") }
-        var input = try JSONSerialization.jsonObject(with: Data(validationPrompt.utf8)) as! [String: Any]
+        guard var input = try JSONSerialization.jsonObject(with: Data(validationPrompt.utf8)) as? [String: Any] else {
+            throw Failure("Packet input is not a JSON object.")
+        }
         var current = input["document_blocks"] as? [[String: String]] ?? []
         var ids = Set(current.compactMap { $0["id"] }), added: [Block] = [], bytes = 0
         for section in sections {

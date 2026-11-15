@@ -16,8 +16,8 @@ extension SecretaryPacketFiles {
     }
 
     static func bundle(_ state: State, manifest: Data) throws -> Data {
-        let input = try JSONSerialization.jsonObject(with: state.input) as! [String: Any]
-        guard let evidence = input["editor_evidence"] as? [String: Any] else {
+        guard let input = try JSONSerialization.jsonObject(with: state.input) as? [String: Any],
+              let evidence = input["editor_evidence"] as? [String: Any] else {
             throw SecretaryPacket.Failure("This session has no valid editor evidence bundle.")
         }
         var result = input

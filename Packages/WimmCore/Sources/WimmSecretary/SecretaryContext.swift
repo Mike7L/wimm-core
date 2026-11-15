@@ -7,9 +7,10 @@ import WimmInfrastructure
 public enum SecretaryContext {
     public static func registry(document: URL, references: [String] = [], query: String? = nil,
                                 limit: Int = 20, offset: Int = 0) throws -> Data {
-        let url = document.deletingPathExtension().appendingPathExtension("sources.json")
-        let parsed = try JSONSerialization.jsonObject(with: Data(contentsOf: url))
-        let (object, sources, counts, maximum) = try validatedRegistry(parsed)
+        let url = SecretaryRegistry.url(document: document)
+        let registry = try SecretaryRegistry.parse(Data(contentsOf: url))
+        try registry.checkCounts()
+        let object = registry.root, sources = registry.rows, counts = registry.counts, maximum = registry.maxNumber
         let terms = (query ?? "").lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
         let selecting = !references.isEmpty || !terms.isEmpty
         let matches = selecting ? sources.filter { source in
