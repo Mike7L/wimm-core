@@ -705,7 +705,8 @@ extension SecretaryPacketFiles {
             if record.findings.isEmpty {
                 let files = listed
                 if let scan = await SecretaryPassPlanner.scan(marks: marks, initialBoundary: .distantPast,
-                                                              recordings: files.map { files in { files } } ?? recordings) {
+                                                              recordings: files.map { files in { files } } ?? recordings,
+                                                              held: SecretaryUserHold.heldNotes(workspace: task.workspace)) {
                     record.remainingNotes = scan.pending
                     if let boundary = SecretaryPassPlanner.advancedBoundary(after: scan, started: task.createdAt) {
                         try marks.setPass(.init(asOf: boundary, cursor: nil, comment: "verified secretary file packet", setAt: Date()))

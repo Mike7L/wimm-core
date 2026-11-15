@@ -59,6 +59,27 @@ final class SecretaryPassPlannerTests: XCTestCase {
         XCTAssertEqual(result.oldestPending, Date(timeIntervalSince1970: 2_100_000))
     }
 
+    /// The planner counts what preparation would offer: a settled note whose re-run only moved
+    /// punctuation stays settled (it pinned the real boundary for weeks), a pending or failed one does not.
+    func testPunctuationOnlyRerunOfSettledNoteDoesNotPinTheBoundary() async throws {
+        try store.setPass(.init(asOf: boundary, cursor: nil, comment: nil, setAt: boundary))
+        func marked(_ name: String, _ status: AgentMarkStore.Mark.Status) -> (String, AgentMarkStore.Mark?) {
+            (name + ".m4a", .init(status: status, source: nil, markedAt: boundary, noteId: name,
+                                  text: "t", analysis: "a", wording: "w"))
+        }
+        try store.update(Dictionary(uniqueKeysWithValues: [marked("noise", .noise), marked("applied", .applied),
+                                                           marked("pending", .pending), marked("reworded", .applied)]))
+        let punctuated = NoteFingerprint(text: "t2", analysis: "a", wording: "w")
+        let found = await scan(
+            changes: ["noise": 2_000_000, "applied": 2_100_000, "pending": 2_300_000, "reworded": 2_400_000, "fresh": 2_500_000],
+            fingerprints: ["noise": punctuated, "applied": punctuated, "pending": punctuated,
+                           "reworded": NoteFingerprint(text: "t3", analysis: "a", wording: "other words")],
+            kinds: ["noise": [.transcript], "applied": [.transcript], "pending": [.transcript], "reworded": [.transcript]])
+        let result = try XCTUnwrap(found)
+        XCTAssertEqual(result.pending, 3, "pending, reworded and fresh; the punctuation-only settled notes are not")
+        XCTAssertEqual(result.oldestPending, Date(timeIntervalSince1970: 2_300_000))
+    }
+
     func testNothingPendingWhenEverythingIsMarked() async throws {
         try store.setPass(.init(asOf: boundary, cursor: nil, comment: nil, setAt: boundary))
         try store.update(Dictionary(uniqueKeysWithValues: [mark("done")]))

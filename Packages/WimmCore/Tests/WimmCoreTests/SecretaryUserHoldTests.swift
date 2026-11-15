@@ -124,4 +124,42 @@ final class SecretaryUserHoldTests: XCTestCase {
         XCTAssertEqual(refused.ambiguous, ["lost.txt"])
         XCTAssertEqual(try rows()["S1"]!["status"] as? String, "applied")
     }
+
+    /// A held note is never offered, so it must not pin the pass boundary; releasing it
+    /// moves a boundary that passed it back, so the next pass offers it again.
+    func testHeldNoteDoesNotPinTheBoundaryAndReleaseBringsItBack() async throws {
+        try writeRegistry([["source_id": "S1", "path": "../recordings/lost.meta.json", "note_file": "lost.m4a",
+                            "status": "noise", "reason": "old"]])
+        _ = try SecretaryUserHold.hold(document: document, files: ["lost.txt"], reason: "user said hold", apply: true)
+        let workspace = try XCTUnwrap(SecretaryWorkspace(document: document))
+        let held = SecretaryUserHold.heldNotes(workspace: workspace)
+        XCTAssertTrue(held(media))
+        XCTAssertFalse(held(root.appendingPathComponent("recordings/other.txt")))
+
+        let store = AgentMarkStore(directory: root.appendingPathComponent("state"))
+        let boundary = Date(timeIntervalSince1970: 1_000_000), changed = boundary.addingTimeInterval(10)
+        try store.setPass(.init(asOf: boundary, cursor: nil, comment: nil, setAt: boundary))
+        let recordings: () async -> [URL] = { [media] in [media] }
+        let pinnedScan = await SecretaryPassPlanner.scan(marks: store, recordings: recordings, lastChange: { _ in changed })
+        let pinned = try XCTUnwrap(pinnedScan)
+        XCTAssertEqual(pinned.oldestPending, changed, "without the hold the unmarked note waits")
+        let heldScan = await SecretaryPassPlanner.scan(marks: store, recordings: recordings,
+                                                       lastChange: { _ in changed }, held: held)
+        let scan = try XCTUnwrap(heldScan)
+        XCTAssertEqual(scan.pending, 0)
+        let started = changed.addingTimeInterval(100)
+        XCTAssertEqual(SecretaryPassPlanner.advancedBoundary(after: scan, started: started), started)
+        try store.setPass(.init(asOf: started, cursor: nil, comment: nil, setAt: started))
+
+        let mtime = Date(timeIntervalSince1970: 1_000_050)
+        try FileManager.default.setAttributes([.modificationDate: mtime], ofItemAtPath: media.path)
+        try FileManager.default.setAttributes([.modificationDate: mtime],
+                                              ofItemAtPath: FileStore.metadataURL(forRecordingURL: media).path)
+        let released = try SecretaryUserHold.release(document: document, files: ["lost.txt"], reason: "user resumed",
+                                                     apply: true, marks: store)
+        XCTAssertEqual(released.held, ["S1": "lost.txt"])
+        XCTAssertFalse(SecretaryUserHold.heldNotes(workspace: workspace)(media))
+        XCTAssertEqual(store.pass()?.asOf, LibraryRecallSource.lastChange(of: media))
+        XCTAssertLessThan(try XCTUnwrap(store.pass()?.asOf), started)
+    }
 }

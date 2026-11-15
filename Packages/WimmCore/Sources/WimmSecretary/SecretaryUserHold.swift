@@ -12,6 +12,35 @@ import WimmInfrastructure
 /// and other flags (`wimm_unindexed`) are not touched; releasing the hold is a
 /// separate, explicit user decision. Dry run unless `apply`.
 public enum SecretaryUserHold {
+    /// An active explicit user hold on this registry row, as preparation honours it.
+    static func isActive(_ row: [String: Any]) -> Bool {
+        guard let hold = row["user_exclusion"] as? [String: Any] else { return false }
+        return hold["active"] as? Bool == true && hold["authority"] as? String == "user"
+            && hold["scope"] as? String == "source" && hold["resume"] as? String == "explicit_user_release"
+            && !(hold["reason"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Notes preparation skips as held (`held_sources`): the exact media file is named by exactly
+    /// one active hold whose row points at that note's sidecar. The pass planner uses this so a hold
+    /// does not pin the pass boundary; an unreadable registry holds nothing (the boundary waits).
+    static func heldNotes(workspace: SecretaryWorkspace) -> (URL) -> Bool {
+        guard let data = try? Data(contentsOf: SecretaryRegistry.url(document: workspace.document)),
+              let registry = try? SecretaryRegistry.parse(data) else { return { _ in false } }
+        let documentDirectory = workspace.document.deletingLastPathComponent()
+        var resolver = SecretaryPathResolver()
+        var sidecarByFile: [String: String] = [:]
+        for (file, rows) in Dictionary(grouping: registry.rows.filter(isActive), by: { $0["note_file"] as? String ?? "" }) {
+            guard !file.isEmpty, rows.count == 1, let raw = rows[0]["path"] as? String,
+                  let path = raw.utf8.contains(UInt8(ascii: "%")) ? raw.removingPercentEncoding : raw else { continue }
+            sidecarByFile[file] = resolver.resolve(path, relativeTo: documentDirectory)
+        }
+        guard !sidecarByFile.isEmpty else { return { _ in false } }
+        return { url in
+            guard let sidecar = sidecarByFile[url.lastPathComponent] else { return false }
+            return FileStore.metadataURL(forRecordingURL: url).resolvingSymlinksInPath().path == sidecar
+        }
+    }
+
     public struct Report: Codable, Sendable {
         public var runID: String
         public var applied: Bool
@@ -94,7 +123,10 @@ public enum SecretaryUserHold {
     /// Explicit user release (2026-11-14): the named files' active holds become `active: false` with
     /// `released_at`/`release_reason`; the hold record stays for audit and nothing else in the row changes.
     /// Works without the hold run's backup (undo needs it). Dry run unless `apply`.
-    public static func release(document: URL, files: [String], reason: String, apply: Bool, now: Date = Date()) throws -> Report {
+    /// A boundary that moved past a held note while it was held moves back to it, so the released note
+    /// is offered again by the next pass (its mark is kept; preparation decides from the fingerprint).
+    public static func release(document: URL, files: [String], reason: String, apply: Bool, now: Date = Date(),
+                               marks: AgentMarkStore = AgentMarkStore()) throws -> Report {
         guard !PrivateMode.isEnabled else { throw SecretaryError.privateMode }
         guard let workspace = SecretaryWorkspace(document: document) else { throw SecretaryError.notAWorkspace(document.path) }
         let reason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -137,6 +169,12 @@ public enum SecretaryUserHold {
         guard try Data(contentsOf: registryURL) == data else { throw Failure("Registry changed while releasing holds; nothing applied.") }
         try next.write(to: registryURL, options: .atomic)
         report.registryBackup = workspace.relative(backup)
+        let recordings = workspace.root.appendingPathComponent("recordings")
+        let earliest = report.held.values.compactMap { LibraryRecallSource.lastChange(of: recordings.appendingPathComponent($0)) }.min()
+        if let earliest, let pass = marks.pass(), earliest < pass.asOf {
+            try marks.setPass(.init(asOf: earliest, cursor: nil,
+                                    comment: "moved back to offer notes released from a user hold", setAt: now))
+        }
         return report
     }
 

@@ -266,8 +266,21 @@ public struct NoteFingerprint: Sendable, Equatable, Codable {
         let kinds = NoteChangeKind.kinds(meta, since: since,
                                          typedFileChanged: NoteChangeKind.typedFileChanged(mediaURL, since: since))
         guard kinds.contains(.transcript) || kinds.contains(.edited) else { return false }
-        let now = make(meta, typed: typedText(at: mediaURL), includeWording: false)
+        let now = make(meta, typed: typedText(at: mediaURL), includeWording: settled(mark))
+        return needsPass(mark: mark, now: now)
+    }
+
+    /// Whether a marked note's content differs from its mark the way the pass
+    /// packet counts it: a settled (noise/applied) note whose re-run only moved
+    /// punctuation stays settled. The packet and the pass planner share this,
+    /// so the boundary never waits for a note no packet will offer.
+    public static func needsPass(mark: AgentMarkStore.Mark, now: NoteFingerprint) -> Bool {
+        if settled(mark), sameWording(mark, now) { return false }
         return mark.text != now.text || mark.analysis != now.analysis
+    }
+
+    private static func settled(_ mark: AgentMarkStore.Mark) -> Bool {
+        mark.status == .noise || mark.status == .applied
     }
 
     private static func typedText(at mediaURL: URL) -> String? {

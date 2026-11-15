@@ -8,7 +8,10 @@ import WimmInfrastructure
 /// fingerprint *and* a new transcript or a human edit since the boundary. That
 /// is exactly what the pass prompt asks `changed_notes` for
 /// (`skip_unchanged_marked` plus `marked_changes: "transcript,edited"`), so a
-/// re-analysis, a sync or a late OCR pass does not wake the agent.
+/// re-analysis, a sync or a late OCR pass does not wake the agent. It counts
+/// only what preparation would offer: a settled note whose re-run only moved
+/// punctuation and a note under an explicit user hold are not pending, or they
+/// would pin the boundary for good (2026-11: it stayed at 10-25 for weeks).
 public struct SecretaryPassScan: Sendable, Equatable {
     public var boundary: Date
     public var pending: Int
@@ -26,7 +29,8 @@ public enum SecretaryPassPlanner {
         recordings: (() async -> [URL])? = nil,
         lastChange: ((URL) -> Date?)? = nil,
         fingerprint: ((URL) -> NoteFingerprint)? = nil,
-        kinds: ((URL, Date) -> [NoteChangeKind])? = nil
+        kinds: ((URL, Date) -> [NoteChangeKind])? = nil,
+        held: (URL) -> Bool = { _ in false }
     ) async -> SecretaryPassScan? {
         let recordings = recordings ?? { await FileRepository().recordings() }
         let lastChange = lastChange ?? { LibraryRecallSource.lastChange(of: $0) }
@@ -37,8 +41,7 @@ public enum SecretaryPassPlanner {
             let fingerprint = fingerprint ?? { NoteFingerprint.read(forRecordingURL: $0) }
             let kinds = kinds ?? { NoteChangeKind.kinds(forRecordingURL: $0, since: $1) }
             changedMarkedNote = { url, boundary, mark in
-                let now = fingerprint(url)
-                guard mark.text != now.text || mark.analysis != now.analysis else { return false }
+                guard NoteFingerprint.needsPass(mark: mark, now: fingerprint(url)) else { return false }
                 let changes = kinds(url, boundary)
                 return changes.contains(.transcript) || changes.contains(.edited)
             }
@@ -50,6 +53,8 @@ public enum SecretaryPassPlanner {
         var oldest: Date?
         for url in await recordings() {
             guard let changed = lastChange(url), changed >= boundary else { continue }
+            // Preparation never offers a held note, so it must not pin the boundary either.
+            guard !held(url) else { continue }
             if let mark = known[url.lastPathComponent] {
                 guard changedMarkedNote(url, boundary, mark) else { continue }
             } else {
