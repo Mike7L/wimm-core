@@ -69,11 +69,62 @@ final class PseudonymFilterTests: XCTestCase {
             Musterverwaltung GmbH, Musterstraße 12, 10115 Berlin
             """,
             """
-            Sehr geehrte Frau Beispiel,
+            Sehr geehrte ⟦X#1⟧,
             bitte überweisen Sie 120,50 Euro auf ⟦I#1⟧ bis 01.11.2026.
             Rückfragen an ⟦E#1⟧ oder ⟦T#1⟧.
-            Musterverwaltung GmbH, ⟦A#1⟧, ⟦A#2⟧
+            ⟦O#1⟧, ⟦A#1⟧, ⟦A#2⟧
             """)
+    }
+
+    // MARK: Names the vocabulary does not hold
+
+    /// A stand-in for the 2026-10-24 holdout, which stays in the owner's
+    /// workspace: 12 invented paragraphs with 15 identifiers and a names-only
+    /// vocabulary. There the dictionary alone left 10 of 15 visible.
+    func testSyntheticHoldoutDictionaryAloneLeaksTenOfFifteenAndSuspectRulesHideThem() throws {
+        let vocabulary = [
+            masha, acme,
+            PseudonymFilter.DictionaryTerm(canonical: "Олег", kind: .person),
+            PseudonymFilter.DictionaryTerm(canonical: "Вера", forms: ["Веры", "Вере"], kind: .person),
+        ]
+        let text = """
+            Вчера созвонился с Машей, она просила перезвонить.
+            Потом обсуждали с Оксаной Беловой новый договор.
+            Олег обещал прислать смету до пятницы.
+            На выходных еду в Бремен, там живёт Инга.
+            Инга сказала, что встретит на вокзале.
+            Счёт от Holzmann Bau GmbH пришёл на прошлой неделе.
+            Страховка TK просит справку, а BHI ждёт анкету.
+            Сходили в кафе «Танец дня», было шумно.
+            Мой номер клиента 48151623 нужен для заявления.
+            Почта для счетов: buchhaltung@example.org.
+            Письмо подписала Erika Beispiel из отдела кадров.
+            Надо напомнить Игорю и Вере про встречу в Акме Лаб.
+            """
+        let identifiers = [
+            "Машей", "Оксаной Беловой", "Олег", "Бремен", "Инга", "Holzmann Bau GmbH", "TK", "BHI", "Танец дня",
+            "48151623", "buchhaltung@example.org", "Erika Beispiel", "Игорю", "Вере", "Акме Лаб",
+        ]
+        let dictionaryOnly = try PseudonymFilter(dictionary: vocabulary, masksSuspects: false).mask(text, session: session())
+        XCTAssertEqual(identifiers.filter(dictionaryOnly.contains).count, 10)
+
+        let s = session()
+        let masked = try PseudonymFilter(dictionary: vocabulary).mask(text, session: s)
+        XCTAssertEqual(identifiers.filter(masked.contains), [])
+        XCTAssertEqual(s.map.entries.count, identifiers.count, "one placeholder per identifier, nothing else masked")
+        XCTAssertEqual(s.map.counts, ["P": 3, "O": 2, "E": 1, "X": 9])
+        XCTAssertEqual(try PseudonymFilter.unmask(masked, map: s.map), text)
+    }
+
+    func testGlossaryNamesStayReadableAndKnownLimitsAreNotHidden() throws {
+        let filter = PseudonymFilter(readable: ["claude code"])
+        XCTAssertEqual(normalized(try filter.mask("Потом открыл Claude Code и написал Erika Beispiel.", session: session())),
+                       "Потом открыл Claude Code и написал ⟦X#1⟧.")
+        // What the shape rules cannot tell from ordinary text, so only the vocabulary hides it:
+        // a lone name opening a sentence, a single Latin word (German capitalizes nouns), a lowercase name.
+        for limit in ["Оксана попросила ответить.", "Звонил ему Schmidt насчёт счёта.", "передай оксане привет"] {
+            XCTAssertEqual(try PseudonymFilter().mask(limit, session: session()), limit)
+        }
     }
 
     func testGoldenRussianVoiceNoteWithDictionary() throws {

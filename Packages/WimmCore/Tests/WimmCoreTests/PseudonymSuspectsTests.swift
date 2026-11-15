@@ -10,7 +10,7 @@ final class PseudonymSuspectsTests: XCTestCase {
 
     func testWhatMaskingLeftBehindIsListedAndTokensAreNot() throws {
         let masha = PseudonymFilter.DictionaryTerm(canonical: "Маша", forms: ["Маши", "Машей"], kind: .person)
-        let (masked, _) = try PseudonymFilter(dictionary: [masha]).mask(
+        let (masked, _) = try PseudonymFilter(dictionary: [masha], masksSuspects: false).mask(
             "Вчера с Машей и Оксаной Беловой обсуждали «Танец дня». Маши не было в Бремене, письмо на masha@example.org.")
         XCTAssertFalse(masked.contains("Маш"))
         let found = PseudonymSuspects.find(inMasked: masked)

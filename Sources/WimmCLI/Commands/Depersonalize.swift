@@ -8,8 +8,8 @@ struct Depersonalize: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "depersonalize",
         abstract: "Preview depersonalized note/text locally (read-only, no model call)",
-        discussion: "Names and organizations are masked only when marked sensitive in Vocabulary. "
-            + "A successful preview is not a guarantee of anonymity. "
+        discussion: "Sensitive Vocabulary terms are masked, and so is what looks like a name, company, "
+            + "acronym or long number. A successful preview is not a guarantee of anonymity. "
             + "Use --text-file - to read UTF-8 text from stdin."
     )
 

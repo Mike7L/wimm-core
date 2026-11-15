@@ -22,10 +22,10 @@ public struct PseudonymSuspect: Sendable, Equatable, Identifiable {
     public var id: String { surface }
 }
 
-/// Review list for the private-text preview: what the deterministic masking left
-/// visible but a reader would likely call identifying. It never masks anything —
-/// the user turns a suspect into a vocabulary term (Remember name), and the next
-/// preview masks it through the normal egress path.
+/// What a text shows, beyond the regex detectors and the vocabulary, that a
+/// reader would likely call identifying. `PseudonymFilter` masks every one of
+/// them after its own detectors, so over a masked text this list is only what
+/// the rules themselves cannot settle.
 ///
 /// Measured on the 2026-10-24 depersonalization holdout (12 real paragraphs,
 /// dictionary-only masking leaked 10 of 15 identifiers): these rules surfaced
@@ -34,8 +34,9 @@ public enum PseudonymSuspects {
     public static let maximum = 40
 
     /// `text` is masked text (tokens ⟦…⟧ are skipped). `ignoring` holds lowercased
-    /// surfaces the user dismissed.
-    public static func find(inMasked text: String, ignoring: Set<String> = []) -> [PseudonymSuspect] {
+    /// surfaces that are not identifiers. `limit` caps the review list; masking passes `.max`.
+    public static func find(inMasked text: String, ignoring: Set<String> = [],
+                            limit: Int = maximum) -> [PseudonymSuspect] {
         // Section headers the context builder writes ("[MAIN_TEXT lang=ru]") are not note text.
         let unheaded = sectionHeader.stringByReplacingMatches(
             in: text, range: NSRange(location: 0, length: (text as NSString).length), withTemplate: " ")
@@ -140,7 +141,7 @@ public enum PseudonymSuspects {
                 ? !multiWord.contains { $0 != surface && $0.contains(surface) }
                 : !partsOfMultiWord.contains(surface) && !multiWord.contains { $0.contains(surface) }
         }
-        return kept.sorted { $0.value.at < $1.value.at }.prefix(maximum).map { entry in
+        return kept.sorted { $0.value.at < $1.value.at }.prefix(limit).map { entry in
             PseudonymSuspect(surface: entry.key, reason: entry.value.reason, count: occurrences(of: entry.key, in: ns))
         }
     }

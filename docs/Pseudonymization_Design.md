@@ -24,6 +24,39 @@
 механизмы сохраняются; решение не разрешает обходить запреты отправки,
 отключать маскирование или автоматически отправлять оригиналы при сбое.
 
+## Изменение 2026-11-15: правила «возможно не скрыто» маскируют
+
+На holdout от 2026-10-24 словарь с регулярными выражениями оставил 10 из 15
+идентификаторов. Правила `PseudonymSuspects` находили их все, но только
+показывали список: полнота зависела от того, прочитает ли его владелец, а на
+отправку список не влиял.
+
+Теперь `PseudonymFilter.mask` после своих детекторов заменяет токеном всё, что
+находят эти правила: имя с заглавной буквы в середине предложения, два и более
+слова с заглавной подряд, короткое «Название», аббревиатуру вне общего списка,
+компанию с GmbH/AG/…, восемь и более цифр подряд. Каждое написание получает
+свой токен (`⟦X…⟧`, компания `⟦O…⟧`) и заменяется везде, где стоит целым
+словом, поэтому имя, встреченное в середине предложения, скрыто и в его
+начале. Обратная замена точная.
+
+- Имена из глоссария, который и так отправляется (`note.glossary`), правила
+  не трогают (`PseudonymFilter.readable`).
+- Лишнее срабатывание стоит модели одного читаемого слова. Пропуск отправляет
+  идентификатор, поэтому правила ошибаются в сторону маскирования.
+- Правила не видят, и скрывает это только словарь: одиночное имя в начале
+  предложения, которое больше нигде не встречается; одно латинское слово с
+  заглавной (в немецком так пишутся все существительные); имя со строчной
+  буквы; падежную форму словарного имени со строчной буквы.
+- Исходящая проверка (`assertClean`) по-прежнему знает только регулярные
+  выражения и словарь.
+- Проверено на синтетической копии holdout
+  (`testSyntheticHoldoutDictionaryAloneLeaksTenOfFifteenAndSuspectRulesHideThem`):
+  только словарь оставляет 10 из 15, с правилами 0 из 15 и ни одного лишнего
+  токена. Настоящий holdout лежит в `_ME`, инструменты репозитория его не
+  открывают; его проверяет владелец через `wimm-cli depersonalize --text-file`.
+- Качество NoteCard на замаскированном тексте не измерялось: это платный
+  эксперимент, он требует отдельного решения.
+
 ## Existing implementation and earlier design
 
 Historical status 2026-10-20: **stage 1 (deterministic core) implemented, private mode
@@ -315,8 +348,9 @@ Code: `Packages/WimmCore/Sources/WimmInfrastructure/Privacy/`.
   start, also Latin), short «Названия» in guillemets (not quoted questions),
   2–5 letter acronyms outside a common list, Latin names ending in GmbH/AG/…,
   and 8+ digit runs. A single capitalized Latin word is skipped (German
-  capitalizes nouns); context headers (`[MAIN_TEXT …]`) are ignored. It masks
-  nothing. **Hide…** opens the ordinary vocabulary editor prefilled as a
+  capitalizes nouns); context headers (`[MAIN_TEXT …]`) are ignored. Until
+  2026-11-15 it masked nothing; now masking applies these rules itself (see
+  the top of this document) and the list holds only what is left. **Hide…** opens the ordinary vocabulary editor prefilled as a
   sensitive term (kind from the reason, guessed Russian case forms as variants,
   because masking matches forms literally); on save the preview reloads and
   masks it through the egress path. **Not an identifier** dismisses it for this
@@ -361,9 +395,10 @@ counts on stderr. `--json` includes `text`, the masked JSON `maskedUser`,
 `wouldSend`, `dictionaryTerms`, `maskedEntities`, `suspects` (surface / reason /
 count), `blockedKinds` and optional `refusal`; it never prints the reverse map.
 A masking refusal or failed outbound guard returns a nonzero exit status and
-withholds text and payload. Unknown names can remain: names and organizations
-are masked only through sensitive Vocabulary entries. Suspects are diagnostic,
-not a second masking pass, and `wouldSend` is not a guarantee of anonymity.
+withholds text and payload. Unknown names can remain: beyond sensitive
+Vocabulary entries, names and organizations are masked only when the suspect
+rules recognize their shape. `suspects` lists what is left after that pass, and
+`wouldSend` is not a guarantee of anonymity.
 
 Known limits: a phone glued to a following number run of more than 15 digits
 in total is shortened to its longest plausible prefix, and Luhn-failing

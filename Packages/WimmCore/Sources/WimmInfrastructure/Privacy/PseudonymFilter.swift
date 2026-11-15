@@ -27,6 +27,8 @@ public enum PseudonymKind: String, Codable, CaseIterable, Sendable {
 /// Which rule found a span; shown in the local preview legend.
 public enum PseudonymDetector: String, Codable, CaseIterable, Sendable {
     case email, iban, card, phone, street, postcode, dictionary
+    /// Found by shape (`PseudonymSuspects`), without a vocabulary entry.
+    case suspect
 }
 
 /// Every error names categories or tokens, never a detected value.
@@ -138,8 +140,9 @@ public final class PseudonymSession {
     }
 }
 
-/// Deterministic detectors plus the explicit personal dictionary. Stage 1 of
-/// `docs/Pseudonymization_Design.md`: no model, no registry, no learning.
+/// Deterministic detectors, the explicit personal dictionary, then the shape
+/// rules of `PseudonymSuspects` for names neither knows. No model, no registry,
+/// no learning: see `docs/Pseudonymization_Design.md`.
 public struct PseudonymFilter: Sendable {
     /// One sensitive vocabulary entry, matched whole-token and literally
     /// (case-insensitive), over the canonical name and its recognition variants.
@@ -176,10 +179,17 @@ public struct PseudonymFilter: Sendable {
     }
 
     public let dictionary: [DictionaryTerm]
+    /// Also mask what `PseudonymSuspects` finds. Off only to measure the
+    /// dictionary alone: the vocabulary never holds every name in a note.
+    public let masksSuspects: Bool
+    /// Lowercased names the suspect rules leave readable (the glossary that is sent anyway).
+    public let readable: Set<String>
     private let dictionaryMatchers: [Matcher]
 
-    public init(dictionary: [DictionaryTerm] = []) {
+    public init(dictionary: [DictionaryTerm] = [], masksSuspects: Bool = true, readable: Set<String> = []) {
         self.dictionary = dictionary
+        self.masksSuspects = masksSuspects
+        self.readable = readable
         var matchers: [Matcher] = []
         for (index, term) in dictionary.enumerated() {
             // Single letters ("Я") would mask ordinary words; the store allows them, masking does not.
@@ -260,6 +270,33 @@ public struct PseudonymFilter: Sendable {
             let (next, replaced) = maskPass(current, session: session)
             current = next
             if replaced == 0 { break }
+        }
+        return masksSuspects ? maskSuspects(in: current, session: session) : current
+    }
+
+    /// Names, companies, acronyms and long numbers the detectors above do not
+    /// know. Each surface gets its own token and is replaced wherever it stands
+    /// as a whole word, so a name seen mid-sentence is also hidden where it
+    /// opens one. A wrong hit costs the model one readable word and unmasks
+    /// exactly; a missed one sends an identifier.
+    private func maskSuspects(in text: String, session: PseudonymSession) -> String {
+        var current = text
+        // A new token can make the next capital a mid-sentence word, hence the repeat.
+        for _ in 0..<3 {
+            let suspects = PseudonymSuspects.find(inMasked: current, ignoring: readable, limit: .max)
+                .sorted { $0.surface.count > $1.surface.count }
+            guard !suspects.isEmpty else { break }
+            for suspect in suspects {
+                // A surface cannot occur inside a token: those hold one letter and digits.
+                let pattern = #"(?<![\p{L}\p{N}_])"# + NSRegularExpression.escapedPattern(for: suspect.surface) + #"(?![\p{L}\p{N}_])"#
+                guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+                let token = session.token(
+                    entity: "suspect:\(suspect.surface)", kind: suspect.reason == .organization ? .org : .other,
+                    detector: .suspect, canonical: suspect.surface, caseForms: [:], surface: suspect.surface)
+                current = regex.stringByReplacingMatches(
+                    in: current, range: NSRange(location: 0, length: (current as NSString).length),
+                    withTemplate: NSRegularExpression.escapedTemplate(for: token))
+            }
         }
         return current
     }
@@ -493,7 +530,7 @@ public struct PseudonymMapArchive: Sendable {
 /// Stamped as `analysisPseudonymization` after a successful masked analysis.
 public struct PseudonymizationReceipt: Equatable, Sendable {
     public static let schema = "PseudonymizationReceipt@v1"
-    public static let version = "stage1-2026-10-19"
+    public static let version = "stage2-2026-11-15"
     public let mapSha256: String
     public let counts: [String: Int]
 

@@ -112,7 +112,8 @@ reasons behind the rules are in `docs/` (index: `docs/README.md`).
   through `LLMJSONClient`; code that bypasses `LLMTransport` must call
   `PrivateMode.checkCloudEgress`. The depersonalized preview must use the real
   egress path. One `analysisVocabulary` read per analysis. Pseudonym maps never
-  go to CloudKit or payloads.
+  go to CloudKit or payloads. Egress filters keep
+  `PseudonymFilter.masksSuspects` on; off is only for measuring the dictionary.
 - MCP reading tools and every secretary run fail closed in private mode.
 - Never commit personal notes, real transcripts, keys or names from a real
   library; test fixtures use invented names and texts.

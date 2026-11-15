@@ -60,7 +60,7 @@ final class CLIDepersonalizeTests: XCTestCase {
         }
     }
 
-    func testRawTextFileReportsUnhiddenNamesWithoutLearningThem() throws {
+    func testRawTextFileHidesNamesOutsideTheVocabularyWithoutLearningThem() throws {
         let text = base.appendingPathComponent("input.md")
         try "Сегодня встретил Оксану, ответить на test@example.org".write(to: text, atomically: true, encoding: .utf8)
         let before = try files()
@@ -68,8 +68,9 @@ final class CLIDepersonalizeTests: XCTestCase {
         XCTAssertEqual(result.status, 0, result.err)
         let report = try object(result.out)
         XCTAssertEqual(report["dictionaryTerms"] as? Int, 0)
-        let suspects = try XCTUnwrap(report["suspects"] as? [[String: Any]])
-        XCTAssertTrue(suspects.contains { $0["surface"] as? String == "Оксану" }, result.out)
+        XCTAssertEqual(report["maskedEntities"] as? Int, 2)
+        XCTAssertEqual((report["suspects"] as? [[String: Any]])?.count, 0)
+        XCTAssertFalse(result.out.contains("Оксану"))
         XCTAssertFalse(result.out.contains("example.org"))
         XCTAssertEqual(try files(), before)
     }

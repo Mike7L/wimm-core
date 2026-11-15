@@ -74,6 +74,13 @@ public actor LLMJSONClient {
     struct Privacy: Sendable {
         let enabled: Bool
         let dictionary: [PseudonymFilter.DictionaryTerm]
+        /// Lowercased glossary names: they are sent as spelling evidence, so
+        /// the suspect rules must not mask them.
+        var readable: Set<String> = []
+
+        static func readableNames(in glossary: TranscriptionGlossary?) -> Set<String> {
+            Set((glossary?.entries ?? []).flatMap { [$0.canonical] + $0.observedForms }.map { $0.lowercased() })
+        }
     }
 
     struct PerformResult: Sendable {
@@ -172,10 +179,12 @@ public actor LLMJSONClient {
             let vocabulary = try await personalGlossaryStore.analysisVocabulary(
                 bundled: self.transcriptionGlossary, privateMode: enabled, archiveSnapshot: archiveVocabulary)
             transcriptionGlossary = vocabulary.glossary
-            privacy = Privacy(enabled: enabled, dictionary: pseudonymDictionary ?? vocabulary.pseudonymDictionary)
+            privacy = Privacy(enabled: enabled, dictionary: pseudonymDictionary ?? vocabulary.pseudonymDictionary,
+                              readable: Privacy.readableNames(in: transcriptionGlossary))
         } else {
             transcriptionGlossary = self.transcriptionGlossary
-            privacy = Privacy(enabled: enabled, dictionary: pseudonymDictionary ?? [])
+            privacy = Privacy(enabled: enabled, dictionary: pseudonymDictionary ?? [],
+                              readable: Privacy.readableNames(in: transcriptionGlossary))
         }
         if transcriptionGlossary?.protocolVersion == "context-v4-personal" {
             sys += "\n" + TranscriptionGlossary.personalPromptContract
@@ -218,7 +227,7 @@ public actor LLMJSONClient {
     }
 
     static func egressFilter(_ privacy: Privacy) -> PseudonymFilter {
-        PseudonymFilter(dictionary: privacy.dictionary)
+        PseudonymFilter(dictionary: privacy.dictionary, readable: privacy.readable)
     }
 
     static func noteCardInputJSON(
@@ -531,7 +540,7 @@ public actor LLMJSONClient {
     }
 
     static let pseudonymPromptContract = """
-    Private mode: personal data in the input is replaced by placeholders such as ⟦P3⟧ (person), ⟦O1⟧ (organisation), ⟦L2⟧ (place), ⟦X1⟧ (other name), ⟦E1⟧ (email), ⟦T1⟧ (phone), ⟦I1⟧ (IBAN), ⟦C1⟧ (card), ⟦A1⟧ (address). Copy every placeholder exactly as written, including any suffix such as ⟦P3:f1⟧. Never invent, renumber, merge, translate or explain placeholders, and never guess what they stand for. In Russian output you may mark the grammatical case of a person, organisation or place placeholder by appending :nom, :gen, :dat, :acc, :ins or :prep, e.g. ⟦P3:dat⟧; use no other suffixes.
+    Private mode: personal data in the input is replaced by placeholders such as ⟦P3⟧ (person), ⟦O1⟧ (organisation), ⟦L2⟧ (place), ⟦X1⟧ (other name or number), ⟦E1⟧ (email), ⟦T1⟧ (phone), ⟦I1⟧ (IBAN), ⟦C1⟧ (card), ⟦A1⟧ (address). Copy every placeholder exactly as written, including any suffix such as ⟦P3:f1⟧. Never invent, renumber, merge, translate or explain placeholders, and never guess what they stand for. In Russian output you may mark the grammatical case of a person, organisation or place placeholder by appending :nom, :gen, :dat, :acc, :ins or :prep, e.g. ⟦P3:dat⟧; use no other suffixes.
     """
 
     private static func queueType(for capability: ModelCapability) -> ModelType {
