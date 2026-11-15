@@ -9,7 +9,7 @@ struct Secretary: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "secretary",
         abstract: "Run the secretary (an outside agent) on a workspace document",
-        subcommands: [BriefFiles.self, WarmLibrary.self, PrepareFiles.self, ReadFiles.self, ApplyFiles.self, SessionSnapshot.self, CodexPacket.self, GeminiPacket.self, GeminiReplay.self, GeminiBenchmark.self, ClaudePacket.self, TerraAPI.self, CommentsRun.self, PassRun.self, Registry.self, Hold.self, Reconcile.self, ReplayRun.self, RunLog.self, RunCheck.self]
+        subcommands: [BriefFiles.self, WarmLibrary.self, PrepareFiles.self, ReadFiles.self, ApplyFiles.self, SessionSnapshot.self, CodexPacket.self, GeminiPacket.self, GeminiReplay.self, GeminiBenchmark.self, ClaudePacket.self, TerraAPI.self, CommentsRun.self, PassRun.self, Registry.self, Hold.self, Reconcile.self, PendingMarks.self, ReplayRun.self, RunLog.self, RunCheck.self]
     )
 
     struct BriefFiles: AsyncParsableCommand {
@@ -284,6 +284,42 @@ struct Secretary: AsyncParsableCommand {
             let data = try JSONEncoder().encode(report)
             print(String(decoding: data, as: UTF8.self))
             if !apply { print("Dry run: no changes. Use --apply for the reported local repairs.") }
+            if !report.findings.isEmpty { throw ExitCode(1) }
+        }
+    }
+
+    struct PendingMarks: ParsableCommand {
+        static let configuration = CommandConfiguration(commandName: "pending", abstract: "Report Wimm's pending marks against the library, Trash, registry and document; with --apply clear only marks of proven-deleted notes (dry run unless --apply)")
+        @Argument(help: "Workspace Markdown document") var document: String
+        @Flag(name: .long, help: "Clear the marks reported as closable (registry removed_from_wimm, or an unregistered mark whose note is in Wimm Trash); marks.json is backed up first") var apply = false
+        @Flag(name: .long, help: "Also list the ordinary queue (queued) row by row") var all = false
+        @Flag(name: .long, help: "Print the full report as JSON") var json = false
+
+        func run() throws {
+            let url = URL(fileURLWithPath: (document as NSString).expandingTildeInPath).standardizedFileURL
+            let report = try SecretaryPendingMarks.audit(document: url, apply: apply)
+            if json {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                print(String(decoding: try encoder.encode(report), as: UTF8.self))
+            } else {
+                print(report.applied ? "APPLIED (run \(report.runID))" : "DRY RUN (marks unchanged)")
+                print("Pending marks: \(report.pending)")
+                for verdict in SecretaryPendingMarks.Verdict.allCases {
+                    if let count = report.counts[verdict.rawValue] { print("  \(verdict.rawValue): \(count)") }
+                }
+                for row in report.rows where all || row.verdict != .queued {
+                    print("  \(row.verdict.rawValue) \(row.source ?? "-") \(row.file) · \(row.presence.rawValue)"
+                          + (row.registryStatus.map { " · registry \($0)" } ?? "") + (row.registryRemoved ? " · removed_from_wimm" : "")
+                          + (row.cited ? " · cited" : ""))
+                }
+                if !report.cleared.isEmpty { print("Cleared: \(report.cleared.count)") }
+                if let backup = report.backup { print("Backup: \(backup)") }
+                for finding in report.findings { print("  \(finding)") }
+                if !apply, report.counts[SecretaryPendingMarks.Verdict.closable.rawValue] != nil {
+                    print("Dry run: no changes. Use --apply to clear the closable marks.")
+                }
+            }
             if !report.findings.isEmpty { throw ExitCode(1) }
         }
     }

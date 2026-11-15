@@ -908,11 +908,15 @@ public struct MCPRecallServer: Sendable {
         rows.sort { $0.mark.markedAt != $1.mark.markedAt ? $0.mark.markedAt > $1.mark.markedAt : $0.file < $1.file }
         var head = "\(rows.count) marked note(s)\(range(offset, min(limit, max(0, rows.count - offset)), rows.count))"
         if let pass = marks.pass() { head += "\nlast_pass: \(describe(pass))" }
+        let gone = rows.filter { $0.note == nil }.count
+        if gone > 0 { head += "\n\(gone) of them no longer in the library (`wimm-cli secretary pending` reports and closes them)" }
         let shown = rows.dropFirst(offset).prefix(limit)
         guard !shown.isEmpty else { return rows.isEmpty ? "No marked notes match." : head + "\n\nNo more." }
+        let presence = MarkedNotePresence.locate(shown.filter { $0.note == nil }.map(\.file))
         return head + ":\n\n" + shown.map { row in
             guard let note = row.note else {
-                return "[\(row.mark.noteId)] \(row.file) — note no longer in the library\n  mark: \(row.mark.status.rawValue)"
+                let place = presence[row.file] == .trash ? "in Wimm Trash" : "not in Trash either"
+                return "[\(row.mark.noteId)] \(row.file) — note no longer in the library (\(place))\n  mark: \(row.mark.status.rawValue)"
                     + (row.mark.source.map { " · source \($0)" } ?? "")
             }
             return line(for: note, detail: "", extra: [markLine(row.mark, url: URL(fileURLWithPath: note.filePath))])
