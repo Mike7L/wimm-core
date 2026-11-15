@@ -100,8 +100,7 @@ struct SecretaryPacket {
             let url = URL(fileURLWithPath: path)
             let current = snapshots[path]?.current(for: url) ?? NoteFingerprint.read(forRecordingURL: url)
             // A settled note whose re-run only moved punctuation stays settled (2026-11-04: a third of a pass).
-            if mark.status == .noise || mark.status == .applied, NoteFingerprint.sameWording(mark, current) { return false }
-            return (mark.text != current.text || mark.analysis != current.analysis)
+            return NoteFingerprint.needsPass(mark: mark, now: current)
                 && !Set(NoteChangeKind.kinds(forRecordingURL: url, since: since)).isDisjoint(with: [.transcript, .edited])
         }
         // Registry rows by resolved sidecar path, built once: resolving every
@@ -133,12 +132,7 @@ struct SecretaryPacket {
             queue: (try? Data(contentsOf: root.appendingPathComponent("secretary/review_queue.md"))) ?? Data()) : [:]
         // An explicit user hold is a source-selection decision, not a partial read.
         // Match the exact media file as well as its sidecar: image aliases may share one.
-        let heldRows = Dictionary(grouping: sources.filter { row in
-            guard let hold = row["user_exclusion"] as? [String: Any] else { return false }
-            return hold["active"] as? Bool == true && hold["authority"] as? String == "user"
-                && hold["scope"] as? String == "source" && hold["resume"] as? String == "explicit_user_release"
-                && !(hold["reason"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }, by: { $0["note_file"] as? String ?? "" })
+        let heldRows = Dictionary(grouping: sources.filter(SecretaryUserHold.isActive), by: { $0["note_file"] as? String ?? "" })
         var pool = SecretaryEvidencePool(), routing: [String] = []
         var number = sources.compactMap { ($0["source_id"] as? String).flatMap { Int($0.dropFirst()) } }.max() ?? 0
         clk.mark("waiting_skipped_held")

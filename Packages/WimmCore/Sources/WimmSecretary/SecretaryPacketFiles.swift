@@ -678,7 +678,8 @@ extension SecretaryPacketFiles {
                 timing.checkpoint("bookkeeping_finalize", subtotal: "bookkeeping")
             }
             if record.findings.isEmpty {
-                if let scan = await SecretaryPassPlanner.scan(marks: marks, initialBoundary: .distantPast, recordings: recordings) {
+                if let scan = await SecretaryPassPlanner.scan(marks: marks, initialBoundary: .distantPast, recordings: recordings,
+                                                                 held: SecretaryUserHold.heldNotes(workspace: task.workspace)) {
                     record.remainingNotes = scan.pending
                     if let boundary = SecretaryPassPlanner.advancedBoundary(after: scan, started: task.createdAt) {
                         try marks.setPass(.init(asOf: boundary, cursor: nil, comment: "verified secretary file packet", setAt: Date()))

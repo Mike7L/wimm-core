@@ -70,11 +70,14 @@ public struct SecretaryDispatcher: Sendable {
     /// it throws `nothingToDo` instead of paying a model to find that out;
     /// `force` runs it anyway.
     public func preparePass(document: URL, now: Date = Date(), force: Bool = false,
-                            scan: @Sendable () async -> SecretaryPassScan? = { await SecretaryPassPlanner.scan() }) async throws -> SecretaryTask {
+                            scan: (@Sendable () async -> SecretaryPassScan?)? = nil) async throws -> SecretaryTask {
         guard let workspace = SecretaryWorkspace(document: document) else { throw SecretaryError.notAWorkspace(document.path) }
         let snapshot = try await DocumentCommentStore(document: workspace.document).load()
         if !force, !snapshot.threads.contains(where: { $0.status == .open }) {
-            let found = await scan()
+            let found: SecretaryPassScan?
+            if let scan { found = await scan() } else {
+                found = await SecretaryPassPlanner.scan(held: SecretaryUserHold.heldNotes(workspace: workspace))
+            }
             if let found, found.pending == 0 { throw SecretaryError.nothingToDo }
         }
         let open = snapshot.threads.filter { $0.status == .open }
@@ -192,7 +195,7 @@ public struct SecretaryDispatcher: Sendable {
             record.hostQueues = try? JSONDecoder().decode(SecretaryHostQueues.self, from: data)
         }
         if task.kind == .pass, record.outcome == .succeeded, record.findings.isEmpty {
-            record.remainingNotes = await Self.advanceBoundary(startedAt: task.createdAt)
+            record.remainingNotes = await Self.advanceBoundary(startedAt: task.createdAt, workspace: workspace)
             if record.remainingNotes == nil {
                 record.findings.append("Cannot determine remaining queue coverage after the pass.")
             } else if let remaining = record.remainingNotes, remaining > 0 {
@@ -398,8 +401,9 @@ public struct SecretaryDispatcher: Sendable {
     /// After a clean pass the boundary moves up to where the pass started, but
     /// never past a note that is still pending (the agent may have left some).
     @discardableResult
-    static func advanceBoundary(startedAt: Date, marks: AgentMarkStore = AgentMarkStore()) async -> Int? {
-        guard let scan = await SecretaryPassPlanner.scan(marks: marks, initialBoundary: .distantPast) else { return nil }
+    static func advanceBoundary(startedAt: Date, workspace: SecretaryWorkspace? = nil, marks: AgentMarkStore = AgentMarkStore()) async -> Int? {
+        let held = workspace.map(SecretaryUserHold.heldNotes) ?? { _ in false }
+        guard let scan = await SecretaryPassPlanner.scan(marks: marks, initialBoundary: .distantPast, held: held) else { return nil }
         if let next = SecretaryPassPlanner.advancedBoundary(after: scan, started: startedAt) {
             do { try marks.setPass(.init(asOf: next, cursor: nil, comment: "advanced by Wimm after a verified secretary batch", setAt: Date())) }
             catch { return nil }
