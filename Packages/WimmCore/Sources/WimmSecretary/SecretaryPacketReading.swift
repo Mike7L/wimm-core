@@ -46,8 +46,8 @@ extension SecretaryPacket {
                 && ["find", "section", "source", "outline"].contains($0.operation) }) else {
             throw Failure("Invalid addressed read requests.")
         }
-        var input = try JSONSerialization.jsonObject(with: Data(validationPrompt.utf8)) as! [String: Any]
-        var supplied = input["document_blocks"] as! [[String: String]]
+        guard var input = try JSONSerialization.jsonObject(with: Data(validationPrompt.utf8)) as? [String: Any],
+              var supplied = input["document_blocks"] as? [[String: String]] else { throw Failure("Packet input has no document blocks.") }
         var seen = Set(supplied.compactMap { $0["id"] })
         var delta: [Block] = [], returned: [Block] = [], results: [[String: Any]] = [], bytes = 0
         var current = self
@@ -114,7 +114,7 @@ extension SecretaryPacket {
         }
         supplied += Self.objects(delta)
         input["document_blocks"] = supplied
-        var sourceObjects = input["sources"] as! [[String: Any]]
+        guard var sourceObjects = input["sources"] as? [[String: Any]] else { throw Failure("Packet input has no sources.") }
         let oldSources = Set(selected)
         for id in current.selected where !oldSources.contains(id) {
             sourceObjects.append(["source": id, "full_text": current.fullSourcesByID[id]!])
@@ -132,8 +132,7 @@ extension SecretaryPacket {
             return (self, ["status": "invalid_source_id"])
         }
         if selected.contains(id) { return (self, ["status": "already_supplied", "source": id]) }
-        let registry = try JSONSerialization.jsonObject(with: registryData) as! [String: Any]
-        guard let row = (registry["sources"] as! [[String: Any]]).first(where: { $0["source_id"] as? String == id }),
+        guard let row = try SecretaryRegistry.parse(registryData).byID[id],
               let path = (row["path"] as? String)?.removingPercentEncoding else {
             return (self, ["status": "not_found", "scope": "registry_snapshot"])
         }

@@ -173,7 +173,7 @@ final class SecretaryBookkeepingTests: XCTestCase {
         try await read()
         let duplicate = await finish(["S1"])
         XCTAssertEqual(duplicate.stored, 0)
-        XCTAssertTrue(duplicate.findings.contains { $0.contains("duplicate registry") })
+        XCTAssertTrue(duplicate.findings.contains { $0.contains("registry: sources[1]: duplicate source_id S1") })
     }
 
     private var registryURL: URL { document.deletingPathExtension().appendingPathExtension("sources.json") }

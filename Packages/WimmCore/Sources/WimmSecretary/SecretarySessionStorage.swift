@@ -251,7 +251,9 @@ enum SecretarySessionStorage {
         guard !names.isEmpty else { return }
         // Include the resulting document/registry and the host's run evidence,
         // rather than only the input snapshot captured before the pass.
-        var object = try JSONSerialization.jsonObject(with: original) as! [String: Any]
+        guard var object = try JSONSerialization.jsonObject(with: original) as? [String: Any] else {
+            throw Failure("Session snapshot is not a JSON object.")
+        }
         var evidence: [String: String] = [:]
         if let workspace = SecretaryWorkspace(document: state.document) {
             let run = workspace.runDirectory(state.id)

@@ -34,8 +34,8 @@ public enum SecretaryUserHold {
 
         let registryURL = workspace.document.deletingPathExtension().appendingPathExtension("sources.json")
         let data = try Data(contentsOf: registryURL)
-        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let sources = root["sources"] as? [[String: Any]] else { throw Failure("Invalid registry.") }
+        let registry = try SecretaryRegistry.parse(data)
+        let root = registry.root, sources = registry.rows
         var rowsBySidecar: [String: [[String: Any]]] = [:]
         for row in sources {
             guard let path = (row["path"] as? String)?.removingPercentEncoding,
@@ -82,7 +82,7 @@ public enum SecretaryUserHold {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let backup = directory.appendingPathComponent("registry-before-hold.json")
         let audit: [String: Any] = ["run_id": id, "registry_sha256": SecretaryBookkeeping.digest(data),
-                                    "sources": sources.filter { updates[$0["source_id"] as! String] != nil }]
+                                    "sources": sources.filter { ($0["source_id"] as? String).map { updates[$0] != nil } == true }]
         try JSONSerialization.data(withJSONObject: audit, options: [.prettyPrinted, .sortedKeys]).write(to: backup, options: .atomic)
         try SecretaryRegistryRevision.snapshot(data, directory: directory)
         guard try Data(contentsOf: registryURL) == data else { throw Failure("Registry changed while setting holds; nothing applied.") }
@@ -104,8 +104,8 @@ public enum SecretaryUserHold {
         defer { lock?.release() }
         let registryURL = workspace.document.deletingPathExtension().appendingPathExtension("sources.json")
         let data = try Data(contentsOf: registryURL)
-        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let sources = root["sources"] as? [[String: Any]] else { throw Failure("Invalid registry.") }
+        let registry = try SecretaryRegistry.parse(data)
+        let root = registry.root, sources = registry.rows
         var report = Report(runID: id, applied: apply)
         var updates: [String: [String: Any]] = [:]
         for name in files {
@@ -131,7 +131,7 @@ public enum SecretaryUserHold {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let backup = directory.appendingPathComponent("registry-before-release.json")
         let audit: [String: Any] = ["run_id": id, "registry_sha256": SecretaryBookkeeping.digest(data),
-                                    "sources": sources.filter { updates[$0["source_id"] as! String] != nil }]
+                                    "sources": sources.filter { ($0["source_id"] as? String).map { updates[$0] != nil } == true }]
         try JSONSerialization.data(withJSONObject: audit, options: [.prettyPrinted, .sortedKeys]).write(to: backup, options: .atomic)
         try SecretaryRegistryRevision.snapshot(data, directory: directory)
         guard try Data(contentsOf: registryURL) == data else { throw Failure("Registry changed while releasing holds; nothing applied.") }
@@ -153,8 +153,8 @@ public enum SecretaryUserHold {
         defer { lock?.release() }
         let registryURL = workspace.document.deletingPathExtension().appendingPathExtension("sources.json")
         let data = try Data(contentsOf: registryURL)
-        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let sources = root["sources"] as? [[String: Any]] else { throw Failure("Invalid registry.") }
+        let registry = try SecretaryRegistry.parse(data)
+        let root = registry.root, sources = registry.rows
         var report = Report(runID: id, applied: apply)
         var updates: [String: [String: Any]] = [:]
         for name in files {
@@ -183,7 +183,7 @@ public enum SecretaryUserHold {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let backup = directory.appendingPathComponent("registry-before-reason.json")
         let audit: [String: Any] = ["run_id": id, "registry_sha256": SecretaryBookkeeping.digest(data),
-                                    "sources": sources.filter { updates[$0["source_id"] as! String] != nil }]
+                                    "sources": sources.filter { ($0["source_id"] as? String).map { updates[$0] != nil } == true }]
         try JSONSerialization.data(withJSONObject: audit, options: [.prettyPrinted, .sortedKeys]).write(to: backup, options: .atomic)
         try SecretaryRegistryRevision.snapshot(data, directory: directory)
         guard try Data(contentsOf: registryURL) == data else { throw Failure("Registry changed while amending; nothing applied.") }
@@ -214,8 +214,8 @@ public enum SecretaryUserHold {
         let originals = try backupRows(workspace: workspace, runID: runID)
         let registryURL = workspace.document.deletingPathExtension().appendingPathExtension("sources.json")
         let data = try Data(contentsOf: registryURL)
-        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let sources = root["sources"] as? [[String: Any]] else { throw Failure("Invalid registry.") }
+        let registry = try SecretaryRegistry.parse(data)
+        let root = registry.root, sources = registry.rows
         var report = Report(runID: id, applied: apply)
         var updates: [String: [String: Any]] = [:]
         for name in files {
@@ -244,7 +244,7 @@ public enum SecretaryUserHold {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let backup = directory.appendingPathComponent("registry-before-unhold.json")
         let audit: [String: Any] = ["run_id": id, "undoes": runID, "registry_sha256": SecretaryBookkeeping.digest(data),
-                                    "sources": sources.filter { updates[$0["source_id"] as! String] != nil }]
+                                    "sources": sources.filter { ($0["source_id"] as? String).map { updates[$0] != nil } == true }]
         try JSONSerialization.data(withJSONObject: audit, options: [.prettyPrinted, .sortedKeys]).write(to: backup, options: .atomic)
         try SecretaryRegistryRevision.snapshot(data, directory: directory)
         guard try Data(contentsOf: registryURL) == data else { throw Failure("Registry changed while undoing holds; nothing applied.") }
@@ -258,7 +258,8 @@ public enum SecretaryUserHold {
         let url = workspace.runDirectory(runID).appendingPathComponent("registry-before-hold.json")
         guard let audit = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
               let rows = audit["sources"] as? [[String: Any]] else { throw Failure("No hold backup in \(runID).") }
-        return Dictionary(uniqueKeysWithValues: rows.compactMap { row in (row["source_id"] as? String).map { ($0, row) } })
+        do { return try SecretaryRegistry.index(rows) }
+        catch { throw Failure("Hold backup of \(runID) is malformed: \(error.localizedDescription)") }
     }
 
     struct Failure: LocalizedError {

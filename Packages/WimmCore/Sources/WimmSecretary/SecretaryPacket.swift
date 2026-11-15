@@ -77,11 +77,10 @@ struct SecretaryPacket {
         let policyURL = root.appendingPathComponent(FileManager.default.fileExists(atPath: root.appendingPathComponent(editsPolicyPath).path) ? editsPolicyPath : "secretary/protocol/packet.md")
         let policy = try String(contentsOf: policyURL, encoding: .utf8)
         guard !policy.isEmpty, policy.utf8.count <= 32_000 else { throw Failure("Packet semantic policy is empty or exceeds 32 KB.") }
-        let registryURL = task.workspace.document.deletingPathExtension().appendingPathExtension("sources.json")
+        let registryURL = SecretaryRegistry.url(document: task.workspace.document)
         let registryData = try Data(contentsOf: registryURL)
         _ = try SecretaryContext.registry(document: task.workspace.document)
-        let registry = try JSONSerialization.jsonObject(with: registryData) as! [String: Any]
-        let sources = registry["sources"] as! [[String: Any]]
+        let sources = try SecretaryRegistry.parse(registryData).rows
         let sampleRows = sources.filter { ($0["source_id"] as? String).map(sampleSourceIDs.contains) == true }
         let sampleFiles = Set(sampleRows.compactMap { $0["note_file"] as? String })
         guard sampleRows.count == sampleSourceIDs.count, sampleFiles.count == sampleSourceIDs.count else {
@@ -140,14 +139,14 @@ struct SecretaryPacket {
             if let rows = heldRows[URL(fileURLWithPath: note.filePath).lastPathComponent], rows.count == 1,
                let row = rows.first, let source = row["source_id"] as? String,
                rowsBySidecar[candidateSidecar.path]?.contains(where: { $0["source_id"] as? String == source }) == true,
-               let hold = row["user_exclusion"] as? [String: Any] {
-                heldSources.append(["source": source, "reason": hold["reason"] as! String,
+               let hold = row["user_exclusion"] as? [String: Any], let reason = hold["reason"] as? String {
+                heldSources.append(["source": source, "reason": reason,
                                     "scope": "user_excluded; not read or acknowledged in this pass"])
                 continue
             }
-            if let rows = rowsBySidecar[candidateSidecar.path], rows.count == 1, let row = rows.first,
+            if let rows = rowsBySidecar[candidateSidecar.path], rows.count == 1, let row = rows.first, let source = row["source_id"] as? String,
                SecretaryBookkeeping.flag(row["removed_from_wimm"]) || SecretaryBookkeeping.flag(row["wimm_unindexed"]) {
-                blockedSources.append(["source": row["source_id"] as! String,
+                blockedSources.append(["source": source,
                     "file": URL(fileURLWithPath: note.filePath).lastPathComponent,
                     "reason": "Registry marks source removed/unindexed; manual reconciliation required. Not admitted or acknowledged."])
                 continue
@@ -240,7 +239,8 @@ struct SecretaryPacket {
             }
             let id: String
             if let row = matching.first {
-                id = row["source_id"] as! String
+                guard let rowID = row["source_id"] as? String else { throw Failure("Registry source without a source_id.") }
+                id = rowID
                 guard !SecretaryBookkeeping.flag(row["removed_from_wimm"]), !SecretaryBookkeeping.flag(row["wimm_unindexed"]) else {
                     throw Failure("\(id): source marked removed/unindexed needs manual reconciliation.")
                 }
@@ -651,7 +651,7 @@ struct SecretaryPacket {
                     requestedSources.insert(id)
                 } else if explicit { throw Failure("Invalid full-source request: \(request)") }
             }
-            var current = payload["document_blocks"] as! [[String: String]]
+            guard var current = payload["document_blocks"] as? [[String: String]] else { throw Failure("Packet input has no document blocks.") }
             let ids = Set(current.compactMap { $0["id"] })
             let selection = Self.contextSelection(blocks: blocks, requests: extra, existing: ids, limit: 48_000)
             current += Self.objects(selection.blocks)
@@ -716,7 +716,7 @@ struct SecretaryPacket {
         }
         let ids = plan.sourceDecisions.map(\.source)
         guard Set(ids) == Set(selected), ids.count == selected.count else { throw Failure("Packet decisions must cover exactly the supplied sources.") }
-        let allowed = try (validationBlocks ?? Set(((JSONSerialization.jsonObject(with: Data(prompt.utf8)) as! [String: Any])["document_blocks"] as! [[String: Any]]).compactMap { $0["id"] as? String })).union(hostAnchors)
+        let allowed = try (validationBlocks ?? Self.blockIDs(prompt: prompt)).union(hostAnchors)
         let edits = try materializedEdits(plan.edits, allowed: allowed)
         guard plan.questions.count <= 20,
               plan.questions.allSatisfy({ !$0.isEmpty && $0.count <= 2000 }), plan.summary.count <= 2000 else { throw Failure("Invalid packet edits/questions.") }
@@ -743,11 +743,7 @@ struct SecretaryPacket {
         // Validate statuses/duplicate targets before any workspace mutation.
         let rowByID: [String: [String: Any]]
         if let validationRows { rowByID = validationRows }
-        else {
-            let original = try JSONSerialization.jsonObject(with: registryData) as! [String: Any]
-            let rows = (original["sources"] as! [[String: Any]]) + newSources
-            rowByID = Dictionary(uniqueKeysWithValues: rows.map { ($0["source_id"] as! String, $0) })
-        }
+        else { rowByID = try SecretaryRegistry.parse(registryData).indexed(adding: newSources) }
         let citation = try NSRegularExpression(pattern: #"\[(S[0-9]+)\]"#)
         for edit in edits {
             let text = edit.text as NSString
@@ -758,7 +754,8 @@ struct SecretaryPacket {
         var issues: [DecisionIssue] = []
         for (id, receipt) in zip(selected, receipts) {
             do {
-                _ = try SecretaryRegistryRevision.revised(rowByID[id]!, decision: plan.sourceDecisions.first { $0.source == id }!, receipt: receipt, task: task, known: Set(rowByID.keys))
+                guard let row = rowByID[id] else { throw Failure("\(id): not in registry.") }
+                _ = try SecretaryRegistryRevision.revised(row, decision: plan.sourceDecisions.first { $0.source == id }!, receipt: receipt, task: task, known: Set(rowByID.keys))
             } catch {
                 issues.append(DecisionIssue(source: id, message: error.localizedDescription))
             }
@@ -805,16 +802,25 @@ struct SecretaryPacket {
             changedFiles: [task.workspace.doc, "secretary/change_log.md"] + (plan.questions.isEmpty ? [] : ["secretary/review_queue.md"]), questions: plan.questions)
     }
 
+    /// Ids of the document blocks in a model input (prompt JSON).
+    static func blockIDs(prompt: String) throws -> Set<String> {
+        guard let input = try JSONSerialization.jsonObject(with: Data(prompt.utf8)) as? [String: Any],
+              let blocks = input["document_blocks"] as? [[String: Any]] else { throw Failure("Packet input has no document blocks.") }
+        return Set(blocks.compactMap { $0["id"] as? String })
+    }
+
     static func addingSources(_ added: [[String: Any]], data: Data) throws -> Data {
         let patch = try SecretaryJSONPatch(data), members = try patch.members(0..<data.count)
-        let range = members.first { $0.key == "sources" }!.value
-        let root = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        let rows = root["sources"] as! [[String: Any]]
-        var counts = root["counts"] as! [String: Int]; counts["pending", default: 0] += added.count
+        let registry = try SecretaryRegistry.parse(data)
+        guard let range = members.first(where: { $0.key == "sources" })?.value else { throw Failure("registry: no sources array") }
+        let rows = registry.rows
+        guard var counts = registry.root["counts"] as? [String: Int] else { throw Failure("registry: counts is not an object of numbers") }
+        counts["pending", default: 0] += added.count
         let addition = try added.map { String(decoding: try SecretaryJSONPatch.encode($0, indent: 4), as: UTF8.self) }.joined(separator: ",\n")
         var edits: [(Range<Int>, Data)] = [(range.upperBound - 1..<range.upperBound - 1, Data(((rows.isEmpty ? "" : ",") + "\n" + addition + "\n").utf8))]
         for (key, value) in [("source_count", rows.count + added.count as Any), ("counts", counts as Any)] {
-            edits.append((members.first { $0.key == key }!.value, try SecretaryJSONPatch.encode(value)))
+            guard let member = members.first(where: { $0.key == key }) else { throw Failure("registry: no \(key)") }
+            edits.append((member.value, try SecretaryJSONPatch.encode(value)))
         }
         return try patch.applying(edits)
     }

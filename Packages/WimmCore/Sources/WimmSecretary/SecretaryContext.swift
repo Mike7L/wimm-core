@@ -7,25 +7,10 @@ import WimmInfrastructure
 public enum SecretaryContext {
     public static func registry(document: URL, references: [String] = [], query: String? = nil,
                                 limit: Int = 20, offset: Int = 0) throws -> Data {
-        let url = document.deletingPathExtension().appendingPathExtension("sources.json")
-        guard let object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
-              let sources = object["sources"] as? [[String: Any]] else { throw Failure("Registry has no sources array.") }
-        var ids = Set<String>(), maximum = 0
-        var counts: [String: Int] = [:]
-        for source in sources {
-            guard let id = source["source_id"] as? String,
-                  id.range(of: #"^S[0-9]+$"#, options: .regularExpression) != nil,
-                  let number = Int(id.dropFirst()), number < Int.max, ids.insert(id).inserted,
-                  let status = source["status"] as? String,
-                  ["applied", "duplicate", "noise", "pending", "failed"].contains(status), source["path"] is String else {
-                throw Failure("Invalid/duplicate source in registry.")
-            }
-            maximum = max(maximum, number)
-            counts[status, default: 0] += 1
-        }
-        guard object["source_count"] as? Int == sources.count, object["counts"] as? [String: Int] == counts else {
-            throw Failure("Registry source_count/counts disagree with sources.")
-        }
+        let url = SecretaryRegistry.url(document: document)
+        let registry = try SecretaryRegistry.parse(Data(contentsOf: url))
+        try registry.checkCounts()
+        let object = registry.root, sources = registry.rows, counts = registry.counts, maximum = registry.maxNumber
         let terms = (query ?? "").lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
         let selecting = !references.isEmpty || !terms.isEmpty
         let matches = selecting ? sources.filter { source in
