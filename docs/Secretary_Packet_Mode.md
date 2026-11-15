@@ -721,9 +721,19 @@ replies with lists only; Wimm turns the block diff into format-2 operations —
   supplied in full is treated as an implicit read in round 1: the host adds
   those sections with a `host_note` and asks once more, instead of rejecting
   the reply with its good edits. Two effort-high Haiku replies had been lost
-  that way. The file transport refuses
-  `read_sections` in a response; use `secretary read RUN --section` first.
-  Its apply report names `read_sections_needed`.
+  that way. A source left `unfinished` with a `section` that was not supplied
+  in full counts the same way (`SecretaryPacket.sectionsToRead`).
+  The editor commands of the file transport (`secretary claude`, `codex`,
+  `gemini`, `terra-api`) run the same single read round since 2026-11-15:
+  the sections are admitted into the session input (counted against the
+  document read budget), the pages are re-exported and sent once more; the
+  report gives `requests` and both rounds' cost. Before that they sent one
+  request and left such sources queued: on an invented 12-note packet whose
+  topics shared no words with the document, 6 of 12 stayed `unfinished` in
+  every run, and with the round all 12 went in (2 requests, $0.007, Haiku).
+  `secretary apply` with a hand-written response still refuses
+  `read_sections`; use `secretary read RUN --section` first. Its apply report
+  names `read_sections_needed`.
 - **Effort:** format-2 packet passes on a Haiku model run at `effort: high`
   unless an effort is set explicitly (`SecretaryDispatcher.packetEffort`). At
   the default effort, 4 of 6 replies did not reason; at `high`, 6 of 6 did.

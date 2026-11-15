@@ -102,6 +102,46 @@ final class VikAssistantTests: XCTestCase {
         XCTAssertTrue(saved.contains("Вот ответ [D1]."))
     }
 
+    func testSilentModelGetsOneLocalAcknowledgementThatIsNotTheReply() async throws {
+        let h = VikHarness(acknowledgeAfter: .milliseconds(20))
+        defer { h.assistant.shutdown() }
+        h.send()
+        await waitUntil { h.voice.lines == [VikAssistant.acknowledgementPhrase] }
+        h.voice.onStarted?()
+        XCTAssertEqual(h.assistant.phase, .thinking)
+        XCTAssertEqual(h.assistant.answer, "")
+        h.voice.onIdle?() // The acknowledgement ending never finishes or resumes the exchange.
+        XCTAssertTrue(h.assistant.isResponding)
+        XCTAssertEqual(h.capture.starts, 0)
+        h.reply?.yield("Ответ."); h.reply?.finish()
+        await waitUntil { h.voice.lines.count == 2 }
+        h.voice.onStarted?()
+        XCTAssertEqual(h.assistant.phase, .speaking)
+        await waitUntil { h.assistant.savedReply != nil }
+        let saved = try String(contentsOf: XCTUnwrap(h.assistant.savedReply), encoding: .utf8)
+        XCTAssertFalse(saved.contains(VikAssistant.acknowledgementPhrase))
+        h.voice.onIdle?()
+        await waitUntil { h.capture.starts == 1 }
+    }
+
+    func testFastReplyAndCancelledExchangeGetNoAcknowledgement() async {
+        let fast = VikHarness(acknowledgeAfter: .milliseconds(80))
+        defer { fast.assistant.shutdown() }
+        fast.send()
+        await waitUntil { fast.reply != nil }
+        fast.reply?.yield("Сразу ответ. ")
+        try? await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(fast.voice.lines, ["Сразу ответ."])
+
+        let cancelled = VikHarness(acknowledgeAfter: .milliseconds(80))
+        defer { cancelled.assistant.shutdown() }
+        cancelled.send()
+        await waitUntil { cancelled.reply != nil }
+        cancelled.assistant.cancel()
+        try? await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(cancelled.voice.lines, [])
+    }
+
     func testCodeTaskOpensDraftWithoutModelCallAndResumesCapture() async throws {
         let h = VikHarness()
         defer { h.assistant.shutdown() }
@@ -517,10 +557,11 @@ private final class VikHarness {
     var reply: AsyncThrowingStream<String, Error>.Continuation?
     var opened: [URL] = []
 
-    init(document: String = "", timeout: Duration = .seconds(20)) {
+    init(document: String = "", timeout: Duration = .seconds(20), acknowledgeAfter: Duration? = nil) {
         assistant = VikAssistant(capture: capture, voice: voice, document: { document },
                                  isPrivate: { [weak self] in self?.privateMode ?? true },
                                  finalizationTimeout: timeout,
+                                 acknowledgeAfter: acknowledgeAfter,
                                  openCodeTask: { [weak self] in self?.opened.append($0); return true },
                                  stream: { [weak self] query, note, tools in
             self?.calls.append((query, note, tools.map(\.name)))

@@ -12,7 +12,7 @@ final class StudioWebLauncher {
     /// (and its saved settings) the Vite dev server used.
     static let url = URL(string: "http://localhost:\(port)/")!
     /// Overridable with `defaults write <bundle> studioWebDirectory <path>`.
-    static let directoryDefaultsKey = "studioWebDirectory"
+    nonisolated static let directoryDefaultsKey = "studioWebDirectory"
     /// Overridable with `defaults write <bundle> studioWebNodePath <path to node>`.
     static let nodeDefaultsKey = "studioWebNodePath"
     static let serverArguments = [
@@ -20,7 +20,7 @@ final class StudioWebLauncher {
         "--disable-warning=ExperimentalWarning",
         "server/start.ts",
     ]
-    static let setupCommand = "npm ci && npm run build"
+    nonisolated static let setupCommand = "npm ci && npm run build"
 
     private var process: Process?
     private var task: Task<Void, Never>?

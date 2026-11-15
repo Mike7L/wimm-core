@@ -292,11 +292,12 @@ public struct SecretaryDispatcher: Sendable {
                     onEvent(.init(.info, "secretary read sections \(reply.readSections.joined(separator: ", "))"))
                     continue
                 }
-                // An edit next to an unsupplied section is an implicit read request: supply it once
-                // and ask again, rather than rejecting the whole reply with its good edits.
-                let missing = round == 1 ? packet.missingSections(reply, prompt: validationPrompt) : []
+                // An edit next to an unsupplied section, or a source left unfinished for want of one,
+                // is an implicit read request: supply it once and ask again, rather than rejecting
+                // the good edits or leaving the source queued.
+                let missing = round == 1 ? packet.sectionsToRead(reply, prompt: validationPrompt) : []
                 if !missing.isEmpty, let expanded = try? packet.prompt(sections: missing, validationPrompt: validationPrompt,
-                    note: "Some edits targeted sections that were not supplied (\(missing.joined(separator: ", "))). They are included now. Return your complete answer again; no further reads.") {
+                    note: SecretaryPacket.sectionsSuppliedNote(missing)) {
                     prompt = expanded; validationPrompt = expanded
                     try packetAudit(directory, stage: "sections_read", detail: "implicit: " + missing.joined(separator: ", "))
                     onEvent(.init(.info, "edits targeted unsupplied sections \(missing.joined(separator: ", ")); reading them once"))

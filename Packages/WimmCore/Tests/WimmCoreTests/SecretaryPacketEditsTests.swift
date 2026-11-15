@@ -652,6 +652,42 @@ final class SecretaryPacketEditsTests: XCTestCase {
         XCTAssertEqual(threads.filter { $0.status == .open }.count, 1)
     }
 
+    func testFilePacketReadsAnUnsuppliedSectionOnceThenAsksAgain() async throws {
+        // «Сад» shares no word with the notes and sits past the document start: not in the first request.
+        try text.replacingOccurrences(of: "[S1]: ", with: "## Сад\n\nЯблони цветут.\n\n[S1]: ").write(to: document, atomically: true, encoding: .utf8)
+        let data = try await SecretaryPacketFiles.prepare(document: document, cli: URL(fileURLWithPath: "/unused-cli"),
+            sourceKB: 64, library: library, marks: store)
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let id = try XCTUnwrap(manifest["run_id"] as? String)
+        let input = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: XCTUnwrap(manifest["input"] as? String)))) as? [String: Any])
+        let supplied = Set((input["document_blocks"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String })
+        let probe = try prepare(), garden = try section(probe, "## Сад")
+        XCTAssertFalse(supplied.contains(try block(probe, "Яблони цветут.")), "the fixture must leave the text of «Сад» out of the first request")
+        let first = String(decoding: try JSONSerialization.data(withJSONObject: ["summary": "нужен раздел",
+            "edits": [], "done_no_additions": [["source": "S1", "reason": "повтор"]],
+            "unfinished": [["source": "S2", "obstacle": "раздела нет в блоках", "section": garden]]]), as: UTF8.self)
+        let second = String(decoding: try JSONSerialization.data(withJSONObject: ["summary": "Сад",
+            "edits": [edit("insert_under_heading", section: garden, text: "Экспорт в саду [S2].", sources: ["S2"])],
+            "done_no_additions": [["source": "S1", "reason": "повтор"]]]), as: UTF8.self)
+        let fake = EditsFakeExecutor(bodies: [first, second])
+        let result = try await SecretaryPacketFiles.executePacket(runID: id, executor: fake, commit: false,
+            model: "haiku", effort: "high", marks: store)
+        let requests = await fake.requests
+        guard requests.count == 2 else { return XCTFail("expected two requests, got \(requests.count): \(String(decoding: result, as: UTF8.self).prefix(3000))") }
+        XCTAssertFalse(requests[0].prompt.contains("Яблони цветут."))
+        XCTAssertTrue(requests[1].prompt.contains("Яблони цветут."), "the second request carries the section text")
+        XCTAssertTrue(requests[1].prompt.contains("They are included now"))
+        let report = try XCTUnwrap(JSONSerialization.jsonObject(with: result) as? [String: Any])
+        XCTAssertEqual(report["requests"] as? Int, 2)
+        let validation = try XCTUnwrap(report["validation"] as? [String: Any])
+        XCTAssertEqual(validation["accepted"] as? Bool, true)
+        XCTAssertEqual((validation["rejected_edits"] as? [Any])?.count, 0)
+        XCTAssertEqual(validation["used_sources"] as? [String], ["S2"])
+        let usage = try XCTUnwrap(validation["usage"] as? [String: Any])
+        XCTAssertEqual(usage["cost_usd"] as? Double ?? 0, 0.02, accuracy: 1e-9, "both paid requests count")
+        XCTAssertEqual(usage["tokens_in"] as? Int, 200)
+    }
+
     #if os(macOS)
     func testCodexSendsVersionedPagesAndValidatesWithoutApplying() async throws {
         let key = "sk-proj-abc123456789012345678901"

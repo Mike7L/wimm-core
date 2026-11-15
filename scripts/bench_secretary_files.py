@@ -7,7 +7,8 @@ time and the CLI's own stage timings. Not a CI check: times are machine noise
 there, and correctness is test_secretary_files_cli.py.
 
 To compare two builds, run each with --keep and diff docs/me.md and
-docs/me.sources.json under the printed directories: they must be byte-identical.
+docs/me.sources.json under the printed directories: the document must be
+byte-identical, the registry may differ only in its `run_id` values.
 """
 import argparse
 import json
@@ -56,7 +57,11 @@ def build(root, notes, pending):
         {"sources": sources, "source_count": notes,
          "counts": {"pending": pending, "applied": notes - pending}, "batches": []},
         ensure_ascii=False, indent=2))
-    (library / "AgentState/marks.json").write_text(json.dumps({"schema": "AgentState@v1", "marks": marks}))
+    # A kept-up library has a pass boundary newer than its settled notes. Without one
+    # the queue scan after apply fingerprints every note, which no real pass does.
+    boundary = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 2))
+    (library / "AgentState/marks.json").write_text(json.dumps({"schema": "AgentState@v1", "marks": marks,
+        "pass": {"asOf": boundary, "setAt": boundary}}))
     (workspace / "secretary/protocol/packet.md").write_text("Preserve plans as plans and cite sources.")
     (workspace / "secretary/review_queue.md").write_text("# Questions\n")
     return library, workspace, document

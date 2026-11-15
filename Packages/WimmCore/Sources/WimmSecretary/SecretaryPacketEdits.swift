@@ -46,6 +46,9 @@ extension SecretaryPacket {
     /// One read round: at most this many sections, within this many bytes of document text.
     static let readSectionLimit = 3
     static let readSectionBytes = 24_000
+    static func sectionsSuppliedNote(_ sections: [String]) -> String {
+        "Sections your answer needed were not supplied (\(sections.joined(separator: ", "))). They are included now. Return your complete answer again; no further reads."
+    }
 
     var responseFormat: Int { (payload["response_format"] as? NSNumber)?.intValue ?? 2 }
 
@@ -520,6 +523,21 @@ extension SecretaryPacket {
             missing.append(blocks[head].id)
         }
         return Array(missing.prefix(Self.readSectionLimit))
+    }
+
+    /// Sections a first reply could not reach: asked for in read_sections, targeted by an edit, or
+    /// named by an unfinished source. A section counts only while its heading and own text are not
+    /// all supplied; the reply is then answered once with them, never applied as it stands.
+    func sectionsToRead(_ reply: EditsReply, prompt: String) -> [String] {
+        guard let input = try? JSONSerialization.jsonObject(with: Data(prompt.utf8)) as? [String: Any] else { return [] }
+        let allowed = Set((input["document_blocks"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String })
+        var out: [String] = []
+        for id in reply.readSections + missingSections(reply, prompt: prompt) + reply.unfinished.compactMap(\.section)
+            where !out.contains(id) {
+            guard let range = sectionRange(id), !range.allSatisfy({ allowed.contains(blocks[$0].id) }) else { continue }
+            out.append(id)
+        }
+        return Array(out.prefix(Self.readSectionLimit))
     }
 
     /// Adds the requested sections (heading and own text) to the model input, once, within budget.

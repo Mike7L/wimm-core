@@ -121,12 +121,28 @@ identical bytes mean the state decoded before the lock is the current one (the
 state is a pure function of those bytes; every object is checked by hash). The
 chunks of one state are read in a single SQLite read transaction. Bookkeeping
 resolves each directory, receipt sidecar and citation once instead of once per
-source. On an invented library (3,000 notes, 1.7 MB document, 77 sources, 39
-edits, release build): `read` 208–220 → 86 ms, `apply --dry-run` 232 → 150 ms,
-`apply` 1,548 → 1,231 ms wall. Document, registry, `input.json` and
-`result.json` were byte-identical between the two builds; marks differed only
-in `markedAt` and the per-library note IDs. What remains in `apply` is mostly
-the final document check, the session save and the daily checkpoint.
+source, and one library listing serves both bookkeeping and the queue scan.
+
+Measured with `scripts/bench_secretary_files.py` (3,000 invented notes, 1.7 MB
+document, 40 sources, 7 edits, release build, wall time):
+
+| Command | Before | After |
+|---|---:|---:|
+| `prepare`, cold | 1,964 ms | 1,361–1,777 ms |
+| `prepare`, warm | 631 ms | 453–504 ms |
+| `read` | 289–313 ms | 90–127 ms |
+| `apply --dry-run` | 272 ms | 138–151 ms |
+| `apply` | see below | 1,299–1,387 ms |
+
+`apply` has no clean "before": the old build was only measured on a library
+without a pass boundary, where the queue scan fingerprints every note (3,197
+ms, 1,473 of it the scan), which no kept-up library does. With a boundary, the
+build without the shared listing took 1,495–1,730 ms (scan 252–278 ms) and the
+current one 1,299–1,387 ms (scan 113–128 ms). Between the old and the new
+build the document was byte-identical, the registry differed only in `run_id`,
+the marks only in `markedAt` and the per-library note IDs. What remains in
+`apply` is mostly the final document check (about 0.4 s), registry validation
+and the session save with its daily checkpoint.
 
 `scripts/bench_secretary_files.py` repeats this kind of measurement: it builds
 an invented library from a fixed seed, runs prepare → read → apply and prints
