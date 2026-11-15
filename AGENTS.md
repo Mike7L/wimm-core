@@ -290,6 +290,7 @@ For “update Studio”, follow this order:
 
 ## Skills
 
-Agent skills live in `.agents/skills/` (`note-ideas`, `wimm-secretary`,
-`wimm-conversation`); `.claude/skills/note-ideas` is a copy for Claude Code —
-keep the two `note-ideas` files identical.
+Agent skills live in `.agents/skills/` (`note-ideas`, `idea-review`,
+`wimm-secretary`, `wimm-conversation`); `.claude/skills/note-ideas` and
+`.claude/skills/idea-review` are copies for Claude Code — keep each pair
+identical.
