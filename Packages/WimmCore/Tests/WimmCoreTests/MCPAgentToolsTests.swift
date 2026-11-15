@@ -166,6 +166,15 @@ final class MCPAgentToolsTests: XCTestCase {
         XCTAssertEqual(none, "No marked notes match.")
     }
 
+    func testChangedNotesCanHideImportedSessionJournals() async throws {
+        try writeSidecar(for: image, ["ocr": ["text": "Счёт 42 EUR"], "origin": ["source": SessionJournal.originSource]])
+        let (all, _) = try await tool("changed_notes", #"{"since":"2026-09-01"}"#)
+        XCTAssertTrue(all.contains("[BBBB2222"), "listed by default: other readers still see journals")
+        let (hidden, _) = try await tool("changed_notes", #"{"since":"2026-09-01","skip_session_journals":true}"#)
+        XCTAssertFalse(hidden.contains("[BBBB2222"))
+        XCTAssertTrue(hidden.contains("[AAAA1111"))
+    }
+
     func testMarkRejectsUnknownStatus() async throws {
         let (reply, _) = try await tool("mark_notes", #"{"marks":[{"id":"AAAA","status":"done"}]}"#)
         XCTAssertTrue(reply.contains("0 of 1 mark(s)"))

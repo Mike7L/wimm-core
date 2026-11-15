@@ -214,6 +214,7 @@ public struct MCPRecallServer: Sendable {
                     "skip_unchanged_marked": ["type": "boolean", "description": "true hides notes you marked whose text and analysis are unchanged since the mark — a sync or metadata write alone does not bring them back (default false)"],
                     "marked_changes": ["type": "string", "description": "Comma list of change kinds (transcript, analysis, edited, sync, metadata). A note you already marked is listed only if one of these changed since `since`; unmarked notes are always listed. E.g. \"transcript,edited\" skips marked notes that were only re-analyzed or synced"],
                     "order": ["type": "string", "enum": ["oldest_first", "newest_first"], "description": "oldest_first (default) or newest_first — the most recent changes first, for a pass that may stop part-way (marks keep what is done). Pass the same order with every cursor"],
+                    "skip_session_journals": ["type": "boolean", "description": "true hides agent chat logs Wimm imported (Claude, Codex, Cursor, Antigravity sessions) — not material for a secretary pass (default false). Pass it with every cursor"],
                     "limit": limitProperty(default: 50, max: 200, pageLimit: pageLimit),
                 ],
             ],
@@ -449,10 +450,12 @@ public struct MCPRecallServer: Sendable {
                 let wanted = Set((arguments["marked_changes"] as? String ?? "")
                     .split(separator: ",").compactMap { NoteChangeKind(rawValue: $0.trimmingCharacters(in: .whitespaces).lowercased()) })
                 let skipUnchanged = bool(arguments["skip_unchanged_marked"]) == true
+                let skipJournals = bool(arguments["skip_session_journals"]) == true
                 var include: ((String) -> Bool)?
-                if skipUnchanged || (!wanted.isEmpty && since != nil) {
+                if skipUnchanged || skipJournals || (!wanted.isEmpty && since != nil) {
                     include = { path in
                         let url = URL(fileURLWithPath: path)
+                        if skipJournals, SessionJournal.isJournal(url) { return false }
                         guard let mark = allMarks[url.lastPathComponent] else { return true }
                         if skipUnchanged, Self.sinceMark(mark, NoteFingerprint.read(forRecordingURL: url)) == nil { return false }
                         if !wanted.isEmpty, let since {

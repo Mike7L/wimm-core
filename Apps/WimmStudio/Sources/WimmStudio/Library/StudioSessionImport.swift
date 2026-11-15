@@ -135,16 +135,9 @@ actor StudioSessionImport {
         let files = (try? FileManager.default.contentsOfDirectory(at: recordings, includingPropertiesForKeys: nil)) ?? []
         var ids: [UUID: URL] = [:]
         for file in files where file.pathExtension == "txt" {
-            guard let handle = try? FileHandle(forReadingFrom: file) else { continue }
-            defer { try? handle.close() }
-            guard let bytes = try? handle.read(upToCount: 1024) else { continue }
-            let lines = String(decoding: bytes, as: UTF8.self).split(whereSeparator: \.isNewline)
-            guard lines.count >= 2, lines[0].hasPrefix("# ") else { continue }
-            for source in [Source.codex, .claude, .cursor, .antigravity] where lines[1].hasPrefix(source.marker) {
-                if let id = UUID(uuidString: String(lines[1].dropFirst(source.marker.count))) {
-                    ids[id] = file
-                }
-            }
+            // The same header the secretary uses to keep these journals out of its passes.
+            guard let header = SessionJournal.header(of: file), let found = SessionJournal.sessionID(header: header) else { continue }
+            ids[found.id] = file
         }
         return ids
     }
@@ -379,7 +372,7 @@ actor StudioSessionImport {
             metadata[RecordingIdentity.metadataKey] = id.uuidString
             metadata[RecordingIdentity.createdAtMetadataKey] = ISO8601.string(from: session.date)
             metadata["processingStatus"] = LegacyProcessingStatus.completed.rawValue
-            metadata["origin"] = ["source": "studio-session-import", "sessionId": id.uuidString]
+            metadata["origin"] = ["source": SessionJournal.originSource, "sessionId": id.uuidString]
             return true
         }
         try Data(body(session, source: source, id: id).utf8).write(to: file, options: .atomic)
