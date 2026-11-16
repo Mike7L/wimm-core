@@ -870,9 +870,16 @@ public actor LibraryRecallSource {
     private let freshness: TimeInterval = 5
 
     public init(buildMode: BuildMode = .inProcess, includeFingerprints: Bool = false, cacheDirectory: URL? = nil) {
+        self.init(buildMode: buildMode, includeFingerprints: includeFingerprints, cacheDirectory: cacheDirectory,
+                  builderVersion: Self.cacheBuilderVersion)
+    }
+
+    /// `builderVersion` is a parameter only so a test can play a newer build.
+    init(buildMode: BuildMode, includeFingerprints: Bool, cacheDirectory: URL?, builderVersion: Int) {
         self.buildMode = buildMode
         self.includeFingerprints = includeFingerprints
         self.cacheDirectory = cacheDirectory
+        self.builderVersion = builderVersion
     }
 
     /// Concurrent callers (the startup prewarm and the first tool call)
@@ -1069,20 +1076,24 @@ public actor LibraryRecallSource {
         let version: Int
         let base: String
         let fingerprints: Bool
-        let producer: String
+        let builder: Int
         let listing: DirectoryFingerprint
     }
 
-    static let cacheVersion = 2
+    /// The layout of the cache file. A new number gets a new file name, so an
+    /// installed older build keeps its own file instead of overwriting this one.
+    static let cacheVersion = 3
     /// Inside `cacheDirectory`; Studio's warm-up watches its age.
-    public static let cacheFileName = "recall-v2.stream"
-
-    private func cacheProducer() -> String {
-        let executable: URL?
-        switch buildMode { case .inProcess: executable = Bundle.main.executableURL; case let .subprocess(cli, _): executable = cli }
-        guard let executable, let values = try? executable.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) else { return "unknown-v1" }
-        return "\(executable.path):\(values.fileSize ?? 0):\(values.contentModificationDate?.timeIntervalSince1970 ?? 0)"
-    }
+    public static let cacheFileName = "recall-v3.stream"
+    /// What a note is built into: **raise it with any change that gives an
+    /// unchanged note file different cached content** (`NoteBuilder`,
+    /// `NoteContent`, `RecallNote`, folding, `NoteFingerprint`). The cache used
+    /// to be tied to the executable's path, size and date instead, so every CLI
+    /// rebuild, and each of the installed copies, threw away a 20-second build
+    /// of identical notes. `SecretaryRecallCacheTests` pins the built form of a
+    /// fixture library to this number.
+    static let cacheBuilderVersion = 1
+    private let builderVersion: Int
 
     private func restoreCache() {
         guard let cacheDirectory else { return }
@@ -1092,7 +1103,7 @@ public actor LibraryRecallSource {
             guard let newline = data.firstIndex(of: 10) else { return }
             let header = try JSONDecoder().decode(CacheHeader.self, from: data.prefix(upTo: newline))
             guard header.version == Self.cacheVersion, header.base == StoragePaths.baseDirectory().path,
-                  header.fingerprints == includeFingerprints, header.producer == cacheProducer() else { return }
+                  header.fingerprints == includeFingerprints, header.builder == builderVersion else { return }
             let bodyStart = newline + 1 - data.startIndex
             // Only the small index part of the mapping is touched; the text goes
             // straight from the file into the library's buffers below.
@@ -1149,7 +1160,7 @@ public actor LibraryRecallSource {
         guard let snapshot else { return }
         do {
             let header = CacheHeader(version: Self.cacheVersion, base: StoragePaths.baseDirectory().path,
-                fingerprints: includeFingerprints, producer: cacheProducer(), listing: snapshot)
+                fingerprints: includeFingerprints, builder: builderVersion, listing: snapshot)
             var data = try JSONEncoder().encode(header); data.append(10)
             var out = RecallCacheWriter()
             known.write(&out)
@@ -1172,8 +1183,10 @@ public actor LibraryRecallSource {
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cacheDirectory.path)
             try data.write(to: target, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
-            // The v1 JSON-line cache is superseded; it is a derived copy, never evidence.
-            try? FileManager.default.removeItem(at: cacheDirectory.appendingPathComponent("recall-v1.stream"))
+            // Superseded layouts; each is a derived copy, never evidence.
+            for old in ["recall-v1.stream", "recall-v2.stream"] {
+                try? FileManager.default.removeItem(at: cacheDirectory.appendingPathComponent(old))
+            }
         } catch { /* Optional performance cache; authoritative data stays untouched. */ }
     }
 

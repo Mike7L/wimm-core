@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import XCTest
 import WimmDomain
@@ -99,6 +100,105 @@ final class SecretaryRecallCacheTests: XCTestCase {
         let restored = await next.restoredFromDisk, rebuilt = await next.rebuiltNoteCount
         XCTAssertTrue(restored); XCTAssertEqual(rebuilt, 1); XCTAssertEqual(result.count, 3)
         XCTAssertEqual(Set((0..<first.count).map { first[$0].filePath }).subtracting((0..<result.count).map { result[$0].filePath }), [])
+    }
+
+    func testCacheWrittenByOneExecutableIsRestoredByAnother() async throws {
+        _ = await loader().load()
+        // Another installed CLI of the same version: a different path, size and date.
+        let other = LibraryRecallSource(
+            buildMode: .subprocess(executable: root.appendingPathComponent("elsewhere/WimmCLI"), arguments: []),
+            includeFingerprints: true, cacheDirectory: cache)
+        let result = await other.load()
+        let restored = await other.restoredFromDisk, rebuilt = await other.rebuiltNoteCount
+        XCTAssertEqual(result.count, 2); XCTAssertTrue(restored); XCTAssertEqual(rebuilt, 0)
+    }
+
+    func testCacheOfAnotherBuilderVersionIsRebuiltAndReplaced() async throws {
+        _ = await loader().load()
+        func newer() -> LibraryRecallSource {
+            LibraryRecallSource(buildMode: .inProcess, includeFingerprints: true, cacheDirectory: cache,
+                                builderVersion: LibraryRecallSource.cacheBuilderVersion + 1)
+        }
+        let next = newer(), result = await next.load()
+        let restored = await next.restoredFromDisk, rebuilt = await next.rebuiltNoteCount
+        XCTAssertEqual(result.count, 2); XCTAssertFalse(restored); XCTAssertEqual(rebuilt, 2)
+        let again = newer(); _ = await again.load()
+        let restoredAgain = await again.restoredFromDisk
+        XCTAssertTrue(restoredAgain)
+        let old = loader(); _ = await old.load()
+        let restoredOld = await old.restoredFromDisk
+        XCTAssertFalse(restoredOld)
+    }
+
+    func testCacheOfAnotherFormatVersionIsRebuilt() async throws {
+        _ = await loader().load()
+        let file = cache.appendingPathComponent(LibraryRecallSource.cacheFileName)
+        let bytes = try Data(contentsOf: file)
+        let newline = try XCTUnwrap(bytes.firstIndex(of: 10))
+        var header = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes.prefix(upTo: newline)) as? [String: Any])
+        XCTAssertEqual(header["version"] as? Int, LibraryRecallSource.cacheVersion)
+        XCTAssertNil(header["producer"])
+        header["version"] = LibraryRecallSource.cacheVersion + 1
+        var changed = try JSONSerialization.data(withJSONObject: header)
+        changed.append(bytes.suffix(from: newline))
+        try changed.write(to: file)
+        let next = loader(), result = await next.load()
+        let restored = await next.restoredFromDisk, rebuilt = await next.rebuiltNoteCount
+        XCTAssertEqual(result.count, 2); XCTAssertFalse(restored); XCTAssertEqual(rebuilt, 2)
+    }
+
+    func testSavingRemovesSupersededCacheFiles() async throws {
+        try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        for name in ["recall-v1.stream", "recall-v2.stream"] { try Data("old".utf8).write(to: cache.appendingPathComponent(name)) }
+        _ = await loader().load()
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: cache.path), [LibraryRecallSource.cacheFileName])
+    }
+
+    /// The cache outlives a rebuild, so nothing else notices a build that turns
+    /// the same files into different notes. When this fails because the change
+    /// was intended: raise `LibraryRecallSource.cacheBuilderVersion`, then put
+    /// the new number and hash here.
+    func testBuiltFormOfAFixtureLibraryIsPinnedToTheBuilderVersion() async throws {
+        let audio = recordings.appendingPathComponent("Wimm_2026-10-30_12-00-07.m4a")
+        try Data([0, 1, 2, 3]).write(to: audio)
+        try FileStore.mutateSidecar(at: FileStore.metadataURL(forRecordingURL: audio)) {
+            $0["recordingId"] = "00000000-0000-0000-0000-000000000007"
+            $0["duration"] = 12.5
+            $0["device"] = "macOS"
+            $0["title"] = "Маяк"
+            $0["summary"] = "Разговор о маяке."
+            $0["transcription"] = ["transcript": "Привет, Маяк! Second line.", "provider": "parakeet",
+                                   "localTranscript": "привет маяк", "model": "parakeet:ultra"] as [String: Any]
+            return true
+        }
+        let note = recordings.appendingPathComponent("Wimm_2026-10-30_12-00-08.md")
+        try "# Заголовок\n\nТекст с [[ссылкой]] и ÉCLAIR.".write(to: note, atomically: true, encoding: .utf8)
+        try FileStore.mutateSidecar(at: FileStore.metadataURL(forRecordingURL: note)) {
+            $0["recordingId"] = "00000000-0000-0000-0000-000000000008"; return true
+        }
+        // The note id follows the file's path, which is a new temporary directory each run.
+        let library = await loader().load()
+        let day = DateFormatter(); day.locale = Locale(identifier: "en_US_POSIX"); day.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        var lines: [String] = []
+        for i in 0..<library.count {
+            let n = library[i]
+            guard n.filePath.hasSuffix("-07.m4a") || n.filePath.hasSuffix("-08.md") else { continue }
+            let folded = n.folded()
+            let fingerprint = n.fingerprintSnapshot?.fingerprint
+            lines.append([
+                URL(fileURLWithPath: n.filePath).lastPathComponent, day.string(from: n.date), n.kind,
+                n.title ?? "-", n.summary ?? "-", n.text, n.attachmentTexts.joined(separator: "\u{1F}"),
+                n.duration.map { "\($0)" } ?? "-", n.speech ?? "-", n.chars.map { "\($0)" } ?? "-", n.device ?? "-",
+                folded.title, folded.summary, folded.body,
+                fingerprint?.text ?? "-", fingerprint?.analysis ?? "-", fingerprint?.wording ?? "-",
+            ].joined(separator: "\u{1E}"))
+        }
+        XCTAssertEqual(lines.count, 2)
+        let built = lines.sorted().joined(separator: "\n")
+        let hash = SHA256.hash(data: Data(built.utf8)).map { String(format: "%02x", $0) }.joined()
+        let pinned = (builder: 1, hash: "2b22bf2826dec390052868ab44d0b8d87c4ebd03138367bc80376a3af2ef1b8d")
+        XCTAssertEqual(LibraryRecallSource.cacheBuilderVersion, pinned.builder)
+        XCTAssertEqual(hash, pinned.hash, "Built notes changed; raise cacheBuilderVersion and pin the new form:\n\(built)")
     }
 
     func testCacheCannotBeReusedAcrossLibraryRoots() async throws {

@@ -192,6 +192,11 @@ bookkeeping.
   A `**[Q58]**` marker in the document places the question in the inbox/feed
   and is not a text change (`StudioInbox.comparable`, web `comparable`); keep
   both in step.
+- The library disk cache (`SecretaryRecallCache/`) is keyed by
+  `LibraryRecallSource.cacheBuilderVersion`, not by the executable: raise it
+  with any change that builds an unchanged note file into different content
+  (`NoteBuilder`, `NoteContent`, `RecallNote`, folding, `NoteFingerprint`),
+  or installed builds keep serving the old form.
 - **No new paid experiments without explicit user approval.** Packet passes
   stay on Haiku for cost; format 2 is the sole supported format (format 1 and
   diff apply mode are removed).

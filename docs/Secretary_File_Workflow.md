@@ -434,11 +434,16 @@ change. An unread source must be deferred and receives no acknowledgment.
 ### Rebuildable local prewarm
 
 `secretary warm` builds a private local snapshot in
-`AgentState/SecretaryRecallCache/recall-v1.stream`; repeated `brief`/prepare loads
+`AgentState/SecretaryRecallCache/recall-v3.stream`; repeated `brief`/prepare loads
 it and rebuilds changed notes. This is the existing recall projection, not a
 fact/entity/vector index or a second canonical store. It contains raw personal
 text: directory mode 0700, file mode 0600. Private mode refuses warm and brief.
-Cache version, library root, producer executable and fingerprint mode must match;
+Cache version, library root, builder version and fingerprint mode must match.
+The builder version (`LibraryRecallSource.cacheBuilderVersion`) is raised by hand
+when an unchanged note file would be built into different content; the cache is
+not tied to the executable, so a CLI rebuild and the several installed CLI
+copies share one cache. A fixture test pins the built form to that number.
+Besides that,
 strong per-note input stamps include inode, size, mtime and ctime. Corrupt or
 incompatible cache falls back to canonical note construction. Apply still
 rechecks its source receipts independently.
