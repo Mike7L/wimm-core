@@ -17,6 +17,7 @@ wimm-cli secretary prepare /absolute/path/_ME/docs/me.md --packet-kb 256
 wimm-cli secretary read RUN_ID --part policy
 wimm-cli secretary read RUN_ID --outline
 wimm-cli secretary read RUN_ID --section 'Exact heading' --limit-bytes 8000
+wimm-cli secretary read RUN_ID --section b123 --tail
 wimm-cli secretary read RUN_ID --find 'literal phrase'
 wimm-cli secretary read RUN_ID --source S123 --limit-bytes 8000
 wimm-cli secretary apply RUN_ID --response /absolute/path/response.json --dry-run
@@ -65,7 +66,14 @@ Source and part offsets count UTF-8 bytes and must land on character boundaries.
 Use `next_offset` until `complete` is true; pages never split a character.
 Section offsets count whole blocks; outline offsets count headings (40/page).
 Section reads return complete blocks, so a block larger than the response budget
-requires a larger permitted limit; it is not silently truncated. Find returns
+requires a larger permitted limit; it is not silently truncated.
+`--section ID --tail` returns the end of a section in one call: the heading
+block plus the last whole blocks that fit the same byte limit, in document
+order (for `insert_after` the last block or `insert_under_heading`). It cannot
+be combined with `--offset`. When blocks in between are left out the status is
+`partial` with `tail_offset` (index of the first returned tail block) and
+`skipped_blocks`; read them with `--offset 1` if needed. The document read
+budget and block admission work exactly as for a forward page. Find returns
 bounded whole matches/context and coverage diagnostics. `not_found` applies to
 the indicated search scope, not to whether an event happened.
 

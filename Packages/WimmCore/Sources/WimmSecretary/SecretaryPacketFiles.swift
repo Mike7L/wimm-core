@@ -255,8 +255,9 @@ public enum SecretaryPacketFiles {
     }
 
     /// Source/part offsets are UTF-8 bytes; section offsets are whole blocks, outline offsets headings.
+    /// `tail` (section only) returns the heading and the last blocks that fit instead of a page from `offset`.
     public static func read(runID: String, operation: String, query: String = "", offset: Int = 0,
-                            limit: Int = 8_000, refresh: Bool = false) async throws -> Data {
+                            limit: Int = 8_000, refresh: Bool = false, tail: Bool = false) async throws -> Data {
         let timing = SecretaryFileTiming("read.\(operation)")
         try requirePublicAccess()
         let marks = AgentMarkStore()
@@ -277,17 +278,20 @@ public enum SecretaryPacketFiles {
             timing.count("library_note_count", library.count); timing.checkpoint("library_load")
         } else { library = RecallLibrary([]) }
         return try read(runID: runID, operation: operation, query: query, offset: offset, limit: limit,
-                        refresh: refresh, library: library, marks: marks, timing: timing, loaded: loaded)
+                        refresh: refresh, tail: tail, library: library, marks: marks, timing: timing, loaded: loaded)
     }
 
     static func read(runID: String, operation: String, query: String = "", offset: Int = 0, limit: Int = 8_000,
-                     refresh: Bool = false, library: RecallLibrary, marks: AgentMarkStore,
+                     refresh: Bool = false, tail: Bool = false, library: RecallLibrary, marks: AgentMarkStore,
                      timing suppliedTiming: SecretaryFileTiming? = nil, loaded: Loaded? = nil) throws -> Data {
         let timing = suppliedTiming ?? SecretaryFileTiming("read.\(operation)")
         defer { if suppliedTiming == nil { timing.write(runID: runID, marks: marks) } }
         try requirePublicAccess()
         guard offset >= 0, (1...24_000).contains(limit), !refresh || operation == "source" else {
             throw SecretaryPacket.Failure("Invalid offset/limit; limit must be 1–24000 bytes and refresh requires source.")
+        }
+        guard !tail || (operation == "section" && offset == 0) else {
+            throw SecretaryPacket.Failure("--tail reads the end of a section; use it with --section and without --offset.")
         }
         let before = try loaded ?? loadTracked(runID, marks: marks)
         guard let workspace = SecretaryWorkspace(document: before.state.document) else {
@@ -343,7 +347,7 @@ public enum SecretaryPacketFiles {
             return try timing.finish(page(Data(text.utf8), offset: offset, limit: limit, label: query))
         }
         guard ["section", "find", "outline"].contains(operation) else { throw SecretaryPacket.Failure("Unknown read operation.") }
-        let turn = try packet.addressedRead([.init(id: "cli", operation: operation, query: query, purpose: "CLI document context", offset: offset)],
+        let turn = try packet.addressedRead([.init(id: "cli", operation: operation, query: query, purpose: "CLI document context", offset: offset, tail: tail ? true : nil)],
             validationPrompt: String(decoding: state.input, as: UTF8.self), library: library, marks: marks,
             sourceLimit: state.sourceLimit, documentLimit: max(0, (state.documentReadBudget ?? 96_000) - state.documentReadBytes), includeExisting: true, outputLimit: limit)
         timing.checkpoint("context_read")
@@ -577,6 +581,7 @@ public enum SecretaryPacketFiles {
     An empty, one-word or looping text for minutes of audio is not empty audio and not grounds for an edit: list the source in unfinished with that obstacle. Do not transcribe it yourself; if the wimm tool request_retranscription is available, queue it, and the new text comes in a later packet.
     While this packet is open, do not edit the document or its registry directly and do not call mark_notes or set_pass_boundary: the host does all bookkeeping from your response.
     If a section is missing, use secretary read RUN --section with its outline ID. Use --find or --outline to locate it.
+    To add at the end of a long section, read it with --section ID --tail: one call returns the heading and the last blocks.
     Submit JSON with secretary apply RUN --response FILE; --dry-run validates without edits/marks.
     The host reports which edits it accepted and which sources it counted as used or reviewed.
     One packet per conversation: after a successful apply (not a dry run), do not run secretary prepare again in this conversation. The sources you have read stay in your history and make every later packet costlier and worse. The host keeps the pass state, so a new conversation or a fresh subagent continues from the same place.

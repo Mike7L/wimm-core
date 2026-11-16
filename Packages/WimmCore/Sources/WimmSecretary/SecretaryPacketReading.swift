@@ -25,6 +25,8 @@ extension SecretaryPacket {
         let query: String
         let purpose: String
         var offset: Int? = nil
+        /// Section only: the heading plus the last blocks that fit, instead of a page from `offset`.
+        var tail: Bool? = nil
     }
 
     struct ReadTurn {
@@ -42,6 +44,7 @@ extension SecretaryPacket {
         guard !requests.isEmpty, requests.count <= 5, Set(requests.map(\.id)).count == requests.count,
               requests.allSatisfy({ !$0.id.isEmpty && $0.id.count <= 80 && $0.query.count <= 200
                 && !$0.purpose.isEmpty && $0.purpose.count <= 500 && ($0.offset ?? 0) >= 0
+                && ($0.tail != true || ($0.operation == "section" && ($0.offset ?? 0) == 0))
                 && ($0.operation == "outline" || !$0.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 && ["find", "section", "source", "outline"].contains($0.operation) }) else {
             throw Failure("Invalid addressed read requests.")
@@ -73,6 +76,35 @@ extension SecretaryPacket {
                     result["status"] = matches.isEmpty ? "not_found" : "ambiguous"
                     result["scope"] = "complete_document_headings"
                     result["matches"] = matches.map { ["id": blocks[$0].id, "title": Self.heading(blocks[$0].text)!.line] }
+                } else if request.tail == true {
+                    // Diary sections grow at the end: the heading plus the last blocks that fit, in
+                    // document order. Same per-block budget rules as the forward page below.
+                    let section = SecretaryDocumentReader.sectionBlocks(blocks, start: matches[0])
+                    var planned = bytes, plannedSupplied = 0, first = section.count
+                    func fits(_ block: Block) -> Bool {
+                        let size = block.text.utf8.count, cost = seen.contains(block.id) ? 0 : size
+                        if planned + cost > documentLimit || planned - startBytes + cost > remaining
+                            || (includeExisting && plannedSupplied + size > remaining) { return false }
+                        planned += cost; plannedSupplied += size
+                        return true
+                    }
+                    let hasHeading = section.first.map(fits) ?? false
+                    if hasHeading { while first > 1, fits(section[first - 1]) { first -= 1 } }
+                    var ids: [String] = []
+                    for block in (hasHeading ? [section[0]] : []) + section[min(max(first, 1), section.count)...] {
+                        if !seen.contains(block.id) { delta.append(block); seen.insert(block.id); bytes += block.text.utf8.count }
+                        if includeExisting { returned.append(block) }
+                        ids.append(block.id)
+                    }
+                    let skipped = section.count - ids.count
+                    result["status"] = skipped == 0 ? "complete" : "partial"
+                    result["block_ids"] = ids; result["total_blocks"] = section.count
+                    if skipped > 0 {
+                        // Blocks 1..<tail_offset were left out; read them with --offset 1 if needed.
+                        result["tail_offset"] = hasHeading ? first : section.count
+                        result["skipped_blocks"] = skipped
+                        if ids.count <= 1, let last = section.last { result["next_block_bytes"] = last.text.utf8.count }
+                    }
                 } else {
                     let section = SecretaryDocumentReader.sectionBlocks(blocks, start: matches[0])
                     let offset = min(request.offset ?? 0, section.count)

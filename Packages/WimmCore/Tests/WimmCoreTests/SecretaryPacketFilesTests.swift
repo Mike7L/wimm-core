@@ -274,9 +274,80 @@ final class SecretaryPacketFilesTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: document), before)
         XCTAssertEqual(try Data(contentsOf: registry), reg)
     }
-    private func read(_ id: String, _ operation: String, _ query: String = "", offset: Int = 0, limit: Int = 8000, refresh: Bool = false) throws -> [String: Any] {
+    private func read(_ id: String, _ operation: String, _ query: String = "", offset: Int = 0, limit: Int = 8000, refresh: Bool = false, tail: Bool = false) throws -> [String: Any] {
         try object(SecretaryPacketFiles.read(runID: id, operation: operation, query: query, offset: offset,
-            limit: limit, refresh: refresh, library: library, marks: marks))
+            limit: limit, refresh: refresh, tail: tail, library: library, marks: marks))
+    }
+    /// A diary-like section: one heading and `count` paragraphs of about 4.4 KB each.
+    private func prepareLongSection(_ count: Int) async throws -> String {
+        let paragraphs = (0..<count).map { "Entry \($0): " + String(repeating: "long document context ", count: 200) }.joined(separator: "\n\n")
+        try ("# Document\n\n## Long section\n\n" + paragraphs + "\n").write(to: document, atomically: true, encoding: .utf8)
+        let m = try object(await SecretaryPacketFiles.prepare(document: document, cli: URL(fileURLWithPath: "/unused-cli"),
+            sourceKB: 64, library: library, marks: marks))
+        return m["run_id"] as! String
+    }
+    private func sectionResult(_ value: [String: Any]) -> (item: [String: Any], ids: [String], texts: [String]) {
+        let item = (value["read_results"] as! [[String: Any]])[0]
+        return (item, item["block_ids"] as? [String] ?? [], (value["document_blocks"] as? [[String: String]] ?? []).compactMap { $0["text"] })
+    }
+
+    func testSectionTailReturnsHeadingAndLastBlocksInOneCall() async throws {
+        let id = try await prepareLongSection(28)
+        let tail = sectionResult(try read(id, "section", "Long section", tail: true))
+        XCTAssertEqual(tail.item["status"] as? String, "partial")
+        XCTAssertEqual(tail.item["total_blocks"] as? Int, 29)
+        XCTAssertNil(tail.item["next_offset"])
+        XCTAssertEqual(tail.texts.count, tail.ids.count)
+        XCTAssertTrue(tail.texts.first?.hasPrefix("## Long section") ?? false)
+        XCTAssertTrue(tail.texts.last?.hasPrefix("Entry 27:") ?? false)
+        XCTAssertLessThanOrEqual(tail.texts.reduce(0) { $0 + $1.utf8.count }, 8000)
+        let first = try XCTUnwrap(tail.item["tail_offset"] as? Int)
+        XCTAssertGreaterThan(first, 1)
+        XCTAssertEqual(tail.ids.count, 1 + 29 - first)
+        XCTAssertEqual(tail.item["skipped_blocks"] as? Int, first - 1)
+        XCTAssertTrue(tail.texts[1].hasPrefix("Entry \(first - 1):"))
+        // The returned blocks are the document's own, in order, and are admitted for edits.
+        let page = sectionResult(try read(id, "section", "Long section", offset: first, limit: 24_000))
+        XCTAssertEqual(page.item["status"] as? String, "complete")
+        XCTAssertEqual(page.ids, Array(tail.ids.dropFirst()))
+        let state = try SecretaryPacketFiles.load(id, marks: marks)
+        let admitted = Set(((try object(state.input))["document_blocks"] as! [[String: String]]).compactMap { $0["id"] })
+        XCTAssertTrue(admitted.isSuperset(of: tail.ids))
+        XCTAssertThrowsError(try read(id, "section", "Long section", offset: 2, tail: true))
+        XCTAssertThrowsError(try read(id, "find", "Entry 27", tail: true))
+        XCTAssertTrue(marks.marks().isEmpty)
+    }
+
+    func testSectionTailOfShortSectionMatchesPlainRead() async throws {
+        let m = try await prepare(), id = m["run_id"] as! String
+        let plain = sectionResult(try read(id, "section", "Маяк")), tail = sectionResult(try read(id, "section", "Маяк", tail: true))
+        XCTAssertEqual(plain.item["status"] as? String, "complete")
+        XCTAssertEqual(tail.item["status"] as? String, "complete")
+        XCTAssertEqual(tail.ids, plain.ids); XCTAssertEqual(tail.texts, plain.texts)
+        XCTAssertFalse(tail.ids.isEmpty)
+        XCTAssertNil(tail.item["tail_offset"]); XCTAssertNil(tail.item["skipped_blocks"])
+    }
+
+    func testSectionTailStaysWithinDocumentReadBudget() async throws {
+        let id = try await prepareLongSection(40)
+        // Spend the 96 KB document read budget from the start of the section.
+        var offset = 0
+        for _ in 0..<20 {
+            let item = sectionResult(try read(id, "section", "Long section", offset: offset, limit: 24_000)).item
+            guard let next = item["next_offset"] as? Int, next > offset else { break }
+            offset = next
+        }
+        let spent = try SecretaryPacketFiles.load(id, marks: marks).documentReadBytes
+        XCTAssertLessThanOrEqual(spent, 96_000); XCTAssertGreaterThan(spent, 96_000 - 4_500)
+        XCTAssertLessThan(offset, 40)
+        let tail = sectionResult(try read(id, "section", "Long section", limit: 24_000, tail: true))
+        // The unread last entry does not fit what is left: only the already-read heading comes back.
+        XCTAssertEqual(tail.item["status"] as? String, "partial")
+        XCTAssertEqual(tail.ids.count, 1)
+        XCTAssertTrue(tail.texts.first?.hasPrefix("## Long section") ?? false)
+        XCTAssertEqual(tail.item["tail_offset"] as? Int, 41)
+        XCTAssertNotNil(tail.item["next_block_bytes"])
+        XCTAssertEqual(try SecretaryPacketFiles.load(id, marks: marks).documentReadBytes, spent)
     }
     private func response(_ manifest: [String: Any]) throws -> Data {
         let input = try object(Data(contentsOf: URL(fileURLWithPath: manifest["input"] as! String)))

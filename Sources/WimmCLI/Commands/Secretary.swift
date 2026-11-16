@@ -86,13 +86,15 @@ struct Secretary: AsyncParsableCommand {
         @Option(name: .long) var offset = 0
         @Option(name: .long, help: "Maximum text bytes per page/request (1–24000)") var limitBytes = 8_000
         @Flag(name: .long, help: "Re-read only this selected source and replace its version receipt within the original budget") var refresh = false
+        @Flag(name: .long, help: "With --section: return the heading and the last blocks that fit, instead of a page from --offset") var tail = false
         func run() async throws {
             let choices = [("section", section), ("find", find), ("source", source), ("outline", outline ? "" : nil), ("part", part)].compactMap { item -> (String, String)? in
                 item.1.map { (item.0, $0) }
             }
             guard choices.count == 1 else { throw ValidationError("Choose exactly one of --section, --find, --source, --outline or --part.") }
+            guard !tail || (choices[0].0 == "section" && offset == 0) else { throw ValidationError("--tail works only with --section and without --offset.") }
             let data = try await SecretaryPacketFiles.read(runID: runID, operation: choices[0].0, query: choices[0].1,
-                offset: offset, limit: limitBytes, refresh: refresh)
+                offset: offset, limit: limitBytes, refresh: refresh, tail: tail)
             print(String(decoding: data, as: UTF8.self))
         }
     }
