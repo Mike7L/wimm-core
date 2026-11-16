@@ -572,9 +572,14 @@ public enum SecretaryPacketFiles {
     Read the Markdown file in read_order for the policy, document context and complete source evidence.
     If a separate oversize-previews.md is linked, consult it only to triage oversized sources as not_a_note.
     If the tool clips the file, read successive line ranges through the end before submitting decisions.
+    Do not write scripts to parse input.json and do not skip a source's service lines (retranscription, coverage, asr_quality): they are grounds for your decision.
+    Where text variants disagree, rely on the transcript: refined text and a model's title can be distorted, and an image description is a model's guess, not the user's words. Compare a recording's length with the amount of text.
+    An empty, one-word or looping text for minutes of audio is not empty audio and not grounds for an edit: list the source in unfinished with that obstacle. Do not transcribe it yourself; if the wimm tool request_retranscription is available, queue it, and the new text comes in a later packet.
+    While this packet is open, do not edit the document or its registry directly and do not call mark_notes or set_pass_boundary: the host does all bookkeeping from your response.
     If a section is missing, use secretary read RUN --section with its outline ID. Use --find or --outline to locate it.
     Submit JSON with secretary apply RUN --response FILE; --dry-run validates without edits/marks.
     The host reports which edits it accepted and which sources it counted as used or reviewed.
+    One packet per conversation: after a successful apply (not a dry run), do not run secretary prepare again in this conversation. The sources you have read stay in your history and make every later packet costlier and worse. The host keeps the pass state, so a new conversation or a fresh subagent continues from the same place.
     If the dry-run report lists status_refresh_needed, an accepted edit changed a topic that opens with a status line. Where the state really changed, add "status_updates":[{"block":"<id>","text":"new status body"}] to the same response: two or three sentences of what is true now, at most 800 characters, without the bold date label (the host writes the label and the date) and citing only references the topic already has; earlier steps stay in the history below. Leave a line out if its state did not change.
     """
 

@@ -197,7 +197,9 @@ Unresolved top-level read/image requests are refused.
 If one source changes after preparation, only tasks relying on that version are
 deferred. Reports include exact `staleSources` IDs. Refresh and reconsider before
 the first commit, or prepare another session for deferred work after committing
-the ready tasks. The editor's global summary is not reused: the host constructs
+the ready tasks. The packet's own instructions tell the editor to do that in a
+new conversation or a fresh subagent (one packet per conversation), because
+sources already read stay in the editor's history. The editor's global summary is not reused: the host constructs
 a summary from admitted tasks and counts, avoiding claims about rejected work.
 
 The JSON report distinguishes `committed`, `applied_sources`, `stored_sources`,
