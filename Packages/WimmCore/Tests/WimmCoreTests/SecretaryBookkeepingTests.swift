@@ -411,6 +411,24 @@ final class SecretaryBookkeepingTests: XCTestCase {
         XCTAssertTrue(SecretaryLibraryReconciliation.removals(sources: [wrong], task: task, active: active, trash: trash).isEmpty)
     }
 
+    func testDeletionReconciliationAcceptsIdentitylessSidecarOnlyByRegistryHash() throws {
+        // Old imports and media-less cards have neither recordingId nor syncId.
+        let active = root.appendingPathComponent("recordings"), trash = root.appendingPathComponent("Trash")
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        let sidecar = Data(#"{"title":"Import Failed"}"#.utf8)
+        try sidecar.write(to: trash.appendingPathComponent("old.meta.json"))
+        var source: [String: Any] = ["source_id": "S1", "path": "../recordings/old.meta.json", "status": "pending", "wimm_unindexed": "no media"]
+        XCTAssertTrue(SecretaryLibraryReconciliation.removals(sources: [source], task: task, active: active, trash: trash).isEmpty, "no hash, no proof")
+        source["sha256"] = SecretaryBookkeeping.digest(Data("other".utf8))
+        XCTAssertTrue(SecretaryLibraryReconciliation.removals(sources: [source], task: task, active: active, trash: trash).isEmpty, "a different sidecar is not proof")
+        source["sha256"] = SecretaryBookkeeping.digest(sidecar)
+        let updated = try XCTUnwrap(SecretaryLibraryReconciliation.removals(sources: [source], task: task, active: active, trash: trash)["S1"])
+        let removed = try XCTUnwrap(updated["removed_from_wimm"] as? [String: Any])
+        XCTAssertTrue(removed["recording_id"] is NSNull)
+        XCTAssertEqual(updated["status"] as? String, "pending")
+        XCTAssertNotNil(updated["wimm_unindexed"], "the earlier flag is kept")
+    }
+
     func testDeletionReconciliationDoesNotTrustTrashFromAnotherLibrary() throws {
         let source = ["source_id": "S1", "path": "../recordings/missing.meta.json", "status": "pending"]
         let other = root.appendingPathComponent("other/Recordings")
