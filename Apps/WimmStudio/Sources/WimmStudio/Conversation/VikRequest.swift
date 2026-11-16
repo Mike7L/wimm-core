@@ -28,7 +28,8 @@ enum VikRequest {
 
 }
 
-/// «Алёна, задача для кода: …» opens a Claude Code draft with the spoken task.
+/// «Алёна, задача для кода: …» (or the short «Алёна, идея: …») opens a Claude
+/// Code draft with the spoken task.
 /// Nothing runs until the user presses Enter there; no model call is made.
 enum VikCodeTask {
     static let folderKey = "WimmStudio.vikCodeTaskFolder"
@@ -37,12 +38,25 @@ enum VikCodeTask {
 
     /// Nil for an ordinary question. Empty when the phrase has no task after it.
     static func extract(from query: String) -> String? {
+        if let idea = ideaTask(from: query) { return idea }
         guard let range = query.range(
             of: #"(?iu)^задач[аиу]\s+для\s+(?:claude\s+code|клод[ау]?\s+код[ау]?|код[ау]?|клод[ау]?|code|claude)(?![\p{L}\p{N}])"#,
             options: .regularExpression) else { return nil }
         return String(query[range.upperBound...])
             .replacingOccurrences(of: #"^[\s,.!?:;—–-]+"#, with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Short form for the `idea-review` skill: «Алёна, идея: …» or just
+    /// «Алёна, идея» after the thought itself. Same draft, never sent by Wimm.
+    private static func ideaTask(from query: String) -> String? {
+        guard let range = query.range(
+            of: #"(?iu)^(?:(?:проработай|оцени|разбери|покритикуй|посмотри|глянь)\s+)?иде[яю](?![\p{L}\p{N}])"#,
+            options: .regularExpression) else { return nil }
+        let idea = String(query[range.upperBound...])
+            .replacingOccurrences(of: #"^[\s,.!?:;—–-]+"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return idea.isEmpty ? "Проработай идею, сказанную в этой заметке до обращения." : "Проработай идею: \(idea)"
     }
 
     static func prompt(task: String, note: String, source: String) -> String {

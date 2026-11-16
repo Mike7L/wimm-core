@@ -47,7 +47,8 @@ reasons behind the rules are in `docs/` (index: `docs/README.md`).
   before opening the mic. Reuse the existing silence event; read-only
   note/document tools reuse the secretary/MCP readers; no implicit
   conversation history, file edits or command tools. One exception (trial):
-  «задача для кода» opens a Claude Code draft by deep link, no model call; it
+  «задача для кода» (short form «идея …» for the `idea-review` skill) opens
+  a Claude Code draft by deep link, no model call; it
   must never auto-submit without a new user decision.
 - Letters/cases/trips stay as files in the `_ME` workspace, they do not become
   notes.
