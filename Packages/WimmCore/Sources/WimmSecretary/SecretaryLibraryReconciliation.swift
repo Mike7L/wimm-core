@@ -3,7 +3,7 @@ import WimmDomain
 import WimmInfrastructure
 
 /// Records only a deletion proven by Wimm's own Trash (the note's sidecar is there,
-/// nothing of it is left in Recordings). A missing file alone is insufficient. Never restores, deletes, edits a note, or changes semantic status.
+/// nothing of it is left in Recordings; it names the recording, or matches the registry's sha256). A missing file alone is insufficient. Never restores, deletes, edits a note, or changes semantic status.
 enum SecretaryLibraryReconciliation {
     static func removals(sources: [[String: Any]], task: SecretaryTask,
                          active: URL = FileStore.recordingsDirectory(),
@@ -37,12 +37,21 @@ enum SecretaryLibraryReconciliation {
             // whether they also write `trashed`/`trashedAt` (sync and manual moves did not),
             // so that flag is only used for the date when present.
             guard let data = try? Data(contentsOf: trash.appendingPathComponent(url.lastPathComponent)),
-                  let metadata = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let identity = (metadata["recordingId"] ?? metadata["syncId"]) as? String, !identity.isEmpty else { continue }
-            if let expected = source["recording_id"] as? String, expected != identity { continue }
+                  let metadata = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+            let identity = ((metadata["recordingId"] ?? metadata["syncId"]) as? String).flatMap { $0.isEmpty ? nil : $0 }
+            if let identity {
+                if let expected = source["recording_id"] as? String, expected != identity { continue }
+            } else {
+                // Old imports and media-less cards carry no identity. The trashed sidecar is then
+                // proof only when it is byte-for-byte the one the registry recorded.
+                guard let recorded = source["sha256"] as? String, !recorded.isEmpty,
+                      SecretaryBookkeeping.digest(data) == recorded.lowercased() else { continue }
+            }
             var updated = source
             updated["removed_from_wimm"] = ["date": SecretaryRegistryRevision.day(task.createdAt),
-                                            "reason": "Confirmed deleted in Wimm Trash", "recording_id": identity,
+                                            "reason": identity == nil ? "Confirmed deleted in Wimm Trash (sidecar matches registry sha256)"
+                                                                      : "Confirmed deleted in Wimm Trash",
+                                            "recording_id": identity ?? NSNull() as Any,
                                             "trashed_at": metadata["trashedAt"] ?? NSNull()]
             updates[id] = updated
         }
