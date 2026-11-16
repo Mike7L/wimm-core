@@ -167,10 +167,12 @@ bookkeeping.
   truncated to fit; in format 2 a labeled head/tail preview may only yield
   `noise` "partial view".
 - Imported agent chat logs (`SessionJournal`: Claude, Codex, Cursor,
-  Antigravity) are never offered to the secretary, and neither they nor held
-  or punctuation-only notes may pin the pass boundary: the planner counts
-  only what preparation offers (`NoteFingerprint.needsPass`). Recognise a
-  journal by `origin.source` or the importer's own header, never by text.
+  Antigravity) are offered to the secretary like any other note; do not
+  filter them out of passes. One exception: a journal rewritten less than an
+  hour ago waits (`SessionJournal.isStillChanging`), but still counts as
+  pending for the boundary. Held or punctuation-only notes may not pin the
+  pass boundary: the planner counts only what preparation offers
+  (`NoteFingerprint.needsPass`).
 - The secretary-pass skill leaves all bookkeeping to Wimm (`prepare` → `read`
   → `apply`); fix bookkeeping gaps in Wimm, not with agent-run scripts. The
   editor reads `read_order` pages (`export/packet-NNN.md`), never parses

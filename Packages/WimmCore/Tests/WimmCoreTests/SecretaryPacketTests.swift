@@ -82,13 +82,13 @@ final class SecretaryPacketTests: XCTestCase {
         XCTAssertNil(modelInput["held_sources"]); XCTAssertNil(modelInput["blocked_sources"])
     }
 
-    /// Imported agent chat logs never reach the editor (user decision 2026-11-15): recognised by the
-    /// sidecar origin or, for older imports, by the importer's own header; a note that only quotes such
-    /// a header further down stays an ordinary note.
-    func testSessionJournalsAreNotOfferedToTheSecretary() throws {
-        func note(_ name: String, _ text: String, origin: String? = nil) throws -> RecallNote {
+    /// Imported agent chat logs are offered like any other note (user decision 2026-11-16),
+    /// once they have been quiet for an hour: a running session's journal waits.
+    func testSessionJournalsAreOfferedToTheSecretaryAfterAnHourOfQuiet() throws {
+        func note(_ name: String, _ text: String, origin: String? = nil, age: TimeInterval = 7_200) throws -> RecallNote {
             let url = root.appendingPathComponent("recordings/\(name).txt")
             try text.write(to: url, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-age)], ofItemAtPath: url.path)
             try FileStore.mutateSidecar(at: FileStore.metadataURL(forRecordingURL: url)) {
                 $0["recordingId"] = name
                 if let origin { $0["origin"] = ["source": origin] }
@@ -99,18 +99,13 @@ final class SecretaryPacketTests: XCTestCase {
         let id = "1F1E2D3C-4B5A-4978-8695-A4B3C2D1E0F9"
         let tagged = try note("tagged", "# Codex — Сборка\n\nСессия Codex \(id.lowercased())\n\n## Пользователь\n\nсобери", origin: SessionJournal.originSource)
         let legacy = try note("legacy", "# Cursor — Старый импорт\n\nСессия Cursor \(id)\n\n## Пользователь\n\nпривет")
-        let quoted = try note("quoted", "Мысль про импорт.\n\n# Claude — пример\nСессия Claude \(id)")
+        let quoted = try note("quoted", "Мысль про импорт.\n\n# Claude — пример\nСессия Claude \(id)", age: 0)
+        let running = try note("running", "# Claude — Идёт сейчас\n\nСессия Claude \(id.lowercased())\n\n## Пользователь\n\nработаем", origin: SessionJournal.originSource, age: 600)
         try writeRegistry(sources: [["source_id": "S1", "path": "../recordings/note.meta.json", "note_file": "note.txt", "status": "pending", "reason": "old"]])
-        let packet = try SecretaryPacket.prepare(task: task, library: RecallLibrary([library[0], tagged, legacy, quoted]), marks: store)
-        XCTAssertEqual(packet.receipts.map { URL(fileURLWithPath: $0.file).deletingPathExtension().lastPathComponent }.sorted(), ["note", "quoted"])
-        XCTAssertEqual(packet.payload["session_journals_skipped"] as? Int, 2)
-        XCTAssertEqual(packet.payload["remaining"] as? Int, 0, "journals are not counted as remaining")
-        let modelInput = try JSONSerialization.jsonObject(with: Data(packet.prompt().utf8)) as! [String: Any]
-        XCTAssertNil(modelInput["session_journals_skipped"])
-        XCTAssertTrue(SessionJournal.isJournal(URL(fileURLWithPath: tagged.filePath)))
-        XCTAssertTrue(SessionJournal.isJournal(URL(fileURLWithPath: legacy.filePath)))
-        XCTAssertFalse(SessionJournal.isJournal(URL(fileURLWithPath: quoted.filePath)))
-        XCTAssertFalse(SessionJournal.isJournal(media))
+        let packet = try SecretaryPacket.prepare(task: task, library: RecallLibrary([library[0], tagged, legacy, quoted, running]), marks: store)
+        XCTAssertEqual(packet.receipts.map { URL(fileURLWithPath: $0.file).deletingPathExtension().lastPathComponent }.sorted(), ["legacy", "note", "quoted", "tagged"])
+        XCTAssertEqual(packet.payload["session_journals_waiting"] as? Int, 1)
+        XCTAssertFalse(try packet.prompt().contains("session_journals_waiting"))
     }
 
     func testPacketHasFreshFullTextRegistryAndBoundedDocumentWithoutWritingMarks() throws {
@@ -261,6 +256,47 @@ final class SecretaryPacketTests: XCTestCase {
         XCTAssertEqual(packet.payload["solo_large_source"] as? Bool, true)
         XCTAssertTrue(try packet.prompt().contains("COMPLETE TAIL"))
         XCTAssertFalse(try packet.prompt().contains("[truncated,"))
+        XCTAssertTrue(store.marks().isEmpty)
+    }
+    func testSourceThatDoesNotFitTheRestWaitsWhileSmallerOnesFillThePacket() throws {
+        try "First short note".write(to: media, atomically: true, encoding: .utf8)
+        func add(_ name: String, _ body: String, age: TimeInterval) throws -> RecallNote {
+            let url = root.appendingPathComponent("recordings/\(name).txt")
+            try body.write(to: url, atomically: true, encoding: .utf8)
+            try FileStore.mutateSidecar(at: FileStore.metadataURL(forRecordingURL: url)) { $0["recordingId"] = name; return true }
+            return RecallNote(id: name, date: Date(), kind: "text", title: nil, summary: nil,
+                              text: body, filePath: url.path, updated: Date().addingTimeInterval(-age))
+        }
+        let half = try add("half", String(repeating: "y", count: 40_000), age: 30)
+        let big = try add("big", String(repeating: "x", count: 40_000), age: 60)
+        let small = try add("small", "Later short note", age: 120)
+        let packet = try SecretaryPacket.prepare(task: task, library: RecallLibrary([library[0], half, big, small]), marks: store, sourceByteLimit: 64_000)
+        XCTAssertEqual(packet.selected.count, 3)
+        XCTAssertEqual(packet.payload["remaining"] as? Int, 1)
+        XCTAssertEqual(packet.payload["solo_large_source"] as? Bool, false)
+        let prompt = try packet.prompt()
+        XCTAssertTrue(prompt.contains("First short note") && prompt.contains("Later short note"))
+        XCTAssertFalse(prompt.contains(String(repeating: "x", count: 1_000)))
+        XCTAssertTrue((packet.payload["blocked_sources"] as? [[String: String]] ?? []).isEmpty)
+    }
+    func testSoloSizeSourceBehindAFewNewerNotesTakesThePacket() throws {
+        try "Newest short note".write(to: media, atomically: true, encoding: .utf8)
+        func add(_ name: String, _ body: String, age: TimeInterval) throws -> RecallNote {
+            let url = root.appendingPathComponent("recordings/\(name).txt")
+            try body.write(to: url, atomically: true, encoding: .utf8)
+            try FileStore.mutateSidecar(at: FileStore.metadataURL(forRecordingURL: url)) { $0["recordingId"] = name; return true }
+            return RecallNote(id: name, date: Date(), kind: "text", title: nil, summary: nil,
+                              text: body, filePath: url.path, updated: Date().addingTimeInterval(-age))
+        }
+        let big = try add("big", String(repeating: "x", count: 70_000) + "BIG TAIL", age: 60)
+        let small = try add("small", "Later short note", age: 120)
+        let packet = try SecretaryPacket.prepare(task: task, library: RecallLibrary([library[0], big, small]), marks: store, sourceByteLimit: 64_000)
+        XCTAssertEqual(packet.selected.count, 1)
+        XCTAssertEqual(packet.payload["remaining"] as? Int, 2)
+        XCTAssertEqual(packet.payload["solo_large_source"] as? Bool, true)
+        let prompt = try packet.prompt()
+        XCTAssertTrue(prompt.contains("BIG TAIL"))
+        XCTAssertFalse(prompt.contains("Newest short note") || prompt.contains("Later short note"))
         XCTAssertTrue(store.marks().isEmpty)
     }
     func testSourceBeyondSoloLimitIsReportedAndDoesNotBlockTheQueue() throws {

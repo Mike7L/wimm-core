@@ -1,14 +1,13 @@
 import Foundation
 
 /// A note Studio's session import wrote from an agent chat log (Claude, Codex,
-/// Cursor, Antigravity): a record of work with an agent, not material for the
-/// knowledge base. The secretary is never offered one (user decision
-/// 2026-11-15); search and reading tools still see it.
+/// Cursor, Antigravity). It is an ordinary note for search, reading and the
+/// secretary (user decision 2026-11-16: journals carry results worth keeping).
 ///
-/// Recognised by the import's own marks, never by what the text says: the
-/// sidecar `origin.source`, or for imports from before that key the file shape
-/// the importer itself matches to find its notes again (a `.txt` whose first
-/// line is a `# ` title and whose second line is `Сессия <source> <uuid>`).
+/// The importer finds its notes again by its own marks, never by what the text
+/// says: the sidecar `origin.source`, or for imports from before that key the
+/// file shape (a `.txt` whose first line is a `# ` title and whose second line
+/// is `Сессия <source> <uuid>`).
 public enum SessionJournal {
     public static let originSource = "studio-session-import"
     public static let sources = ["Codex", "Claude", "Cursor", "Antigravity"]
@@ -35,12 +34,19 @@ public enum SessionJournal {
     }
 
     public static func isJournal(_ mediaURL: URL) -> Bool {
-        let sidecar = RecallSidecar.load(forRecordingURL: mediaURL)?.sidecar
-        return isJournal(mediaURL, originSource: sidecar?.originSource)
+        if RecallSidecar.load(forRecordingURL: mediaURL)?.sidecar.originSource == Self.originSource { return true }
+        return header(of: mediaURL).flatMap(sessionID(header:)) != nil
     }
 
-    static func isJournal(_ mediaURL: URL, originSource: String?) -> Bool {
-        if originSource == Self.originSource { return true }
-        return header(of: mediaURL).flatMap(sessionID(header:)) != nil
+    /// How long a journal must stay unchanged before the secretary is offered it.
+    public static let quietSeconds: TimeInterval = 3600
+
+    /// A journal the importer rewrote less than `quietSeconds` ago: its session may still be
+    /// running, and every rewrite put it back into the pass queue (user decision 2026-11-16:
+    /// offer a journal after an hour of quiet). It still counts as pending for the pass boundary.
+    public static func isStillChanging(_ mediaURL: URL, now: Date = Date()) -> Bool {
+        guard let modified = (try? mediaURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
+              now.timeIntervalSince(modified) < quietSeconds else { return false }
+        return isJournal(mediaURL)
     }
 }

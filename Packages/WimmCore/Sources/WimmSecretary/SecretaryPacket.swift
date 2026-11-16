@@ -68,7 +68,7 @@ struct SecretaryPacket {
     static func prepare(task: SecretaryTask, library: RecallLibrary, marks: AgentMarkStore = AgentMarkStore(),
                         sourceByteLimit: Int = SecretaryPacketSettings.defaultKB * 1000, documentByteLimit: Int = SecretaryPacket.documentBudget,
                         optimizationLevel: SecretaryOptimizationLevel = .l0,
-                        editorBundle: Bool = false, sampleSourceIDs: Set<String> = [], requireAllSamples: Bool = true, retryUnfinished: Bool = false, maxSources: Int? = nil) throws -> SecretaryPacket {
+                        editorBundle: Bool = false, sampleSourceIDs: Set<String> = [], requireAllSamples: Bool = true, retryUnfinished: Bool = false, maxSources: Int? = nil, soloPath: String? = nil) throws -> SecretaryPacket {
         guard maxSources == nil || maxSources! > 0 else { throw Failure("Source count limit must be positive.") }
         guard sourceByteLimit > 0 else { throw Failure("Packet source budget must be positive.") }
         guard !PrivateMode.isEnabled else { throw SecretaryError.privateMode }
@@ -89,12 +89,12 @@ struct SecretaryPacket {
         }
         let known = marks.marks(), since = marks.pass()?.asOf ?? .distantPast
         let snapshots = library.fingerprintSnapshotsByPath()
-        var sessionJournals = 0
+        var journalsWaiting = 0
         let changed = NoteRecall.changed(library, since: sampleSourceIDs.isEmpty ? since : nil,
                                          limit: sampleSourceIDs.isEmpty ? Int.max : sampleSourceIDs.count, newestFirst: true) { path in
             if !sampleSourceIDs.isEmpty { return sampleFiles.contains(URL(fileURLWithPath: path).lastPathComponent) }
-            // Agent chat logs are not material for the document (user decision 2026-11-15).
-            if SessionJournal.isJournal(URL(fileURLWithPath: path)) { sessionJournals += 1; return false }
+            // A journal of a session that may still be running waits for an hour of quiet.
+            if SessionJournal.isStillChanging(URL(fileURLWithPath: path)) { journalsWaiting += 1; return false }
             guard let mark = known[URL(fileURLWithPath: path).lastPathComponent] else { return true }
             let url = URL(fileURLWithPath: path)
             let current = snapshots[path]?.current(for: url) ?? NoteFingerprint.read(forRecordingURL: url)
@@ -135,6 +135,7 @@ struct SecretaryPacket {
         var number = sources.compactMap { ($0["source_id"] as? String).flatMap { Int($0.dropFirst()) } }.max() ?? 0
         for note in changed.notes {
             if let maxSources, selected.count >= maxSources { break }
+            if bytes >= sourceByteLimit { break } // Full, or a solo large source: nothing more fits.
             let candidateSidecar = FileStore.metadataURL(forRecordingURL: URL(fileURLWithPath: note.filePath)).resolvingSymlinksInPath()
             if let rows = heldRows[URL(fileURLWithPath: note.filePath).lastPathComponent], rows.count == 1,
                let row = rows.first, let source = row["source_id"] as? String,
@@ -221,11 +222,25 @@ struct SecretaryPacket {
                 blockedSources.append(entry)
                 continue
             }
+            if let soloPath, note.filePath != soloPath { continue } // Second run: this packet belongs to one large source.
             if bytes + read.text.utf8.count > sourceByteLimit {
                 // A long first source must not permanently block the queue.
                 // Give it a bounded solo packet; never truncate its variants or
                 // also fill the packet with more notes above the normal limit.
-                if !selected.isEmpty { break }
+                // A source that does not fit the rest waits for a later packet, and smaller
+                // ones behind it still fill this one (2026-11-16: one 80 KB recording
+                // left a packet with a single short note and 36 waiting).
+                if !selected.isEmpty {
+                    // A solo-size source is solo only when first, and a newer note (a live
+                    // agent journal) arrives before nearly every pass. Met while the packet is
+                    // still mostly empty, it takes this packet; the few newer notes stay queued.
+                    if soloPath == nil, sampleSourceIDs.isEmpty, read.text.utf8.count > sourceByteLimit, bytes < sourceByteLimit / 2 {
+                        return try prepare(task: task, library: library, marks: marks, sourceByteLimit: sourceByteLimit,
+                                           documentByteLimit: documentByteLimit, optimizationLevel: optimizationLevel, editorBundle: editorBundle,
+                                           retryUnfinished: retryUnfinished, maxSources: maxSources, soloPath: note.filePath)
+                    }
+                    continue
+                }
             }
             let media = URL(fileURLWithPath: receipt.file)
             let owned = root.appendingPathComponent("recordings").resolvingSymlinksInPath()
@@ -319,7 +334,7 @@ struct SecretaryPacket {
             "review_queue": openQueue, "source_text_truncated": !projectedSourceIDs.isEmpty, "solo_large_source": bytes > sourceByteLimit,
             "response_format": 2, "blocked_sources": blockedSources, "held_sources": heldSources, "no_text_sources": noTextSources,
             "viewing_sources": viewingSources, "skipped_sources": skippedSources, "unfinished_sources": unfinishedSources,
-            "oversize_previews": previews, "session_journals_skipped": sessionJournals]
+            "oversize_previews": previews, "session_journals_waiting": journalsWaiting]
         let voiceCards = Self.voiceCards(in: selected.compactMap { fullSourcesByID[$0] }, document: task.workspace.document)
         if !voiceCards.isEmpty { payload["voice_cards"] = voiceCards }
         if editorBundle {
@@ -875,7 +890,7 @@ struct SecretaryPacket {
             input["document_blocks"] = current; input["context_expansion"] = extra
         }
         // Unadmitted sources are host bookkeeping (manifest/report); listing them invited decisions.
-        for key in ["blocked_sources", "held_sources", "no_text_sources", "viewing_sources", "skipped_sources", "unfinished_sources", "session_journals_skipped"] { input.removeValue(forKey: key) }
+        for key in ["blocked_sources", "held_sources", "no_text_sources", "viewing_sources", "skipped_sources", "unfinished_sources", "session_journals_waiting"] { input.removeValue(forKey: key) }
         return String(decoding: try JSONSerialization.data(withJSONObject: input, options: [.sortedKeys, .withoutEscapingSlashes]), as: UTF8.self)
     }
 

@@ -148,7 +148,7 @@ public struct SecretaryTask: Sendable {
                 + "полные README/скилл/части протокола читать только при конкретной неясности. В context.json — только сводка реестра и следующий S-номер. Оглавление с номерами строк лежит отдельно в document-outline.txt; искать в нём нужную тему, целиком не читать."]
             if kind == .pass {
                 if usesSourceDecisions {
-                    lines += ["Сначала перечисленные треды, затем заметки: `changed_notes` с `since: \"last_pass\"`, `skip_unchanged_marked: true`, `skip_session_journals: true`, "
+                    lines += ["Сначала перечисленные треды, затем заметки: `changed_notes` с `since: \"last_pass\"`, `skip_unchanged_marked: true`, "
                         + "`marked_changes: \"transcript,edited\"`, `order: \"newest_first\"`, `limit: 20`; order повторять с курсором. "
                         + "Отмеченные источники со сменой текста пересмотреть, новые добавить. Каждую разобранную заметку читать через get_note. По старым источникам вернуть source_decisions: {source: S-номер, status, reason, при duplicate merged_with: [S-номера]}. Не переписывать хеши и историю.",
                         "Реестр целиком не выводить. Найти нужные записи командой ниже по S-номеру или имени файла из get_note; новый источник проверять по точному имени .meta.json: matched=0. Поисковый --query не доказывает отсутствие источника. "
@@ -156,7 +156,7 @@ public struct SecretaryTask: Sendable {
                         + "назначит S-номера, хеши и ссылки. Существующие записи реестра не редактировать, даже Python-скриптом: Wimm применит source_decisions и сохранит остальные поля/историю. Только S-номера новых записей после add включить в reviewed_sources.",
                         "Записать короткий итог в change_log.md. Wimm обновит старые записи, хеши, историю, счётчики, определения использованных [S…], отметки и границу. Полную проверку не запускать: до применения решений она показывает ожидаемые расхождения. marks/check/mark_notes/set_pass_boundary не выполнять; ссылки [S…] в тексте оставлять, их отсутствующие определения добавит Wimm."]
                 } else {
-                    lines += ["Сначала перечисленные треды, затем заметки: `changed_notes` с `since: \"last_pass\"`, `skip_unchanged_marked: true`, `skip_session_journals: true`, "
+                    lines += ["Сначала перечисленные треды, затем заметки: `changed_notes` с `since: \"last_pass\"`, `skip_unchanged_marked: true`, "
                         + "`marked_changes: \"transcript,edited\"`, `order: \"newest_first\"`, `limit: 20`; order повторять с курсором. "
                         + "Отмеченные источники со сменой текста пересмотреть, новые добавить. Каждую разобранную заметку читать через get_note и включить её S-номер в reviewed_sources.",
                         "Реестр целиком не выводить. Найти нужные записи командой ниже по S-номеру или имени файла из get_note; новый источник проверять по точному имени .meta.json: matched=0. Поисковый --query не доказывает отсутствие источника. "
@@ -179,7 +179,7 @@ public struct SecretaryTask: Sendable {
             case .pass:
                 lines.append("Полный секретарский проход по протоколу `secretary/README.md` и скиллу \(skill), шаги 1–10: "
                     + (threads.isEmpty ? "открытых тредов нет; " : "сначала перечисленные ниже треды (шаг 2а), затем ")
-                    + "новые и изменившиеся заметки Wimm (`changed_notes` с `since: \"last_pass\"`, `skip_unchanged_marked: true`, `skip_session_journals: true`, `marked_changes: \"transcript,edited\"` (отмеченные заметки, у которых изменился лишь анализ, пропускать), `order: \"newest_first\"` — с самых свежих, `limit: \(SecretaryRunKind.mcpPageLimit)` (больше сервер не отдаёт), `order` повторять с каждым курсором; `marked_notes`), встраивание в документ, "
+                    + "новые и изменившиеся заметки Wimm (`changed_notes` с `since: \"last_pass\"`, `skip_unchanged_marked: true`, `marked_changes: \"transcript,edited\"` (отмеченные заметки, у которых изменился лишь анализ, пропускать), `order: \"newest_first\"` — с самых свежих, `limit: \(SecretaryRunKind.mcpPageLimit)` (больше сервер не отдаёт), `order` повторять с каждым курсором; `marked_notes`), встраивание в документ, "
                     + "реестр через `python3 secretary/tools/me_registry.py add`, строка в `secretary/change_log.md`. Рабочие файлы (`entries.json`) — в `\(runDirectory)/`, не в scratchpad.")
                 lines += ["", "Служебные шаги выполняет Wimm после твоего ответа: запись отметок, сверка реестра/ссылок/отметок и продвижение границы. "
                     + "Не выполнять `me_registry.py marks` / `me_registry.py check`, `mark_notes` и `set_pass_boundary`. "
