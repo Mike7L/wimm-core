@@ -129,7 +129,12 @@ struct StudioDocumentView: View {
         }
         .sheet(item: $selectedNote) { entry in
             StudioNotePreview(entry: entry, onSelectBlock: citingBlockAction(for: entry),
-                              onSave: { recentNotes.reload(changedFiles: [$0]) })
+                              onSave: { recentNotes.reload(changedFiles: [$0]) },
+                              onTrash: { file in
+                                  guard await StudioNoteTrash.move(file) else { return false }
+                                  recentNotes.reload()
+                                  return true
+                              })
         }
         .onChange(of: model.secretary.showsPanel) { _, shows in
             guard shows else { return }

@@ -34,7 +34,6 @@ final class VikAssistant {
     private(set) var answer = ""
     private(set) var errorMessage: String?
     private(set) var savedReply: URL?
-    var onActivity: (() -> Void)?
     var enabled = true {
         didSet {
             preferences?.set(enabled, forKey: "WimmStudio.vikEnabled")
@@ -80,6 +79,28 @@ final class VikAssistant {
     var compactText: String {
         if !answer.isEmpty, isResponding { return "\(micNote)Алёна: \(answer)" }
         return status
+    }
+
+    /// One short line for the on-screen banner while an exchange is in progress.
+    /// Nil when idle or failed: a finished reply stays in the HUD only.
+    var banner: StudioSaveConfirmation.Line? {
+        switch phase {
+        case .idle, .failed:
+            return nil
+        case .listening:
+            let heard = Self.clipped(request, limit: 60, keepsEnd: true)
+            return .init(message: heard.isEmpty ? status : "Алёна слушает: \(heard)", systemImage: "waveform")
+        case .finishing, .thinking, .speaking:
+            let said = Self.clipped(answer.split(whereSeparator: \.isNewline).first.map(String.init) ?? "", limit: 80)
+            return .init(message: said.isEmpty ? status : "\(micNote)Алёна: \(said)",
+                         systemImage: phase == .speaking ? "speaker.wave.2.fill" : "ellipsis.bubble")
+        }
+    }
+
+    static func clipped(_ text: String, limit: Int, keepsEnd: Bool = false) -> String {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.count > limit else { return text }
+        return keepsEnd ? "…" + text.suffix(limit) : text.prefix(limit) + "…"
     }
 
     @ObservationIgnored private let capture: any VikCapturing
@@ -197,7 +218,6 @@ final class VikAssistant {
             phase = .listening
             detectedAt = Date()
             errorMessage = nil; answer = ""; savedReply = nil
-            onActivity?()
             voice.prepare()
         }
         request = query
@@ -364,7 +384,6 @@ final class VikAssistant {
         started = Date()
         firstSound = false
         phase = .finishing
-        onActivity?()
         let timeout = finalizationTimeout
         deadline = Task { [weak self] in
             do { try await Task.sleep(for: timeout) } catch { return }
@@ -445,7 +464,7 @@ final class VikAssistant {
                 guard self.serial == token, self.ownsCapture, !Task.isCancelled else { return }
                 guard !self.isPrivate() else { self.fail("Алёна недоступна в приватном режиме."); return }
                 self.latency("context_preloaded")
-                let chat = GeminiChatStream(model: "gemini-3.8-flash",
+                let chat = GeminiChatStream(model: ModelSelection.conversationModel,
                                             operation: .conversation, origin: "VikAssistant")
                 reply = chat.stream(system: Self.prompt,
                                     messages: [.init(role: .user, text:

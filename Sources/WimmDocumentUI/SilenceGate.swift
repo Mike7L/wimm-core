@@ -17,10 +17,14 @@ final class SilenceGate: @unchecked Sendable {
     private var heardSpeech = false
     private var quietFor = 0.0
     private let quietRMS: Float
+    private let closeAfterSeconds: Double
+    private let speech: (any SpeechDetecting)?
 
-    init(policy: SilenceSplitPolicy, store: SampleStore) {
+    init(policy: SilenceSplitPolicy, store: SampleStore, speech: (any SpeechDetecting)? = nil) {
         self.store = store
+        self.speech = speech
         quietRMS = policy.quietRMS
+        closeAfterSeconds = policy.closeAfterSeconds
         splitter = SilenceSplitter(policy: policy)
         (events, continuation) = AsyncStream.makeStream()
     }
@@ -32,7 +36,9 @@ final class SilenceGate: @unchecked Sendable {
         isQuiet = rms < quietRMS
         if isQuiet { quietFor += seconds } else { speechRevision &+= 1; heardSpeech = true; quietFor = 0 }
         sink?.write(buffer)
-        store.append(ParakeetLiveTranscriber.samples16k(from: buffer))
+        let samples = ParakeetLiveTranscriber.samples16k(from: buffer)
+        store.append(samples)
+        speech?.feed(samples)
         if splitter.feed(rms: rms, seconds: seconds) { continuation.yield(speechRevision) }
     }
 
@@ -47,6 +53,14 @@ final class SilenceGate: @unchecked Sendable {
     func quietAfterSpeech() -> (seconds: Double, revision: UInt64)? {
         lock.lock(); defer { lock.unlock() }
         return heardSpeech && isQuiet ? (quietFor, speechRevision) : nil
+    }
+
+    /// The quiet that will send the current note: seconds already spent and the
+    /// seconds that send it. Nil while nothing is pending or splitting is off.
+    func pendingSend() -> (quiet: Double, total: Double)? {
+        lock.lock(); defer { lock.unlock() }
+        guard closeAfterSeconds > 0, heardSpeech, isQuiet else { return nil }
+        return (min(quietFor, closeAfterSeconds), closeAfterSeconds)
     }
 
     /// First note of a recording.

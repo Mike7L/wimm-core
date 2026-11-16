@@ -16,6 +16,7 @@ final class StudioNotePresenter: NSObject, NSWindowDelegate {
     func owns(_ candidate: NSWindow) -> Bool { window === candidate }
 
     func show(_ entry: StudioLibraryNote, onSave: @escaping (URL) -> Void,
+              onTrash: ((URL) async -> Bool)? = nil,
               onOpenURL: @escaping (URL) -> Bool) {
         if isEditing || entryID == entry.id {
             bringForward()
@@ -23,11 +24,13 @@ final class StudioNotePresenter: NSObject, NSWindowDelegate {
         }
         let window = window ?? makeWindow()
         entryID = entry.id
-        window.title = entry.studioTitle
+        // The title is hidden under the note row; it still names the window for the system.
+        window.title = entry.absoluteDate.formatted(date: .long, time: .shortened)
         window.contentViewController = NSHostingController(rootView: StudioNotePreview(
             entry: entry, onSelectBlock: nil, onSave: onSave,
             onClose: { [weak self] in self?.window?.performClose(nil) },
-            onEditingChange: { [weak self] in self?.isEditing = $0 }
+            onEditingChange: { [weak self] in self?.isEditing = $0 },
+            onTrash: onTrash, inTitleBar: true
         ).id(entry.id).environment(\.openURL, OpenURLAction { url in
             onOpenURL(url) ? .handled : .systemAction
         }))
@@ -43,8 +46,10 @@ final class StudioNotePresenter: NSObject, NSWindowDelegate {
 
     private func makeWindow() -> NSWindow {
         let window = StudioNotePanel(contentRect: NSRect(x: 0, y: 0, width: 700, height: 720),
-                                     styleMask: [.titled, .closable, .resizable, .nonactivatingPanel],
+                                     styleMask: [.titled, .closable, .resizable, .nonactivatingPanel, .fullSizeContentView],
                                      backing: .buffered, defer: false)
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
         window.isFloatingPanel = true
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]

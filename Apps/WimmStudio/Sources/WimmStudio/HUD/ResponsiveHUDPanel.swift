@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import SwiftUI
 
 /// Borderless, non-activating floating panel with top-edge and right-corner manual
@@ -26,10 +27,15 @@ final class ResponsiveHUDPanel: NSPanel {
     private var along: CGFloat = 0.5
     /// Hover opens the island; it closes again on exit unless a click pinned it.
     private var isPinnedOpen = false
-    static let hoverExpandDelay: TimeInterval = 0.7
-    static let hoverCollapseDelay: TimeInterval = 0.35
+    static let hoverExpandDelay: TimeInterval = 0.12
+    static let hoverCollapseDelay: TimeInterval = 0.18
+    static let expandDuration: TimeInterval = 0.20
+    static let collapseDuration: TimeInterval = 0.16
     private var hoverWork: DispatchWorkItem?
     private var snapWork: DispatchWorkItem?
+    private var morphSettleWork: DispatchWorkItem?
+    private var collapseFrameWork: DispatchWorkItem?
+    private var morphGeneration: UInt64 = 0
     private var ignoreMovesUntil = Date.distantPast
     private static let collapsedAlpha: CGFloat = 0.8
     /// Buttons swallow mouse-down, so the window server never starts a move from
@@ -91,6 +97,7 @@ final class ResponsiveHUDPanel: NSPanel {
 
     func setIslandEnabled(_ enabled: Bool, animated: Bool = true) {
         guard enabled != island.isEnabled else { return }
+        cancelMorphWork()
         island.isEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: Self.islandKey)
         if enabled {
@@ -99,11 +106,16 @@ final class ResponsiveHUDPanel: NSPanel {
             along = HUDIslandGeometry.along(of: frame, edge: island.edge, in: islandBounds)
             contentMinSize = NSSize(width: 24, height: 24)
             island.isExpanded = false
+            island.isMorphing = false
+            island.morphFraction = 0
             applyIslandFrame(animated: animated)
         } else {
             contentMinSize = Self.minSize
             alphaValue = 1
+            hasShadow = true
             island.isExpanded = false
+            island.isMorphing = false
+            island.morphFraction = 0
             super.setFrame(Self.restoredFrame() ?? Self.defaultFrame, display: true)
         }
         persistIsland()
@@ -111,6 +123,7 @@ final class ResponsiveHUDPanel: NSPanel {
 
     func setIslandEdge(_ edge: HUDIslandEdge, animated: Bool = true) {
         guard island.isEnabled else { return }
+        cancelMorphWork()
         island.edge = edge
         along = 0.5
         applyIslandFrame(animated: animated)
@@ -124,11 +137,122 @@ final class ResponsiveHUDPanel: NSPanel {
 
     func setIslandExpanded(_ expanded: Bool, animated: Bool = true) {
         guard island.isEnabled, island.isExpanded != expanded else { return }
-        if island.isExpanded { expandedSize = frame.size }
-        island.isExpanded = expanded
+        let wasMorphing = island.isMorphing
+        if island.isExpanded && !wasMorphing { expandedSize = frame.size }
         mouseDownOrigin = nil  // the click that caused this is handled
-        applyIslandFrame(animated: animated)
+        cancelMorphWork()
+
+        let geom = islandGeometry(in: islandBounds)
+        syncIslandMetrics(collapsed: geom.collapsed, expanded: geom.expanded, container: geom.container)
+
+        guard animated, isVisible else {
+            island.isExpanded = expanded
+            island.isMorphing = false
+            island.morphFraction = expanded ? 1 : 0
+            alphaValue = expanded ? 1 : Self.collapsedAlpha
+            hasShadow = true
+            ignoreMovesUntil = Date().addingTimeInterval(0.3)
+            super.setFrame(expanded ? geom.expanded : geom.collapsed, display: true)
+            snapWork?.cancel()
+            persistIsland()
+            return
+        }
+
+        ignoreMovesUntil = Date().addingTimeInterval(0.4)
+        snapWork?.cancel()
+        // Avoid per-frame WindowServer alpha-shadow recomputation during the morph.
+        hasShadow = false
+
+        if expanded {
+            let alreadyInContainer = wasMorphing && frame.size == geom.container.size
+            island.isExpanded = true
+            island.isMorphing = true
+            alphaValue = 1
+            morphGeneration &+= 1
+            let generation = morphGeneration
+            if !alreadyInContainer {
+                island.morphFraction = 0
+                super.setFrame(geom.container, display: true)
+                contentView?.layoutSubtreeIfNeeded()
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.morphGeneration == generation,
+                          self.island.isEnabled, self.island.isExpanded else { return }
+                    self.animateMorph(to: 1, duration: Self.expandDuration, spring: true)
+                }
+            } else {
+                animateMorph(to: 1, duration: Self.expandDuration, spring: true)
+            }
+            let settle = DispatchWorkItem { [weak self] in
+                guard let self, self.morphGeneration == generation,
+                      self.island.isEnabled, self.island.isExpanded else { return }
+                self.island.isMorphing = false
+                if self.frame != geom.expanded {
+                    self.ignoreMovesUntil = Date().addingTimeInterval(0.25)
+                    self.setWindowFrameDirectly(geom.expanded)
+                }
+                self.hasShadow = true
+                self.invalidateShadow()
+            }
+            morphSettleWork = settle
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.expandDuration + 0.05, execute: settle)
+        } else {
+            morphGeneration &+= 1
+            let generation = morphGeneration
+            if frame.size != geom.container.size {
+                super.setFrame(geom.container, display: true)
+                contentView?.layoutSubtreeIfNeeded()
+            }
+            island.isExpanded = false
+            island.isMorphing = true
+            animateMorph(to: 0, duration: Self.collapseDuration, spring: false)
+            let collapse = DispatchWorkItem { [weak self] in
+                guard let self, self.morphGeneration == generation,
+                      self.island.isEnabled, !self.island.isExpanded else { return }
+                self.island.isMorphing = false
+                self.alphaValue = Self.collapsedAlpha
+                self.ignoreMovesUntil = Date().addingTimeInterval(0.25)
+                self.setWindowFrameDirectly(geom.collapsed)
+                self.hasShadow = true
+                self.invalidateShadow()
+            }
+            collapseFrameWork = collapse
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.collapseDuration + 0.03, execute: collapse)
+        }
         persistIsland()
+    }
+
+    private func setWindowFrameDirectly(_ rect: NSRect) {
+        super.setFrame(rect, display: true)
+    }
+
+    private func cancelMorphWork() {
+        collapseFrameWork?.cancel()
+        collapseFrameWork = nil
+        morphSettleWork?.cancel()
+        morphSettleWork = nil
+    }
+
+    private func animateMorph(to target: CGFloat, duration: TimeInterval, spring: Bool) {
+        let animation: Animation = spring
+            ? .spring(duration: duration, bounce: 0.12)
+            : .easeOut(duration: duration)
+        withAnimation(animation) {
+            island.morphFraction = target
+        }
+    }
+
+    private func islandGeometry(in bounds: NSRect) -> (collapsed: NSRect, expanded: NSRect, container: NSRect) {
+        let collapsed = HUDIslandGeometry.collapsedFrame(edge: island.edge, along: along, in: bounds)
+        let expanded = HUDIslandGeometry.frame(edge: island.edge, along: along, size: expandedSize, in: bounds)
+        return (collapsed, expanded, expanded.union(collapsed))
+    }
+
+    private func syncIslandMetrics(collapsed: NSRect, expanded: NSRect, container: NSRect) {
+        island.expandedSize = expanded.size
+        island.collapsedSize = collapsed.size
+        island.containerSize = container.size
+        island.collapsedOrigin = NSPoint(x: collapsed.minX - container.minX, y: container.maxY - collapsed.maxY)
+        island.expandedOrigin = NSPoint(x: expanded.minX - container.minX, y: container.maxY - expanded.maxY)
     }
 
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
@@ -158,23 +282,39 @@ final class ResponsiveHUDPanel: NSPanel {
     }
 
     func islandPointerExited() {
-        guard island.isEnabled, island.isExpanded, !isPinnedOpen,
-              NSEvent.pressedMouseButtons == 0 else { return }
+        guard island.isEnabled, island.isExpanded, !isPinnedOpen else { return }
+        if NSEvent.pressedMouseButtons != 0 {
+            scheduleHoverCollapse()
+            return
+        }
+        if isVisible, frame.contains(NSEvent.mouseLocation) { return }
         setIslandExpanded(false)
     }
 
+    private func scheduleHoverCollapse() {
+        hoverWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.islandPointerExited() }
+        hoverWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.hoverCollapseDelay, execute: work)
+    }
+
     private func applyIslandFrame(animated: Bool) {
-        ignoreMovesUntil = Date().addingTimeInterval(0.5)
+        ignoreMovesUntil = Date().addingTimeInterval(0.35)
         alphaValue = island.isEnabled && !island.isExpanded ? Self.collapsedAlpha : 1
-        let target = HUDIslandGeometry.frame(
-            edge: island.edge,
-            along: along,
-            size: island.isExpanded ? expandedSize : HUDIslandGeometry.collapsedSize(for: island.edge),
-            in: islandBounds
-        )
+        let geom = islandGeometry(in: islandBounds)
+        syncIslandMetrics(collapsed: geom.collapsed, expanded: geom.expanded, container: geom.container)
+        island.isMorphing = false
+        island.morphFraction = island.isExpanded ? 1 : 0
+        let target = island.isExpanded ? geom.expanded : geom.collapsed
         if animated, isVisible {
-            setFrame(target, display: true, animate: true)
             snapWork?.cancel()
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.16
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                // animator() returns an NSProxy; dispatch through NSWindow/dynamic ObjC so
+                // Release optimization cannot devirtualize/inline ResponsiveHUDPanel.setFrame onto the proxy.
+                (self as NSWindow).animator().setFrame(target, display: true)
+            }
         } else {
             super.setFrame(target, display: true)
         }
@@ -223,7 +363,7 @@ final class ResponsiveHUDPanel: NSPanel {
         return super.makeFirstResponder(responder)
     }
 
-    override func setFrame(_ frameRect: NSRect, display flag: Bool) {
+    @objc dynamic override func setFrame(_ frameRect: NSRect, display flag: Bool) {
         super.setFrame(frameRect, display: flag)
         if !island.isEnabled { Self.persistFrame(frameRect) }
     }
@@ -257,6 +397,9 @@ final class ResponsiveHUDPanel: NSPanel {
                 isPinnedOpen = true
                 setIslandExpanded(true)
                 return
+            }
+            if island.isExpanded {
+                isPinnedOpen = true
             }
         case .leftMouseDragged:
             if island.isEnabled, !isResizingCorner, let start = dragStartMouse, let origin = mouseDownOrigin {
@@ -360,6 +503,10 @@ final class ResponsiveHUDPanel: NSPanel {
 
     override func mouseEntered(with event: NSEvent) {
         hoverWork?.cancel()
+        if island.isMorphing && !island.isExpanded {
+            islandPointerEntered()
+            return
+        }
         guard island.showsPill else { return super.mouseEntered(with: event) }
         let work = DispatchWorkItem { [weak self] in self?.islandPointerEntered() }
         hoverWork = work
@@ -369,9 +516,7 @@ final class ResponsiveHUDPanel: NSPanel {
     override func mouseExited(with event: NSEvent) {
         hoverWork?.cancel()
         if island.isExpanded && !isPinnedOpen {
-            let work = DispatchWorkItem { [weak self] in self?.islandPointerExited() }
-            hoverWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.hoverCollapseDelay, execute: work)
+            scheduleHoverCollapse()
         }
         resetCursor()
         updateMovable(overCorner: false)
@@ -435,6 +580,15 @@ final class ResponsiveHUDPanel: NSPanel {
         let next = Self.resizedFrame(startFrame, delta: NSPoint(x: mouse.x - startMouse.x,
                                                                y: mouse.y - startMouse.y),
                                      handle: resizeHandle, bounds: islandBounds)
+        if island.isEnabled {
+            cancelMorphWork()
+            island.isMorphing = false
+            island.morphFraction = 1
+            expandedSize = next.size
+            island.expandedSize = next.size
+            island.containerSize = next.size
+            island.expandedOrigin = .zero
+        }
         setFrame(next, display: true)
     }
 

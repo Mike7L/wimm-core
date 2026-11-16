@@ -31,4 +31,13 @@ final class AirPodsPressFilterTests: XCTestCase {
         XCTAssertFalse(filter.accept(muted: true, at: start.addingTimeInterval(0.4)))
         XCTAssertTrue(filter.accept(muted: true, at: start.addingTimeInterval(5)))
     }
+
+    /// Stating "unmuted" echoes back as an unmuted callback: the echo must not be answered.
+    func testUnmutedStatementIsNotRepeatedForItsOwnEcho() {
+        var filter = AirPodsPressFilter()
+        let start = Date(timeIntervalSince1970: 0)
+        XCTAssertTrue(filter.shouldStateUnmuted(at: start))
+        XCTAssertFalse(filter.shouldStateUnmuted(at: start.addingTimeInterval(0.5)))
+        XCTAssertTrue(filter.shouldStateUnmuted(at: start.addingTimeInterval(AirPodsPressFilter.statementInterval)))
+    }
 }

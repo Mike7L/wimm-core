@@ -65,6 +65,10 @@ final class VikAssistantTests: XCTestCase {
         defer { h.assistant.shutdown() }
         h.capture.liveText = "Обычная мысль."
         h.assistant.tick()
+        XCTAssertNil(h.assistant.banner)
+        XCTAssertEqual(VikAssistant.clipped("  один два три  ", limit: 20), "один два три")
+        XCTAssertEqual(VikAssistant.clipped("один два три", limit: 4), "один…")
+        XCTAssertEqual(VikAssistant.clipped("один два три", limit: 3, keepsEnd: true), "…три")
         XCTAssertFalse(h.assistant.silenceDetected())
         XCTAssertEqual(h.capture.stops, 0)
         XCTAssertEqual(h.voice.prepares, 0)
@@ -80,6 +84,7 @@ final class VikAssistantTests: XCTestCase {
         await waitUntil { h.capture.stops == 1 }
         XCTAssertEqual(h.assistant.phase, .finishing)
         XCTAssertTrue(h.assistant.status.contains("live-текст"))
+        XCTAssertEqual(h.assistant.banner?.message, h.assistant.status)
         XCTAssertEqual(h.calls.count, 0)
         h.capture.finish(.success("Описание идеи. Эй Алёна где клиенты и с чего начать?"))
         await waitUntil { h.calls.count == 1 }
@@ -90,6 +95,8 @@ final class VikAssistantTests: XCTestCase {
         await waitUntil { h.voice.lines.count == 1 }
         h.voice.onStarted?()
         XCTAssertEqual(h.assistant.phase, .speaking)
+        XCTAssertEqual(h.assistant.banner, .init(message: "Микрофон выключен · Алёна: Спроси знакомых.",
+                                                 systemImage: "speaker.wave.2.fill"))
         h.voice.onIdle?() // A playback gap before the stream ends cannot resume capture.
         XCTAssertEqual(h.capture.starts, 0)
         h.reply?.yield("Вот ответ [D1]."); h.reply?.finish()

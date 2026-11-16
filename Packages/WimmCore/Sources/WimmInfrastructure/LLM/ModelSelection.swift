@@ -3,6 +3,36 @@ import Foundation
 public enum ModelSelection {
     public static let defaultGeminiModel = "gemini-3.5-flash"
 
+    /// Default for streamed conversations: fast enough to answer by voice.
+    public static let defaultConversationModel = "gemini-3.8-flash"
+
+    /// True for an id `GeminiChatStream` can call directly.
+    public static func isGeminiModel(_ modelId: String) -> Bool {
+        trimModelPrefix(modelId.trimmingCharacters(in: .whitespacesAndNewlines)).lowercased().hasPrefix("gemini-")
+    }
+
+    /// The model behind Studio's streamed conversations (Алёна, «Ангел и Демон»).
+    /// They speak Gemini only, so a stored id of another provider is ignored here
+    /// and refused by ``setConversationModel(_:)`` rather than swapped silently.
+    public static var conversationModel: String {
+        for store in [SharedUserDefaults.store, UserDefaults.standard] {
+            if let saved = store.string(forKey: DefaultsKey.conversationModel), isGeminiModel(saved) {
+                return trimModelPrefix(saved.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        }
+        return defaultConversationModel
+    }
+
+    /// Stores the conversation model; false (and nothing stored) for a non-Gemini id.
+    @discardableResult
+    public static func setConversationModel(_ modelId: String) -> Bool {
+        guard isGeminiModel(modelId) else { return false }
+        let trimmed = trimModelPrefix(modelId.trimmingCharacters(in: .whitespacesAndNewlines))
+        SharedUserDefaults.store.set(trimmed, forKey: DefaultsKey.conversationModel)
+        UserDefaults.standard.set(trimmed, forKey: DefaultsKey.conversationModel)
+        return true
+    }
+
     public static func model(for capability: ModelCapability) -> String {
         // If user explicitly selected "apple/on-device", honor that selection
         // (checked inside resolve via UserDefaults).

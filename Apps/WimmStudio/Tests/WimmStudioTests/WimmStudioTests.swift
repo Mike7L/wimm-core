@@ -246,6 +246,36 @@ final class WimmStudioTests: XCTestCase {
     }
 
     @MainActor
+    func testBannerStatusStaysUntilClearedAndReturnsAfterAReceipt() async throws {
+        let banner = StudioSaveConfirmation()
+        defer { banner.setStatus(nil); banner.dismiss() }
+        func visiblePanel() -> NSWindow? {
+            NSApp.windows.first { $0.identifier?.rawValue == "studio.saveConfirmation" && $0.isVisible }
+        }
+        banner.setStatus(.init(message: "Алёна думает…", systemImage: "ellipsis.bubble"))
+        let panel = try XCTUnwrap(visiblePanel())
+        let short = panel.frame.width
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertTrue(panel.isVisible, "a status has no timer")
+
+        banner.setStatus(.init(message: "Алёна: спроси знакомых и начни с трёх писем", systemImage: "speaker.wave.2.fill"))
+        XCTAssertTrue(visiblePanel() === panel, "an update keeps the same window")
+        XCTAssertGreaterThan(panel.frame.width, short)
+        let long = panel.frame.width
+
+        banner.show(count: 1, duration: .milliseconds(40))
+        XCTAssertLessThan(panel.frame.width, long, "the receipt covers the status")
+        try await Task.sleep(for: .milliseconds(90))
+        XCTAssertTrue(panel.isVisible)
+        XCTAssertEqual(panel.frame.width, long, "the status comes back after the receipt")
+
+        banner.dismiss()
+        XCTAssertTrue(panel.isVisible, "dismissing a receipt keeps the status")
+        banner.setStatus(nil)
+        XCTAssertNil(visiblePanel())
+    }
+
+    @MainActor
     func testHUDResizesUpFromBottomOfScreenAndClampsToVisibleBounds() {
         let bounds = NSRect(x: 100, y: 40, width: 1000, height: 800)
         let start = NSRect(x: 200, y: 40, width: 360, height: 38)
@@ -331,7 +361,8 @@ final class WimmStudioTests: XCTestCase {
             island: island
         )
         defer { panel.close() }
-        XCTAssertEqual(ResponsiveHUDPanel.hoverExpandDelay, 0.7, accuracy: 0.01)
+        XCTAssertEqual(ResponsiveHUDPanel.hoverExpandDelay, 0.12, accuracy: 0.01)
+        XCTAssertEqual(ResponsiveHUDPanel.hoverCollapseDelay, 0.18, accuracy: 0.01)
         XCTAssertNotNil(island.onTapPill)
         let bounds = (panel.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         panel.setFrame(NSRect(x: bounds.midX - 180, y: bounds.maxY - 230, width: 360, height: 220), display: true)
@@ -371,5 +402,120 @@ final class WimmStudioTests: XCTestCase {
         XCTAssertEqual(panel.frame.size, NSSize(width: 18, height: 56))
         XCTAssertEqual(panel.frame.minX, bounds.minX, accuracy: 0.5)
         XCTAssertFalse(panel.isInResizeCorner(at: NSPoint(x: 28, y: 2)))
+    }
+
+    @MainActor
+    func testHUDIslandAnimatedMorphIsNonBlockingAndInterruptible() async throws {
+        let defaults = UserDefaults.standard
+        let keys = ["WimmStudio.hudIsland", "WimmStudio.hudIslandEdge", "WimmStudio.hudIslandAlong", "WimmStudio.hudIslandExpandedSize"]
+        let saved = keys.map { defaults.object(forKey: $0) }
+        defer { for (k, v) in zip(keys, saved) { if let v { defaults.set(v, forKey: k) } else { defaults.removeObject(forKey: k) } } }
+        keys.forEach { defaults.removeObject(forKey: $0) }
+
+        let island = HUDIslandModel()
+        let hudView = ResponsiveHUDView(capture: CaptureSession(), recentNotes: RecentNotes(limit: 5), onOpenDocument: {}, island: island)
+        let panel = ResponsiveHUDPanel(rootView: hudView, island: island)
+        defer { panel.close() }
+
+        let bounds = (panel.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        panel.setFrame(NSRect(x: bounds.midX - 180, y: bounds.maxY - 230, width: 360, height: 220), display: true)
+        panel.setIslandEnabled(true, animated: false)
+        panel.orderFrontRegardless()
+
+        // Expand on a visible panel: frame jumps once to container size, morph animates non-blockingly.
+        panel.setIslandExpanded(true, animated: true)
+        XCTAssertTrue(island.isExpanded)
+        XCTAssertTrue(island.isMorphing)
+        XCTAssertEqual(panel.frame.size, NSSize(width: 360, height: 220))
+
+        // Wait for expand animation + settle to complete.
+        try await Task.sleep(for: .milliseconds(320))
+        XCTAssertFalse(island.isMorphing)
+        XCTAssertEqual(island.morphFraction, 1, accuracy: 0.001)
+        XCTAssertTrue(panel.hasShadow)
+
+        // Start collapsing, then interrupt mid-flight by re-expanding.
+        panel.setIslandExpanded(false, animated: true)
+        XCTAssertFalse(island.isExpanded)
+        XCTAssertTrue(island.isMorphing)
+        XCTAssertEqual(panel.frame.size, NSSize(width: 360, height: 220))
+
+        try await Task.sleep(for: .milliseconds(40))
+        panel.setIslandExpanded(true, animated: true)
+        XCTAssertTrue(island.isExpanded)
+
+        // Wait past collapse duration: interrupted collapse must NOT shrink the panel.
+        try await Task.sleep(for: .milliseconds(320))
+        XCTAssertTrue(island.isExpanded)
+        XCTAssertFalse(island.isMorphing)
+        XCTAssertEqual(panel.frame.size, NSSize(width: 360, height: 220))
+
+        // Uninterrupted collapse settles to collapsed pill size and alpha.
+        panel.setIslandExpanded(false, animated: true)
+        try await Task.sleep(for: .milliseconds(280))
+        XCTAssertFalse(island.isExpanded)
+        XCTAssertFalse(island.isMorphing)
+        XCTAssertEqual(panel.frame.size, NSSize(width: 56, height: 18))
+        XCTAssertLessThan(panel.alphaValue, 1)
+        XCTAssertTrue(panel.hasShadow)
+
+        // Animated frame snap on a visible panel (uses animator().setFrame) must not crash or lose edge alignment.
+        panel.setIslandEdge(.left, animated: true)
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertEqual(island.edge, .left)
+        XCTAssertEqual(panel.frame.size, NSSize(width: 18, height: 56))
+        XCTAssertEqual(panel.frame.minX, bounds.minX, accuracy: 0.5)
+    }
+
+    @MainActor
+    func testCollapsedIslandPillRendersMicGlyphInsidePillBounds() async throws {
+        let island = HUDIslandModel()
+        island.isEnabled = true
+        island.isExpanded = false
+        island.edge = .top
+        island.collapsedSize = NSSize(width: 56, height: 18)
+        island.expandedSize = NSSize(width: 360, height: 220)
+
+        let hudView = ResponsiveHUDView(
+            capture: CaptureSession(),
+            recentNotes: RecentNotes(limit: 5),
+            onOpenDocument: {},
+            island: island
+        )
+        let hosting = NSHostingView(rootView: hudView)
+        hosting.frame = NSRect(x: 0, y: 0, width: 56, height: 18)
+
+        let window = NSWindow(
+            contentRect: hosting.frame,
+            styleMask: .borderless,
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.contentView = hosting
+        defer { window.orderOut(nil) }
+
+        window.orderFrontRegardless()
+        for _ in 0..<3 { try await Task.sleep(for: .milliseconds(50)) }
+
+        let rep = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+        hosting.cacheDisplay(in: hosting.bounds, to: rep)
+
+        // The mic icon sits in the interior of the pill and has brighter pixels than the dark fill.
+        // Note: rep.colorAt(x:y:) uses pixel (not point) coordinates, which are 2x on Retina.
+        let marginX = max(2, rep.pixelsWide / 4)
+        let marginY = max(2, rep.pixelsHigh / 6)
+        var maxLuminance: CGFloat = 0
+        for x in marginX..<(rep.pixelsWide - marginX) {
+            for y in marginY..<(rep.pixelsHigh - marginY) {
+                if let color = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) {
+                    let lum = 0.2126 * color.redComponent + 0.7152 * color.greenComponent + 0.0722 * color.blueComponent
+                    maxLuminance = max(maxLuminance, lum)
+                }
+            }
+        }
+        XCTAssertGreaterThan(maxLuminance, 0.2, "Expected mic glyph pixels inside collapsed 56x18 pill")
     }
 }

@@ -44,7 +44,6 @@ struct ResponsiveHUDView: View {
     var onSaveQuickNote: (@MainActor (@escaping @MainActor () async throws -> [URL]) -> Void)?
 
     @State private var clockNow = Date()
-    @State private var hoveredNoteID: UUID?
     @State private var expandedVikRequest: String?
     /// False once the user scrolls up; new text then stays put until they
     /// scroll back to the end or start a recording.
@@ -81,26 +80,11 @@ struct ResponsiveHUDView: View {
     }
 
     var body: some View {
-        ZStack {
-            mainContent
-                .opacity(island?.showsPill == true ? 0 : 1)
-                .allowsHitTesting(island?.showsPill != true)
-            if let island, island.showsPill {
-                islandPill(island)
-            }
-        }
-        .background(Color.black.opacity(0.42), in: hudShape)
-        .background(.ultraThinMaterial, in: hudShape)
-        .clipShape(hudShape)
-        .overlay(borderOverlay)
-        .overlay(alignment: placesControlBarAtTop ? .bottom : .top) {
-            if island?.showsPill != true {
-                Capsule()
-                    .fill(.white.opacity(0.45))
-                    .frame(width: 26, height: 3)
-                    .padding(placesControlBarAtTop ? .bottom : .top, 2)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+        Group {
+            if let island, island.isEnabled {
+                islandBody(island)
+            } else {
+                plainBody
             }
         }
         .focusEffectDisabled()
@@ -116,85 +100,161 @@ struct ResponsiveHUDView: View {
         }
     }
 
+    private var plainBody: some View {
+        let shape = hudShape(cornerRadius: 9, islandEdge: nil)
+        return GeometryReader { geo in
+            mainContent(size: geo.size)
+        }
+        .background {
+            ZStack {
+                Rectangle().fill(.ultraThinMaterial)
+                Color.black.opacity(0.42)
+            }
+        }
+        .clipShape(shape)
+        .overlay(borderOverlay(shape: shape, collapsed: false))
+        .overlay(alignment: .top) {
+            grabberPill
+        }
+    }
+
+    private func islandBody(_ island: HUDIslandModel) -> some View {
+        let inContainer = island.isExpanded || island.isMorphing
+        let t = inContainer ? island.morphFraction : 0
+        let collapsedR = HUDIslandGeometry.thickness / 2
+        let radius = collapsedR + (14 - collapsedR) * t
+        let shape = hudShape(cornerRadius: radius, islandEdge: island.edge)
+        let boxWidth = inContainer
+            ? island.collapsedSize.width + (island.expandedSize.width - island.collapsedSize.width) * t
+            : island.collapsedSize.width
+        let boxHeight = inContainer
+            ? island.collapsedSize.height + (island.expandedSize.height - island.collapsedSize.height) * t
+            : island.collapsedSize.height
+        let boxX = inContainer
+            ? island.collapsedOrigin.x + (island.expandedOrigin.x - island.collapsedOrigin.x) * t
+            : 0
+        let boxY = inContainer
+            ? island.collapsedOrigin.y + (island.expandedOrigin.y - island.collapsedOrigin.y) * t
+            : 0
+        let edgeAlignment = islandContentAlignment(for: island.edge)
+
+        return Color.clear
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .topLeading) {
+                mainContent(size: island.expandedSize)
+                    .frame(width: island.expandedSize.width, height: island.expandedSize.height)
+                    .opacity(Double(t))
+                    .allowsHitTesting(island.isExpanded)
+                    .frame(width: boxWidth, height: boxHeight, alignment: edgeAlignment)
+                    .overlay {
+                        if island.showsPill || island.isMorphing {
+                            islandPill(island)
+                                .opacity(Double(1 - t))
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .background {
+                        ZStack {
+                            Rectangle().fill(.ultraThinMaterial)
+                            Color.black.opacity(0.42)
+                        }
+                    }
+                    .clipShape(shape)
+                    .overlay(borderOverlay(shape: shape, collapsed: island.showsPill && !island.isMorphing))
+                    .overlay(alignment: placesControlBarAtTop ? .bottom : .top) {
+                        grabberPill
+                            .opacity(Double(t))
+                    }
+                    .offset(x: boxX, y: boxY)
+            }
+            .clipped()
+    }
+
+    private var grabberPill: some View {
+        Capsule()
+            .fill(.white.opacity(0.45))
+            .frame(width: 26, height: 3)
+            .padding(placesControlBarAtTop ? .bottom : .top, 2)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    private func islandContentAlignment(for edge: HUDIslandEdge) -> Alignment {
+        switch edge {
+        case .top: .top
+        case .bottom: .bottom
+        case .left: .leading
+        case .right: .trailing
+        }
+    }
+
     /// Island forms are attached to a screen edge: square on that side,
     /// rounded on the free side (like the notch). Plain HUD keeps its rounded rectangle.
-    private var hudShape: AnyShape {
-        guard let island, island.isEnabled else { return AnyShape(RoundedRectangle(cornerRadius: 9)) }
-        let r: CGFloat = island.isExpanded ? 14 : HUDIslandGeometry.thickness / 2
+    private func hudShape(cornerRadius r: CGFloat, islandEdge: HUDIslandEdge?) -> UnevenRoundedRectangle {
+        guard let islandEdge else {
+            return UnevenRoundedRectangle(
+                cornerRadii: .init(topLeading: r, bottomLeading: r, bottomTrailing: r, topTrailing: r),
+                style: .continuous
+            )
+        }
         let radii: RectangleCornerRadii
-        switch island.edge {
+        switch islandEdge {
         case .top: radii = .init(topLeading: 0, bottomLeading: r, bottomTrailing: r, topTrailing: 0)
         case .bottom: radii = .init(topLeading: r, bottomLeading: 0, bottomTrailing: 0, topTrailing: r)
         case .left: radii = .init(topLeading: 0, bottomLeading: 0, bottomTrailing: r, topTrailing: r)
         case .right: radii = .init(topLeading: r, bottomLeading: r, bottomTrailing: 0, topTrailing: 0)
         }
-        return AnyShape(UnevenRoundedRectangle(cornerRadii: radii))
+        return UnevenRoundedRectangle(cornerRadii: radii, style: .continuous)
     }
 
-    /// Collapsed island: near-black capsule with a quiet mic glyph; while
-    /// recording a pulsing red dot (and the timer on top/bottom edges).
-    /// Clicks and hover are handled by the panel.
+    /// Collapsed island: the whole pill is the microphone toggle of the bar,
+    /// cut to the island's shape. Clicks and hover are handled by the panel.
     private func islandPill(_ island: HUDIslandModel) -> some View {
-        let pulse = Int(clockNow.timeIntervalSinceReferenceDate) % 2 == 0
-        return HStack(spacing: 5) {
-            if vik?.isResponding == true {
-                Image(systemName: "waveform").font(.system(size: 9, weight: .semibold))
-                if island.edge.isHorizontal { Text("Алёна").font(.system(size: 10, weight: .medium)) }
-            } else if capture.isRecording {
-                Circle()
-                    .fill(Color.red.opacity(pulse ? 1 : 0.55))
-                    .frame(width: 6, height: 6)
-                    .animation(.easeInOut(duration: 0.4), value: pulse)
-                if island.edge.isHorizontal, let started = capture.startedAt {
-                    Text(elapsedString(since: started, now: clockNow))
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.85))
-                }
-            } else {
-                Image(systemName: "mic.fill")
-                    .font(.system(size: 8.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.55))
-            }
-        }
+        CaptureMicToggle(
+            capture: capture,
+            vik: vik,
+            trackSize: CGSize(width: HUDIslandGeometry.length, height: HUDIslandGeometry.thickness),
+            vertical: !island.edge.isHorizontal,
+            fillsContainer: true,
+            interactive: false
+        )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black.opacity(0.92))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Expand HUD island")
     }
 
-    private var mainContent: some View {
-        GeometryReader { geo in
-            let layout = ResponsiveHUDLayout(width: geo.size.width, height: geo.size.height)
-            VStack(spacing: 0) {
-                if placesControlBarAtTop {
-                    controlBar(layout: layout)
-                        .frame(maxWidth: .infinity, minHeight: layout.controlBarHeight, maxHeight: layout.controlBarHeight)
-                }
-
-                streamList
-                    .frame(maxWidth: .infinity, minHeight: layout.listHeight, maxHeight: layout.listHeight)
-                    .clipped()
-                    .opacity(layout.listOpacity)
-                    .allowsHitTesting(layout.showsList)
-                    .overlay(alignment: .topTrailing) {
-                        if let island, collapsesFromListCorner(layout) {
-                            StudioBarButton(icon: "chevron.up.chevron.down",
-                                            help: "Collapse to the screen edge") {
-                                island.onToggle()
-                            }
-                            .background(Color.black.opacity(0.35), in: Circle())
-                            .padding(.top, 7)
-                            .padding(.trailing, 7)
-                        }
-                    }
-
-                if !placesControlBarAtTop {
-                    controlBar(layout: layout)
-                        .frame(maxWidth: .infinity, minHeight: layout.controlBarHeight, maxHeight: layout.controlBarHeight)
-                }
+    private func mainContent(size: CGSize) -> some View {
+        let layout = ResponsiveHUDLayout(width: size.width, height: size.height)
+        return VStack(spacing: 0) {
+            if placesControlBarAtTop {
+                controlBar(layout: layout)
+                    .frame(maxWidth: .infinity, minHeight: layout.controlBarHeight, maxHeight: layout.controlBarHeight)
             }
-            .frame(width: geo.size.width, height: geo.size.height)
+
+            streamList
+                .frame(maxWidth: .infinity, minHeight: layout.listHeight, maxHeight: layout.listHeight)
+                .clipped()
+                .opacity(layout.listOpacity)
+                .allowsHitTesting(layout.showsList)
+                .overlay(alignment: .topTrailing) {
+                    if let island, collapsesFromListCorner(layout) {
+                        StudioBarButton(icon: "chevron.up.chevron.down",
+                                        help: "Collapse to the screen edge") {
+                            island.onToggle()
+                        }
+                        .background(Color.black.opacity(0.35), in: Circle())
+                        .padding(.top, 7)
+                        .padding(.trailing, 7)
+                    }
+                }
+
+            if !placesControlBarAtTop {
+                controlBar(layout: layout)
+                    .frame(maxWidth: .infinity, minHeight: layout.controlBarHeight, maxHeight: layout.controlBarHeight)
+            }
         }
+        .frame(width: size.width, height: size.height)
     }
 
     // MARK: - Stream List (always in the view hierarchy)
@@ -328,83 +388,12 @@ struct ResponsiveHUDView: View {
     }
 
     private func noteRow(_ note: Note) -> some View {
-        let isHovered = hoveredNoteID == note.id
-        return HStack(alignment: .top, spacing: 7) {
-            Button { onOpenNote(note.fileURL) } label: {
-                HStack(alignment: .top, spacing: 7) {
-                    Image(systemName: note.studioKindIcon)
-                        .font(.system(size: 8.5, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 10)
-                        .padding(.top, 3)
-                        .accessibilityHidden(true)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(note.studioTitle)
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(.primary.opacity(0.88))
-                            .lineLimit(2)
-
-                        HStack(spacing: 5) {
-                            Text(note.absoluteDate.formatted(.dateTime.day().month(.abbreviated).hour().minute()))
-                                .font(.system(size: 9.5, weight: .medium, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                            if let label = note.studioTranscriptLabel {
-                                Text(label)
-                                    .font(.system(size: 9.5, weight: .medium, design: .rounded))
-                                    .foregroundStyle(note.hasFileTranscript ? Color.green.opacity(0.9) : Color.orange.opacity(0.9))
-                            }
-                        }
-                    }
-
-                    Spacer(minLength: 4)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help(island?.showsPill == true ? "" : "Открыть заметку")
-            .accessibilityLabel("Открыть заметку: \(note.studioTitle)")
-
-            if isHovered {
-                HStack(spacing: 4) {
-                    Button {
-                        copyText(note.refinedText ?? note.text)
-                    } label: {
-                        Image(systemName: "doc.on.doc")
-                            .font(.system(size: 10, weight: .semibold))
-                            .frame(width: 20, height: 20)
-                    }
-                    .buttonStyle(.plain)
-                    .focusEffectDisabled()
-                    .help("Copy note text")
-
-                    Button {
-                        NSWorkspace.shared.activateFileViewerSelecting([note.fileURL])
-                    } label: {
-                        Image(systemName: "folder")
-                            .font(.system(size: 10, weight: .semibold))
-                            .frame(width: 20, height: 20)
-                    }
-                    .buttonStyle(.plain)
-                    .focusEffectDisabled()
-                    .help("Reveal in Finder")
-                }
-                .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color.white.opacity(isHovered ? 0.12 : 0.05))
+        HUDNoteRow(
+            note: note,
+            showsTooltip: island?.showsPill != true,
+            onOpen: { onOpenNote(note.fileURL) },
+            onCopy: { copyText($0) }
         )
-        .onHover { inside in
-            hoveredNoteID = inside ? note.id : (hoveredNoteID == note.id ? nil : hoveredNoteID)
-        }
-        .contextMenu {
-            Button("Открыть заметку") { onOpenNote(note.fileURL) }
-            Button("Показать в Finder") { NSWorkspace.shared.activateFileViewerSelecting([note.fileURL]) }
-        }
     }
 
     private func vikIsCollapsed(_ vik: VikAssistant) -> Bool {
@@ -718,14 +707,7 @@ struct ResponsiveHUDView: View {
     }
 
     private func micSwitch(hitSize: CGSize?) -> some View {
-        StudioMicSwitch(
-            isRecording: capture.isRecording,
-            isBusy: capture.isBusy,
-            pulse: Int(clockNow.timeIntervalSinceReferenceDate) % 2 == 0,
-            level: capture.isRecording ? CGFloat(capture.level) : 0,
-            hitSize: hitSize,
-            action: { capture.toggle() }
-        )
+        CaptureMicToggle(capture: capture, vik: vik, hitSize: hitSize)
     }
 
     private func saveQuickNote(_ make: @escaping @MainActor () async throws -> [URL]) {
@@ -763,17 +745,14 @@ struct ResponsiveHUDView: View {
         return "Ready"
     }
 
-    private var borderOverlay: some View {
+    private func borderOverlay(shape: UnevenRoundedRectangle, collapsed: Bool) -> some View {
         let pulse = Int(clockNow.timeIntervalSinceReferenceDate) % 2 == 0
-        let collapsed = island?.showsPill == true
         let width: CGFloat = capture.isRecording && !collapsed ? 2 : 1
         let color: Color = capture.isRecording && !collapsed
             ? Color.red.opacity(pulse ? 0.95 : 0.45)
             : Color.white.opacity(collapsed ? 0.1 : 0.16)
-        // Stroke is centered on the edge: double it and clip to keep the inner half.
-        return hudShape
-            .stroke(color, lineWidth: width * 2)
-            .clipShape(hudShape)
+        return shape
+            .strokeBorder(color, lineWidth: width)
             .animation(.easeInOut(duration: 0.35), value: pulse)
             .allowsHitTesting(false)
     }
@@ -815,6 +794,97 @@ struct ResponsiveHUDView: View {
         case .posted(let text): text
         case .empty: "No speech detected for selection"
         case .failed(let msg): msg
+        }
+    }
+}
+
+/// Isolated row view so row-hover and 1 Hz recording clock updates never invalidate
+/// sibling rows or the outer HUD hierarchy.
+private struct HUDNoteRow: View {
+    let note: Note
+    let showsTooltip: Bool
+    let onOpen: () -> Void
+    let onCopy: (String) -> Void
+
+    @State private var isHovered = false
+    private static let dateStyle: Date.FormatStyle = .dateTime.day().month(.abbreviated).hour().minute()
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 7) {
+            Button(action: onOpen) {
+                HStack(alignment: .top, spacing: 7) {
+                    Image(systemName: note.studioKindIcon)
+                        .font(.system(size: 8.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 10)
+                        .padding(.top, 3)
+                        .accessibilityHidden(true)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(note.studioTitle)
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(.primary.opacity(0.88))
+                            .lineLimit(2)
+
+                        HStack(spacing: 5) {
+                            Text(note.absoluteDate.formatted(Self.dateStyle))
+                                .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            if let label = note.studioTranscriptLabel {
+                                Text(label)
+                                    .font(.system(size: 9.5, weight: .medium, design: .rounded))
+                                    .foregroundStyle(note.hasFileTranscript ? Color.green.opacity(0.9) : Color.orange.opacity(0.9))
+                            }
+                        }
+                    }
+
+                    Spacer(minLength: 4)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(showsTooltip ? "Открыть заметку" : "")
+            .accessibilityLabel("Открыть заметку: \(note.studioTitle)")
+
+            if isHovered {
+                HStack(spacing: 4) {
+                    Button {
+                        onCopy(note.refinedText ?? note.text)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 10, weight: .semibold))
+                            .frame(width: 20, height: 20)
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                    .help("Copy note text")
+
+                    Button {
+                        NSWorkspace.shared.activateFileViewerSelecting([note.fileURL])
+                    } label: {
+                        Image(systemName: "folder")
+                            .font(.system(size: 10, weight: .semibold))
+                            .frame(width: 20, height: 20)
+                    }
+                    .buttonStyle(.plain)
+                    .focusEffectDisabled()
+                    .help("Reveal in Finder")
+                }
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.white.opacity(isHovered ? 0.12 : 0.05))
+        )
+        .onHover { inside in
+            if isHovered != inside { isHovered = inside }
+        }
+        .contextMenu {
+            Button("Открыть заметку", action: onOpen)
+            Button("Показать в Finder") { NSWorkspace.shared.activateFileViewerSelecting([note.fileURL]) }
         }
     }
 }
@@ -870,36 +940,6 @@ struct StudioBarButton: View {
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.4)
         .help(help)
-    }
-}
-
-/// Uses the shared Wimm `RecordingSwitchStyle` toggle at every HUD width, down to 76x32.
-/// The input level breathes behind the switch, so there is no separate meter.
-struct StudioMicSwitch: View {
-    let isRecording: Bool
-    let isBusy: Bool
-    let pulse: Bool
-    var level: CGFloat = 0
-    var hitSize: CGSize? = nil
-    let action: () -> Void
-
-    var body: some View {
-        Toggle(
-            isOn: Binding(
-                get: { isRecording },
-                set: { requested in
-                    guard requested != isRecording else { return }
-                    action()
-                }
-            )
-        ) {
-            Text(isRecording ? "Recording" : "Record")
-        }
-        .toggleStyle(RecordingSwitchStyle(showsLabel: false, pulseOn: pulse, hitSize: hitSize, level: level))
-        .focusEffectDisabled()
-        .disabled(isBusy)
-        .keyboardShortcut("x", modifiers: [])
-        .help(isRecording ? "Stop recording (⌥W; X in HUD)" : "Start recording (⌥W; X in HUD)")
     }
 }
 

@@ -57,6 +57,61 @@ final class StudioNotePreviewTests: XCTestCase {
         XCTAssertEqual(content.initialTabID, "body")
     }
 
+    func testUneditedRecordingOffersItsTranscriptOnceAndAnEditAddsTheNoteText() {
+        let file = URL(fileURLWithPath: "/tmp/voice.m4a")
+        let metadata: [String: Any] = ["transcription": [
+            "transcript": "Локальный текст", "provider": "parakeet", "model": "parakeet:ultra",
+            "localTranscript": "Текст во время записи",
+        ]]
+        let plain = StudioNoteContent(note: note(file, text: "Локальный текст"), metadata: metadata, versions: [])
+        XCTAssertEqual(plain.bodyTwinID, "transcript:local")
+        XCTAssertEqual(plain.currentTextTabID, "transcript:local")
+        XCTAssertEqual(plain.initialTabID, "transcript:local")
+        XCTAssertEqual(plain.visibleTabs.map(\.id), ["transcript:realtime", "transcript:local"])
+        XCTAssertTrue(plain.editsBody(tabID: "transcript:local"))
+        XCTAssertFalse(plain.editsBody(tabID: "transcript:realtime"))
+
+        let edited = StudioNoteContent(note: note(file, text: "Локальный текст", refined: "Моя правка"),
+                                       metadata: metadata, versions: [])
+        XCTAssertNil(edited.bodyTwinID)
+        XCTAssertEqual(edited.initialTabID, "body")
+        XCTAssertEqual(edited.visibleTabs.map(\.id), ["body", "transcript:realtime", "transcript:local"])
+    }
+
+    func testSpeakerTranscriptCarriesTimedTurnsWithVoiceCards() throws {
+        let file = URL(fileURLWithPath: "/tmp/talk.m4a")
+        let record = SpeakerTurnsRecord(speakers: 2, engine: "test", turns: [
+            .init(speaker: 1, start: 4, end: 9, text: "Перенесём склад."),
+            .init(speaker: 2, start: 9, end: 15, text: "Предупредим поставщика."),
+        ], voices: [.init(voice: 1, card: "P003", score: 0.9, windows: 3)])
+        let metadata: [String: Any] = ["transcription": [
+            "transcript": "Перенесём склад. Предупредим поставщика.", "provider": "parakeet",
+            SpeakerTurnsRecord.sidecarKey: record.sidecarValue,
+        ]]
+        let content = StudioNoteContent(note: note(file, text: "Перенесём склад. Предупредим поставщика."),
+                                        metadata: metadata, versions: [])
+        let speakers = try XCTUnwrap(content.tabs.first { $0.id == "transcript:speakers" })
+        XCTAssertEqual(speakers.turns.map(\.label), ["[P003]", "Говорящий 2"])
+        XCTAssertEqual(speakers.turns.map(\.start), [4, 9])
+        // A by-speaker rendering is never mistaken for the note's own text.
+        XCTAssertEqual(content.bodyTwinID, "transcript:local")
+    }
+
+    func testTrashMovesTheNoteToTheLibraryTrashWithoutDeletingIt() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let name = "trash-\(UUID().uuidString).txt"
+        let file = dir.appendingPathComponent(name)
+        try "Ненужная заметка".write(to: file, atomically: true, encoding: .utf8)
+        let moved = await StudioNoteTrash.move(file, cloudSync: nil)
+        XCTAssertTrue(moved)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        let trashed = FileStore.trashDirectory().appendingPathComponent(name)
+        defer { try? FileManager.default.removeItem(at: trashed) }
+        XCTAssertEqual(try String(contentsOf: trashed, encoding: .utf8), "Ненужная заметка")
+    }
+
     func testAttachmentOriginalAndOCRSurviveAlongsideParentText() {
         let image = URL(fileURLWithPath: "/tmp/photo.png")
         let attachment = NoteAttachment(url: image, type: .image, extractedText: "Текст фотографии")
@@ -193,7 +248,7 @@ final class StudioNotePreviewTests: XCTestCase {
             }
             let loaded = await NoteBuilder.build(file: file, index: 0, metaRepo: MetadataRepository(),
                                                 transcriptRepo: TranscriptRepository(), includeSearchMetadata: false)
-            let host = NSHostingView(rootView: StudioNotePreview(entry: StudioLibraryNote(loaded), onSelectBlock: {})
+            let host = NSHostingView(rootView: StudioNotePreview(entry: StudioLibraryNote(loaded), onSelectBlock: {}, onTrash: { _ in false })
                 .environment(\.colorScheme, .light))
             let size = NSSize(width: name == "text" ? 540 : 700, height: 760)
             let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),

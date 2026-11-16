@@ -123,54 +123,78 @@ private struct StudioNoteQuickLook: NSViewRepresentable {
     static func dismantleNSView(_ view: QLPreviewView, coordinator: ()) { view.close() }
 }
 
+/// One recording's playback. The note window owns it so a transcript turn can seek the
+/// same player the controls show.
+@MainActor @Observable
+final class StudioNotePlayback {
+    private(set) var isPlaying = false
+    private(set) var position = 0.0
+    private(set) var duration = 0.0
+    private(set) var failed = false
+    private(set) var isReady = false
+    @ObservationIgnored private var player: AVAudioPlayer?
+
+    /// Loads the file, then follows the player until the task is cancelled.
+    func run(_ url: URL) async {
+        stop(); player = nil; isReady = false; position = 0; duration = 0; failed = false
+        let loaded = await Task.detached(priority: .userInitiated) { try? AVAudioPlayer(contentsOf: url) }.value
+        guard !Task.isCancelled else { return }
+        player = loaded; duration = loaded?.duration ?? 0; failed = loaded == nil; isReady = loaded != nil
+        while !Task.isCancelled {
+            do { try await Task.sleep(for: .milliseconds(250)) } catch { break }
+            position = player?.currentTime ?? 0
+            isPlaying = player?.isPlaying ?? false
+        }
+    }
+
+    func toggle() {
+        guard let player else { return }
+        if player.isPlaying { player.pause(); isPlaying = false; return }
+        if position >= duration { player.currentTime = 0; position = 0 }
+        isPlaying = player.play()
+    }
+
+    func seek(to seconds: Double, play: Bool = false) {
+        guard let player else { return }
+        let target = min(max(0, seconds), duration)
+        player.currentTime = target; position = target
+        if play, !player.isPlaying { isPlaying = player.play() }
+    }
+
+    func stop() { player?.stop(); isPlaying = false }
+}
+
 struct StudioNoteAudioPlayer: View {
     let url: URL
-    @State private var player: AVAudioPlayer?
-    @State private var isPlaying = false
-    @State private var position = 0.0
-    @State private var duration = 0.0
-    @State private var failed = false
+    /// The owner's playback, when something besides these controls drives it.
+    var playback: StudioNotePlayback? = nil
+    @State private var own = StudioNotePlayback()
 
     var body: some View {
+        let playback = playback ?? own
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
-                Button {
-                    guard let player else { return }
-                    if player.isPlaying { player.pause(); isPlaying = false }
-                    else {
-                        if position >= duration { player.currentTime = 0; position = 0 }
-                        isPlaying = player.play()
-                    }
-                } label: { Image(systemName: isPlaying ? "pause.fill" : "play.fill").frame(width: 18) }
-                    .disabled(player == nil)
-                    .accessibilityLabel(isPlaying ? "Пауза" : "Воспроизвести")
-                Slider(value: Binding(get: { position }, set: {
-                    position = $0; player?.currentTime = $0
-                }), in: 0...max(duration, 0.01))
-                    .disabled(player == nil).accessibilityLabel("Позиция записи")
-                Text("\(time(position)) / \(time(duration))").font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                Button { playback.toggle() } label: {
+                    Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill").frame(width: 18)
+                }
+                    .disabled(!playback.isReady)
+                    .accessibilityLabel(playback.isPlaying ? "Пауза" : "Воспроизвести")
+                Slider(value: Binding(get: { playback.position }, set: { playback.seek(to: $0) }),
+                       in: 0...max(playback.duration, 0.01))
+                    .disabled(!playback.isReady).accessibilityLabel("Позиция записи")
+                Text("\(Self.time(playback.position)) / \(Self.time(playback.duration))")
+                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
             }
-            if failed {
+            if playback.failed {
                 Text("Аудио недоступно").font(.caption).foregroundStyle(.secondary)
                 Button("Открыть файл") { NSWorkspace.shared.open(url) }.controlSize(.small)
             }
         }
-        .task(id: url) {
-            player?.stop(); player = nil; position = 0; duration = 0; isPlaying = false; failed = false
-            let url = url
-            let loaded = await Task.detached(priority: .userInitiated) { try? AVAudioPlayer(contentsOf: url) }.value
-            guard !Task.isCancelled else { return }
-            player = loaded; duration = loaded?.duration ?? 0; failed = loaded == nil
-            while !Task.isCancelled {
-                do { try await Task.sleep(for: .milliseconds(250)) } catch { break }
-                position = loaded?.currentTime ?? 0
-                isPlaying = loaded?.isPlaying ?? false
-            }
-        }
-        .onDisappear { player?.stop(); isPlaying = false }
+        .task(id: url) { await playback.run(url) }
+        .onDisappear { playback.stop() }
     }
 
-    private func time(_ seconds: Double) -> String {
+    static func time(_ seconds: Double) -> String {
         let value = seconds.isFinite ? max(0, Int(seconds)) : 0
         return String(format: "%d:%02d", value / 60, value % 60)
     }

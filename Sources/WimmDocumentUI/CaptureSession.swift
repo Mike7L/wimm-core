@@ -47,14 +47,20 @@ extension ParakeetLiveTranscriber: CaptureLiveTranscribing {}
 public final class CaptureSession {
     public convenience init() {
         self.init(sourceFactory: { MicrophoneAudioSource() },
-                  liveFactory: { ParakeetLiveTranscriber() })
+                  liveFactory: { ParakeetLiveTranscriber() },
+                  speechFactory: { SpeechDetector() })
     }
 
     init(sourceFactory: @escaping () -> any LiveAudioSource,
-         liveFactory: @escaping () -> any CaptureLiveTranscribing) {
+         liveFactory: @escaping () -> any CaptureLiveTranscribing,
+         speechFactory: @escaping () -> (any SpeechDetecting)? = { nil }) {
         self.sourceFactory = sourceFactory
         self.liveFactory = liveFactory
+        self.speechFactory = speechFactory
     }
+
+    @ObservationIgnored private let speechFactory: () -> (any SpeechDetecting)?
+    @ObservationIgnored private var speech: (any SpeechDetecting)?
 
     @ObservationIgnored private let sourceFactory: () -> any LiveAudioSource
     @ObservationIgnored private let liveFactory: () -> any CaptureLiveTranscribing
@@ -64,6 +70,18 @@ public final class CaptureSession {
     public private(set) var startedAt: Date?
     public private(set) var liveText = ""
     public private(set) var level: Float = 0
+    /// The microphone hears speech, not just sound. Indicator only.
+    public private(set) var isSpeech = false
+    /// Quiet after speech that is about to send the note; nil while none is pending.
+    public private(set) var pendingSend: PendingSend?
+    /// Recording is on but the input delivers nothing (digital silence or a stopped source).
+    public private(set) var inputTrouble = false
+    /// Grows by one each time a note is sent and the next one starts.
+    public private(set) var sendCount: UInt64 = 0
+    public struct PendingSend: Equatable, Sendable {
+        public var quietSeconds: Double
+        public var totalSeconds: Double
+    }
     public private(set) var anchors: [VoiceAnchor] = []
     public private(set) var recordingURL: URL?
     /// Every explicit capture command invalidates an older automation's lease,
@@ -155,7 +173,8 @@ public final class CaptureSession {
                 return
             }
             self.source = source
-            let gate = SilenceGate(policy: SilenceSplitPolicy.stored(), store: store)
+            speech = speechFactory()
+            let gate = SilenceGate(policy: SilenceSplitPolicy.stored(), store: store, speech: speech)
             self.gate = gate
             let format = try startAudio(source)
             gate.start(with: try AudioFileSink(url: url, format: format))
@@ -175,9 +194,25 @@ public final class CaptureSession {
             gate = nil
             gateLoop?.cancel()
             gateLoop = nil
+            speech = nil
             phase = .idle
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func clearSignals() {
+        speech = nil
+        isSpeech = false
+        pendingSend = nil
+        inputTrouble = false
+    }
+
+    private func refreshSignals() {
+        let speaking = speech?.isSpeech ?? false
+        if isSpeech != speaking { isSpeech = speaking }
+        let pending = gate?.pendingSend().map { PendingSend(quietSeconds: $0.quiet, totalSeconds: $0.total) }
+        if pendingSend != pending { pendingSend = pending }
+        if inputTrouble, levelMeter.hasSignal { inputTrouble = false }
     }
 
     public func stop() async {
@@ -214,6 +249,7 @@ public final class CaptureSession {
         loop = nil
         levelLoop?.cancel()
         levelLoop = nil
+        clearSignals()
         guard let url = recordingURL else {
             level = 0
             startedAt = nil
@@ -296,6 +332,7 @@ public final class CaptureSession {
         }
         // Swap first, then drain: speech after this point belongs to the new note.
         gate?.swap(to: newSink)?.finish()
+        sendCount &+= 1
         recordingURL = newURL
         stampInputDevice()
         let oldLoop = loop
@@ -493,6 +530,9 @@ public final class CaptureSession {
                 let silent = !stopped && silence >= Self.silenceLimit(afterSilentRestarts: silentRestarts)
                 if stopped || silent {
                     self.level = 0
+                    if !self.inputTrouble { self.inputTrouble = true }
+                    if self.isSpeech { self.isSpeech = false }
+                    if self.pendingSend != nil { self.pendingSend = nil }
                     let device = self.inputDeviceName ?? "unknown input"
                     if silent {
                         log(String(format: "[Capture] %@ gave %.1f s of digital silence, restarting microphone (attempt %d)",
@@ -532,6 +572,7 @@ public final class CaptureSession {
                     silenceWarning = nil
                 }
                 self.level = self.levelMeter.value
+                self.refreshSignals()
             }
         }
     }
@@ -630,13 +671,17 @@ public final class LevelMeter: @unchecked Sendable {
     private let lock = NSLock()
     private var current: Float = 0
     private var zeroSeconds: Double = 0
+    private var signal = false
     public init() {}
 
     public var value: Float { lock.lock(); defer { lock.unlock() }; return current }
     /// How long the input has delivered nothing but exact zeros, in seconds.
     public var digitalSilenceSeconds: Double { lock.lock(); defer { lock.unlock() }; return zeroSeconds }
 
-    public func resetSilence() { lock.lock(); zeroSeconds = 0; lock.unlock() }
+    /// A non-zero buffer has arrived since the last `resetSilence()`.
+    public var hasSignal: Bool { lock.lock(); defer { lock.unlock() }; return signal }
+
+    public func resetSilence() { lock.lock(); zeroSeconds = 0; signal = false; lock.unlock() }
 
     public func update(_ buffer: AVAudioPCMBuffer) {
         guard let channels = buffer.floatChannelData, buffer.frameLength > 0 else { return }
@@ -659,6 +704,7 @@ public final class LevelMeter: @unchecked Sendable {
         lock.lock()
         current = min(1, (loudest * 4).squareRoot())
         zeroSeconds = allZero ? zeroSeconds + seconds : 0
+        if !allZero { signal = true }
         lock.unlock()
     }
 }

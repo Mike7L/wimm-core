@@ -81,6 +81,15 @@ final class HUDIslandModel {
     var isExpanded = false
     var edge: HUDIslandEdge = .top
 
+    /// Smooth morph state driven by `ResponsiveHUDPanel` and rendered by `ResponsiveHUDView`.
+    var isMorphing = false
+    var morphFraction: CGFloat = 0
+    var expandedSize = NSSize(width: 360, height: 220)
+    var collapsedSize = HUDIslandGeometry.collapsedSize(for: .top)
+    var containerSize = NSSize(width: 360, height: 220)
+    var collapsedOrigin: NSPoint = .zero
+    var expandedOrigin: NSPoint = .zero
+
     /// Set by the panel: expands or collapses the window.
     @ObservationIgnored var onToggle: () -> Void = {}
 

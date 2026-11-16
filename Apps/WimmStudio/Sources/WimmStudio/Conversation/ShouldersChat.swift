@@ -31,10 +31,7 @@ final class ShouldersChat {
         let id = "shoulders_\(formatter.string(from: Date()))"
         self.conversationId = id
         self.conversationRelativeFile = "Conversation/shoulders/\(id).md"
-        let selected = ModelSelection.model(for: .understand)
-        // The stream speaks Gemini only; any other selected provider falls back to the default Gemini model.
-        let model = selected.hasPrefix("gemini") ? selected : ModelSelection.defaultGeminiModel
-        chat = GeminiChatStream(model: model, operation: .conversation, origin: "ShouldersChat")
+        chat = GeminiChatStream(model: ModelSelection.conversationModel, operation: .conversation, origin: "ShouldersChat")
     }
 
     var isPrepared: Bool { dossier != nil }

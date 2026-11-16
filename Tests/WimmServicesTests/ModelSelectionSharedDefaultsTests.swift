@@ -55,6 +55,34 @@ final class ModelSelectionSharedDefaultsTests: XCTestCase {
         )
     }
 
+    func testConversationModelDefaultsToTheFastGeminiModel() {
+        UserDefaults.standard.removeObject(forKey: DefaultsKey.conversationModel)
+        XCTAssertEqual(ModelSelection.conversationModel, ModelSelection.defaultConversationModel)
+    }
+
+    func testConversationModelIsStoredAndReadBack() {
+        defer { UserDefaults.standard.removeObject(forKey: DefaultsKey.conversationModel) }
+        XCTAssertTrue(ModelSelection.setConversationModel(" models/gemini-test-pro "))
+        XCTAssertEqual(ModelSelection.conversationModel, "gemini-test-pro")
+        XCTAssertEqual(UserDefaults(suiteName: suiteName)?.string(forKey: DefaultsKey.conversationModel), "gemini-test-pro")
+    }
+
+    /// The conversation stream speaks Gemini only: another provider's id is
+    /// refused when set and ignored when found, never swapped without a word.
+    func testConversationModelRefusesAnotherProvider() {
+        defer { UserDefaults.standard.removeObject(forKey: DefaultsKey.conversationModel) }
+        XCTAssertFalse(ModelSelection.setConversationModel("openai/gpt-test"))
+        XCTAssertFalse(ModelSelection.setConversationModel("  "))
+        XCTAssertNil(UserDefaults(suiteName: suiteName)?.string(forKey: DefaultsKey.conversationModel))
+
+        UserDefaults(suiteName: suiteName)?.set("openai/gpt-test", forKey: DefaultsKey.conversationModel)
+        XCTAssertEqual(ModelSelection.conversationModel, ModelSelection.defaultConversationModel)
+    }
+
+    func testAdapterFallbackIsTheSameDefaultGeminiModel() {
+        XCTAssertEqual(DefaultModels.gemini, ModelSelection.defaultGeminiModel)
+    }
+
     /// Without an explicit suite a test process must never reach the real
     /// app settings — that is how test runs kept resetting the macOS app's
     /// transcription model to `gemini-2.5-flash`.

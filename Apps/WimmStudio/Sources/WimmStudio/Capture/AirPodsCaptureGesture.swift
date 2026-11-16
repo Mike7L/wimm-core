@@ -8,6 +8,10 @@ import WimmDomain
 /// macOS asks the app that uses the microphone to honor the press through this handler;
 /// without one it shows "Cannot Control Mic with AirPods". The press never mutes anything
 /// here: the mute flag is cleared right after, so the next press arrives as a press again.
+///
+/// A handler alone is not enough: the audio server passes a press on only to an app that
+/// has also set its mute state itself (its log says `isOptedIn: 0, hasHandler: 1`
+/// otherwise). So Wimm states "unmuted" at install and again when a recording starts.
 @MainActor
 enum AirPodsCaptureGesture {
     static func install(onPress: @escaping @MainActor () -> Void) {
@@ -16,18 +20,34 @@ enum AirPodsCaptureGesture {
             // callback trap), so it only hops to the main actor.
             try AVAudioApplication.shared.setInputMuteStateChangeHandler { @Sendable muted in
                 Task { @MainActor in
-                    guard filter.accept(muted: muted, at: Date()) else { return }
-                    try? AVAudioApplication.shared.setInputMuted(false)
+                    let now = Date()
+                    guard filter.accept(muted: muted, at: now) else {
+                        // A recording start arrives here as "unmuted".
+                        if !muted, filter.shouldStateUnmuted(at: now) { stateUnmuted() }
+                        return
+                    }
+                    _ = filter.shouldStateUnmuted(at: now)
+                    stateUnmuted()
                     onPress()
                 }
                 return true
             }
+            _ = filter.shouldStateUnmuted(at: Date())
+            stateUnmuted()
         } catch {
             log("[Capture] AirPods press handler unavailable: \(error.localizedDescription)")
         }
     }
 
     private static var filter = AirPodsPressFilter()
+
+    private static func stateUnmuted() {
+        do {
+            try AVAudioApplication.shared.setInputMuted(false)
+        } catch {
+            log("[Capture] AirPods: could not state unmuted: \(error.localizedDescription)")
+        }
+    }
 }
 
 /// Tells a real stem press from the mute-state changes that follow it.
@@ -39,7 +59,18 @@ enum AirPodsCaptureGesture {
 struct AirPodsPressFilter {
     static let minimumInterval: TimeInterval = 2.0
 
+    /// Stating "unmuted" calls the handler back with "unmuted": answering every such
+    /// callback would never end, so at most one statement per window.
+    static let statementInterval: TimeInterval = 5.0
+
     private var lastAccepted: Date?
+    private var lastStatement: Date?
+
+    mutating func shouldStateUnmuted(at now: Date) -> Bool {
+        if let lastStatement, now.timeIntervalSince(lastStatement) < Self.statementInterval { return false }
+        lastStatement = now
+        return true
+    }
 
     mutating func accept(muted: Bool, at now: Date) -> Bool {
         guard muted else { return false }

@@ -137,6 +137,11 @@ struct WimmStudioApp: App {
                     appDelegate.rebuildShouldersDossier()
                 }
 
+                Button("Модели…") {
+                    ModelsWindow.show(secretary: appDelegate.documentModel.secretary)
+                }
+                .keyboardShortcut(",", modifiers: [.command])
+
                 Divider()
 
                 Button(appDelegate.cloudSync?.isAvailable == false ? "Sync Unavailable (no CloudKit entitlement)" : "Sync Now") {
@@ -201,6 +206,7 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
         document: { [weak self] in self?.documentModel.document?.text ?? "" },
         preferences: .standard
     )
+    @ObservationIgnored private var vikFailureShown = false
     @ObservationIgnored private var hotKeyTokens: [HotKeyCenter.Token] = []
     @ObservationIgnored private var captureCommandObserver: NSObjectProtocol?
     /// Reads the web panel's angel-and-demon lines aloud (the model stays loaded here).
@@ -281,6 +287,22 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
                     break
                 }
             }
+        }
+    }
+
+    /// Алёна's phase lives in the bottom banner, so an exchange never opens the HUD
+    /// over the user's work; the full reply waits in the HUD.
+    private func trackVikBanner() {
+        withObservationTracking {
+            saveConfirmation.setStatus(vik.banner)
+            let failed = vik.phase == .failed
+            if failed, !vikFailureShown {
+                saveConfirmation.show(message: "Алёна не ответила", systemImage: "exclamationmark.triangle.fill",
+                                      duration: .seconds(5))
+            }
+            vikFailureShown = failed
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.trackVikBanner() }
         }
     }
 
@@ -398,10 +420,7 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
                                        orUntil: { await ParakeetTranscriptionAdapter.isLoaded() })
             }
         }
-        vik.onActivity = { [weak self] in
-            self?.showHUD()
-            self?.hudPanel?.setIslandExpanded(true)
-        }
+        trackVikBanner()
         vik.startMonitoring()
         recentNotes.reload()
         if !StoragePaths.isTestProcess {
@@ -584,6 +603,11 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
     private func openNote(_ note: StudioLibraryNote) {
         notePresenter.show(note, onSave: { [weak self] file in
             self?.noteChanged([file])
+        }, onTrash: { [weak self] file in
+            guard await StudioNoteTrash.move(file) else { return false }
+            // The file is gone from the library: only a full pass drops its entry.
+            self?.recentNotes.reload()
+            return true
         }, onOpenURL: { [weak self] url in
             guard let self, let entry = StudioNoteLink.resolve(url, in: self.recentNotes.notesByURLPath) else { return false }
             self.openNote(entry)

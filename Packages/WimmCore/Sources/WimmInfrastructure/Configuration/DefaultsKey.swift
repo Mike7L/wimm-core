@@ -41,6 +41,8 @@ public enum DefaultsKey {
     public static let capabilityUnderstandModel = "capabilityUnderstandModel"
     public static let capabilityHearModel = "capabilityHearModel"
     public static let capabilitySeeModel = "capabilitySeeModel"
+    /// Streamed spoken conversations in Studio (Алёна, «Ангел и Демон»); Gemini ids only.
+    public static let conversationModel = "conversationModel"
     
     public static let agentMaxRetries = "agentMaxRetries"
     
