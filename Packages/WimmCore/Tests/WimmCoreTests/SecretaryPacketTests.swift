@@ -82,6 +82,37 @@ final class SecretaryPacketTests: XCTestCase {
         XCTAssertNil(modelInput["held_sources"]); XCTAssertNil(modelInput["blocked_sources"])
     }
 
+    /// Imported agent chat logs never reach the editor (user decision 2026-11-15): recognised by the
+    /// sidecar origin or, for older imports, by the importer's own header; a note that only quotes such
+    /// a header further down stays an ordinary note.
+    func testSessionJournalsAreNotOfferedToTheSecretary() throws {
+        func note(_ name: String, _ text: String, origin: String? = nil) throws -> RecallNote {
+            let url = root.appendingPathComponent("recordings/\(name).txt")
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            try FileStore.mutateSidecar(at: FileStore.metadataURL(forRecordingURL: url)) {
+                $0["recordingId"] = name
+                if let origin { $0["origin"] = ["source": origin] }
+                return true
+            }
+            return RecallNote(id: name, date: Date(), kind: "text", title: nil, summary: nil, text: "cache", filePath: url.path, updated: Date())
+        }
+        let id = "1F1E2D3C-4B5A-4978-8695-A4B3C2D1E0F9"
+        let tagged = try note("tagged", "# Codex — Сборка\n\nСессия Codex \(id.lowercased())\n\n## Пользователь\n\nсобери", origin: SessionJournal.originSource)
+        let legacy = try note("legacy", "# Cursor — Старый импорт\n\nСессия Cursor \(id)\n\n## Пользователь\n\nпривет")
+        let quoted = try note("quoted", "Мысль про импорт.\n\n# Claude — пример\nСессия Claude \(id)")
+        try writeRegistry(sources: [["source_id": "S1", "path": "../recordings/note.meta.json", "note_file": "note.txt", "status": "pending", "reason": "old"]])
+        let packet = try SecretaryPacket.prepare(task: task, library: RecallLibrary([library[0], tagged, legacy, quoted]), marks: store)
+        XCTAssertEqual(packet.receipts.map { URL(fileURLWithPath: $0.file).deletingPathExtension().lastPathComponent }.sorted(), ["note", "quoted"])
+        XCTAssertEqual(packet.payload["session_journals_skipped"] as? Int, 2)
+        XCTAssertEqual(packet.payload["remaining"] as? Int, 0, "journals are not counted as remaining")
+        let modelInput = try JSONSerialization.jsonObject(with: Data(packet.prompt().utf8)) as! [String: Any]
+        XCTAssertNil(modelInput["session_journals_skipped"])
+        XCTAssertTrue(SessionJournal.isJournal(URL(fileURLWithPath: tagged.filePath)))
+        XCTAssertTrue(SessionJournal.isJournal(URL(fileURLWithPath: legacy.filePath)))
+        XCTAssertFalse(SessionJournal.isJournal(URL(fileURLWithPath: quoted.filePath)))
+        XCTAssertFalse(SessionJournal.isJournal(media))
+    }
+
     func testPacketHasFreshFullTextRegistryAndBoundedDocumentWithoutWritingMarks() throws {
         let before = try Data(contentsOf: registry)
         let packet = try prepare()

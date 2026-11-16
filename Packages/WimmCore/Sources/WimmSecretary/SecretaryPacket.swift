@@ -89,9 +89,12 @@ struct SecretaryPacket {
         }
         let known = marks.marks(), since = marks.pass()?.asOf ?? .distantPast
         let snapshots = library.fingerprintSnapshotsByPath()
+        var sessionJournals = 0
         let changed = NoteRecall.changed(library, since: sampleSourceIDs.isEmpty ? since : nil,
                                          limit: sampleSourceIDs.isEmpty ? Int.max : sampleSourceIDs.count, newestFirst: true) { path in
             if !sampleSourceIDs.isEmpty { return sampleFiles.contains(URL(fileURLWithPath: path).lastPathComponent) }
+            // Agent chat logs are not material for the document (user decision 2026-11-15).
+            if SessionJournal.isJournal(URL(fileURLWithPath: path)) { sessionJournals += 1; return false }
             guard let mark = known[URL(fileURLWithPath: path).lastPathComponent] else { return true }
             let url = URL(fileURLWithPath: path)
             let current = snapshots[path]?.current(for: url) ?? NoteFingerprint.read(forRecordingURL: url)
@@ -316,7 +319,7 @@ struct SecretaryPacket {
             "review_queue": openQueue, "source_text_truncated": !projectedSourceIDs.isEmpty, "solo_large_source": bytes > sourceByteLimit,
             "response_format": 2, "blocked_sources": blockedSources, "held_sources": heldSources, "no_text_sources": noTextSources,
             "viewing_sources": viewingSources, "skipped_sources": skippedSources, "unfinished_sources": unfinishedSources,
-            "oversize_previews": previews]
+            "oversize_previews": previews, "session_journals_skipped": sessionJournals]
         let voiceCards = Self.voiceCards(in: selected.compactMap { fullSourcesByID[$0] }, document: task.workspace.document)
         if !voiceCards.isEmpty { payload["voice_cards"] = voiceCards }
         if editorBundle {
@@ -872,7 +875,7 @@ struct SecretaryPacket {
             input["document_blocks"] = current; input["context_expansion"] = extra
         }
         // Unadmitted sources are host bookkeeping (manifest/report); listing them invited decisions.
-        for key in ["blocked_sources", "held_sources", "no_text_sources", "viewing_sources", "skipped_sources", "unfinished_sources"] { input.removeValue(forKey: key) }
+        for key in ["blocked_sources", "held_sources", "no_text_sources", "viewing_sources", "skipped_sources", "unfinished_sources", "session_journals_skipped"] { input.removeValue(forKey: key) }
         return String(decoding: try JSONSerialization.data(withJSONObject: input, options: [.sortedKeys, .withoutEscapingSlashes]), as: UTF8.self)
     }
 

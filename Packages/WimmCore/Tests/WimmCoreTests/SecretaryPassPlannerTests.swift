@@ -80,6 +80,17 @@ final class SecretaryPassPlannerTests: XCTestCase {
         XCTAssertEqual(result.oldestPending, Date(timeIntervalSince1970: 2_300_000))
     }
 
+    func testSessionJournalDoesNotPinTheBoundary() async throws {
+        try store.setPass(.init(asOf: boundary, cursor: nil, comment: nil, setAt: boundary))
+        let found = await SecretaryPassPlanner.scan(
+            marks: store, recordings: { [self.note("journal"), self.note("fresh")] },
+            lastChange: { $0.lastPathComponent == "journal.m4a" ? Date(timeIntervalSince1970: 2_000_000) : Date(timeIntervalSince1970: 2_500_000) },
+            journal: { $0.lastPathComponent == "journal.m4a" })
+        let result = try XCTUnwrap(found)
+        XCTAssertEqual(result.pending, 1)
+        XCTAssertEqual(result.oldestPending, Date(timeIntervalSince1970: 2_500_000))
+    }
+
     func testNothingPendingWhenEverythingIsMarked() async throws {
         try store.setPass(.init(asOf: boundary, cursor: nil, comment: nil, setAt: boundary))
         try store.update(Dictionary(uniqueKeysWithValues: [mark("done")]))

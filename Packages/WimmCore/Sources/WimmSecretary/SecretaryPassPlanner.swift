@@ -10,7 +10,8 @@ import WimmInfrastructure
 /// (`skip_unchanged_marked` plus `marked_changes: "transcript,edited"`), so a
 /// re-analysis, a sync or a late OCR pass does not wake the agent. It counts
 /// only what preparation would offer: a settled note whose re-run only moved
-/// punctuation and a note under an explicit user hold are not pending, or they
+/// punctuation, a note under an explicit user hold and an imported agent session
+/// journal (`SessionJournal`) are not pending, or they
 /// would pin the boundary for good (2026-11: it stayed at 10-25 for weeks).
 public struct SecretaryPassScan: Sendable, Equatable {
     public var boundary: Date
@@ -30,7 +31,8 @@ public enum SecretaryPassPlanner {
         lastChange: ((URL) -> Date?)? = nil,
         fingerprint: ((URL) -> NoteFingerprint)? = nil,
         kinds: ((URL, Date) -> [NoteChangeKind])? = nil,
-        held: (URL) -> Bool = { _ in false }
+        held: (URL) -> Bool = { _ in false },
+        journal: (URL) -> Bool = SessionJournal.isJournal
     ) async -> SecretaryPassScan? {
         let recordings = recordings ?? { await FileRepository().recordings() }
         let lastChange = lastChange ?? { LibraryRecallSource.lastChange(of: $0) }
@@ -53,8 +55,8 @@ public enum SecretaryPassPlanner {
         var oldest: Date?
         for url in await recordings() {
             guard let changed = lastChange(url), changed >= boundary else { continue }
-            // Preparation never offers a held note, so it must not pin the boundary either.
-            guard !held(url) else { continue }
+            // Preparation never offers a held note or a session journal, so neither may pin the boundary.
+            guard !held(url), !journal(url) else { continue }
             if let mark = known[url.lastPathComponent] {
                 guard changedMarkedNote(url, boundary, mark) else { continue }
             } else {

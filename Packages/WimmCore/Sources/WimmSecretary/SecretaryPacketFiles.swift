@@ -480,6 +480,7 @@ public enum SecretaryPacketFiles {
             "viewing_sources": packet.payload["viewing_sources"] ?? [],
             "skipped_sources": packet.payload["skipped_sources"] ?? [],
             "unfinished_sources": packet.payload["unfinished_sources"] ?? [],
+            "session_journals_skipped": packet.payload["session_journals_skipped"] ?? 0,
             "oversize_previews": (packet.payload["oversize_previews"] as? [[String: Any]] ?? []).compactMap { $0["source"] },
             "host_queues": try JSONSerialization.jsonObject(with: JSONEncoder().encode(packet.hostQueues)),
             "response_format": 2, "dry_run_only": state.packetOnly == true,
