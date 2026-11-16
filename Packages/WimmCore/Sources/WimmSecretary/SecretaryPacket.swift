@@ -64,6 +64,9 @@ struct SecretaryPacket {
     /// Format-2 triage previews of sources above the solo limit, by source id. Never in `selected`:
     /// their only outcome is "not a note" (noise), never an edit or a read.
     var previewReceipts: [String: SecretaryReadReceipt] = [:]
+    /// Everything that waited for a pass when this packet was prepared, for the boundary: with
+    /// the journals still waiting for quiet, without user holds. nil in a restored packet.
+    var waiting: [SecretaryWaitingNote]? = nil
 
     static func prepare(task: SecretaryTask, library: RecallLibrary, marks: AgentMarkStore = AgentMarkStore(),
                         sourceByteLimit: Int = SecretaryPacketSettings.defaultKB * 1000, documentByteLimit: Int = SecretaryPacket.documentBudget,
@@ -89,18 +92,36 @@ struct SecretaryPacket {
         }
         let known = marks.marks(), since = marks.pass()?.asOf ?? .distantPast
         let snapshots = library.fingerprintSnapshotsByPath()
-        var journalsWaiting = 0
-        let changed = NoteRecall.changed(library, since: sampleSourceIDs.isEmpty ? since : nil,
-                                         limit: sampleSourceIDs.isEmpty ? Int.max : sampleSourceIDs.count, newestFirst: true) { path in
-            if !sampleSourceIDs.isEmpty { return sampleFiles.contains(URL(fileURLWithPath: path).lastPathComponent) }
-            // A journal of a session that may still be running waits for an hour of quiet.
-            if SessionJournal.isStillChanging(URL(fileURLWithPath: path)) { journalsWaiting += 1; return false }
-            guard let mark = known[URL(fileURLWithPath: path).lastPathComponent] else { return true }
+        // The pass queue, computed once here; `apply` reads it back from the session.
+        var journals = Set<String>()
+        let passQueue = NoteRecall.changed(library, since: since, limit: Int.max, newestFirst: true) { path in
             let url = URL(fileURLWithPath: path)
+            // A journal of a session that may still be running waits for an hour of quiet.
+            if SessionJournal.isStillChanging(url) { journals.insert(path) }
+            guard let mark = known[url.lastPathComponent] else { return true }
             let current = snapshots[path]?.current(for: url) ?? NoteFingerprint.read(forRecordingURL: url)
             // A settled note whose re-run only moved punctuation stays settled (2026-11-04: a third of a pass).
             return NoteFingerprint.needsPass(mark: mark, now: current)
                 && !Set(NoteChangeKind.kinds(forRecordingURL: url, since: since)).isDisjoint(with: [.transcript, .edited])
+        }
+        // A held note is never offered, so it does not wait for the boundary; a journal does.
+        let held = SecretaryUserHold.heldNotes(workspace: task.workspace)
+        let waitingNotes = passQueue.notes.compactMap { note -> SecretaryWaitingNote? in
+            let url = URL(fileURLWithPath: note.filePath)
+            guard let updated = note.updated, !held(url) else { return nil }
+            let mark = known[url.lastPathComponent]
+            return SecretaryWaitingNote(file: url.lastPathComponent, changed: updated, markText: mark?.text, markAnalysis: mark?.analysis)
+        }
+        let changed: (notes: [RecallNote], total: Int)
+        let journalsWaiting: Int
+        if sampleSourceIDs.isEmpty {
+            let offered = passQueue.notes.filter { !journals.contains($0.filePath) }
+            changed = (offered, offered.count); journalsWaiting = journals.count
+        } else {
+            let sample = NoteRecall.changed(library, since: nil, limit: sampleSourceIDs.count, newestFirst: true) { path in
+                sampleFiles.contains(URL(fileURLWithPath: path).lastPathComponent)
+            }
+            changed = (sample.notes, sample.total); journalsWaiting = 0
         }
         // Registry rows by resolved sidecar path, built once: resolving every
         // row's path per note cost O(notes × registry) file-system calls (~25 s).
@@ -348,7 +369,7 @@ struct SecretaryPacket {
         }
         return SecretaryPacket(task: task, documentData: documentData, registryData: registryData, queueData: queue,
             blocks: blocks, selected: selected, receipts: receipts, projectedSourceIDs: projectedSourceIDs, newSources: newSources, fullSourcesByID: fullSourcesByID, payload: payload,
-            system: editsContract + "\n" + policy, previewReceipts: previewReceipts)
+            system: editsContract + "\n" + policy, previewReceipts: previewReceipts, waiting: waitingNotes)
     }
 
     /// Names for the card ids Wimm's own `voices:` header lines carry, from the people card file

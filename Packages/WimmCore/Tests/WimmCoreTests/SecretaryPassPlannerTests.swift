@@ -31,6 +31,48 @@ final class SecretaryPassPlannerTests: XCTestCase {
             kinds: { url, _ in kinds[url.deletingPathExtension().lastPathComponent] ?? [.metadata] })
     }
 
+    /// The library builds no note for a canceled recording, so no packet ever offers it: unmarked,
+    /// it pinned the real boundary at 2026-10-25 for three weeks.
+    func testCanceledRecordingIsNotPendingAndDoesNotPinTheBoundary() async throws {
+        try store.setPass(.init(asOf: boundary, cursor: nil, comment: nil, setAt: boundary))
+        let found = await SecretaryPassPlanner.scan(
+            marks: store, recordings: { [self.note("canceled"), self.note("fresh")] },
+            lastChange: { Date(timeIntervalSince1970: $0.lastPathComponent == "canceled.m4a" ? 1_500_000 : 2_000_000) },
+            canceled: { $0.lastPathComponent == "canceled.m4a" })
+        let scan = try XCTUnwrap(found)
+        XCTAssertEqual(scan.pending, 1)
+        XCTAssertEqual(scan.unmarked, 1)
+        XCTAssertEqual(scan.oldestPending, Date(timeIntervalSince1970: 2_000_000))
+    }
+
+    func testCanceledFlagIsReadFromTheSidecar() throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let canceled = directory.appendingPathComponent("canceled.m4a"), kept = directory.appendingPathComponent("kept.m4a")
+        try FileStore.mutateSidecar(at: FileStore.metadataURL(forRecordingURL: canceled)) { $0["isCanceled"] = true; return true }
+        try FileStore.mutateSidecar(at: FileStore.metadataURL(forRecordingURL: kept)) { $0["recordingId"] = "kept"; return true }
+        XCTAssertTrue(SecretaryPassPlanner.isCanceled(canceled))
+        XCTAssertFalse(SecretaryPassPlanner.isCanceled(kept))
+        XCTAssertFalse(SecretaryPassPlanner.isCanceled(directory.appendingPathComponent("no-sidecar.m4a")))
+    }
+
+    /// `apply` reads what is left from the queue `prepare` saved and the marks, with no library listing.
+    func testRemainingOfSavedQueueCountsOnlyNotesWithoutANewMark() throws {
+        try store.setPass(.init(asOf: boundary, cursor: nil, comment: nil, setAt: boundary))
+        func waiting(_ name: String, _ at: TimeInterval, marked: Bool = false) -> SecretaryWaitingNote {
+            .init(file: name + ".m4a", changed: Date(timeIntervalSince1970: at), markText: marked ? "old" : nil, markAnalysis: marked ? "a" : nil)
+        }
+        let queue = [waiting("read", 1_100_000), waiting("left", 1_300_000), waiting("reread", 1_200_000, marked: true),
+                     waiting("stale", 1_400_000, marked: true)]
+        try store.update(Dictionary(uniqueKeysWithValues: [mark("read"), mark("reread", text: "new"), mark("stale", text: "old")]))
+        let scan = SecretaryPassPlanner.remaining(of: queue, marks: store)
+        XCTAssertEqual(scan.pending, 2, "left was never marked; stale still carries the mark it had at prepare")
+        XCTAssertEqual(scan.unmarked, 1)
+        XCTAssertEqual(scan.oldestPending, Date(timeIntervalSince1970: 1_300_000))
+        XCTAssertEqual(SecretaryPassPlanner.advancedBoundary(after: scan, started: Date(timeIntervalSince1970: 2_000_000)),
+                       Date(timeIntervalSince1970: 1_300_000))
+        XCTAssertEqual(SecretaryPassPlanner.remaining(of: [], marks: store).pending, 0)
+    }
+
     func testNoBoundaryMeansUnknown() async {
         let none = await scan(changes: ["a": 2_000_000])
         XCTAssertNil(none)

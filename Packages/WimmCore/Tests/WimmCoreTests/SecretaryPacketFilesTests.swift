@@ -367,6 +367,61 @@ final class SecretaryPacketFilesTests: XCTestCase {
         ])
     }
 
+    /// The queue is computed once, by `prepare`, from the library; `apply` only subtracts what it marked.
+    /// A canceled recording is in no library, so it is neither offered nor left waiting.
+    func testApplyTakesTheQueueFromPrepareAndACanceledRecordingDoesNotPinTheBoundary() async throws {
+        let canceled = root.appendingPathComponent("recordings/canceled.m4a")
+        try Data([0]).write(to: canceled)
+        try FileStore.mutateSidecar(at: FileStore.metadataURL(forRecordingURL: canceled)) { $0["isCanceled"] = true; return true }
+        let hourAgo = Date().addingTimeInterval(-3600)
+        for url in [canceled, FileStore.metadataURL(forRecordingURL: canceled)] {
+            try FileManager.default.setAttributes([.modificationDate: hourAgo], ofItemAtPath: url.path)
+        }
+        let canceledAt = try XCTUnwrap(LibraryRecallSource.lastChange(of: canceled))
+        let m = try await prepare(), id = m["run_id"] as! String
+        let state = try SecretaryPacketFiles.loadTracked(id, marks: marks).state
+        XCTAssertEqual(try state.packet().receipts.map { URL(fileURLWithPath: $0.file).lastPathComponent }.sorted(), ["one.txt", "two.txt"])
+        XCTAssertEqual(state.waiting?.map(\.file).sorted(), ["one.txt", "two.txt"], "the saved queue is exactly what the packet offers")
+        let applied = try object(await SecretaryPacketFiles.apply(runID: id, response: try response(m), marks: marks,
+                                                                  recordings: { self.files + [canceled] }))
+        XCTAssertEqual(applied["findings"] as? [String], [])
+        XCTAssertEqual(applied["remaining_notes"] as? Int, 0)
+        XCTAssertEqual(Set(marks.marks().keys), ["one.txt", "two.txt"])
+        XCTAssertGreaterThan(try XCTUnwrap(marks.pass()?.asOf), canceledAt, "the boundary reached the start of the pass")
+    }
+
+    /// A note that did not fit the packet stays in the saved queue and holds the boundary at its change.
+    func testNoteLeftOutOfThePacketHoldsTheBoundary() async throws {
+        // Only S1 is registered and cited; two.txt is an older new note that the one-source packet leaves out.
+        try "# Личный документ\n\n## Маяк\n\nСтарый факт [S1].\n\n[S1]: ../recordings/one.meta.json\n".write(to: document, atomically: true, encoding: .utf8)
+        let row = ["source_id": "S1", "path": "../recordings/one.meta.json", "note_file": "one.txt", "status": "pending", "reason": "unread"]
+        try JSONSerialization.data(withJSONObject: ["sources": [row], "source_count": 1, "counts": ["pending": 1], "batches": []]).write(to: registry)
+        let older = Date().addingTimeInterval(-600)
+        let library = RecallLibrary([
+            RecallNote(id: "note-0", date: Date(), kind: "text", title: "Маяк", summary: nil, text: "", filePath: files[0].path, updated: Date()),
+            RecallNote(id: "note-1", date: older, kind: "text", title: "Маяк", summary: nil, text: "", filePath: files[1].path, updated: older)])
+        let m = try object(await SecretaryPacketFiles.prepare(document: document, cli: URL(fileURLWithPath: "/unused-cli"),
+            sourceKB: 64, library: library, marks: marks, maxSources: 1)), id = m["run_id"] as! String
+        let state = try SecretaryPacketFiles.loadTracked(id, marks: marks).state
+        XCTAssertEqual(try state.packet().selected, ["S1"])
+        XCTAssertEqual(state.waiting?.map(\.file).sorted(), ["one.txt", "two.txt"])
+        let input = try object(Data(contentsOf: URL(fileURLWithPath: m["input"] as! String)))
+        let block = try XCTUnwrap((input["document_blocks"] as! [[String: String]]).first { $0["text"] == "Старый факт [S1].\n\n" }?["id"])
+        let body = try JSONSerialization.data(withJSONObject: [
+            "summary": "s",
+            "edits": [["operation": "replace_text", "block": block, "match": "Старый факт", "text": "Новый план [S1].", "sources": ["S1"]]],
+            "done_no_additions": [], "unfinished": [], "not_a_note": [], "questions": []
+        ])
+        let applied = try object(await SecretaryPacketFiles.apply(runID: id, response: body, marks: marks, recordings: { self.files }))
+        XCTAssertEqual(applied["findings"] as? [String], [])
+        XCTAssertEqual(applied["remaining_notes"] as? Int, 1)
+        XCTAssertEqual(Array(marks.marks().keys), ["one.txt"])
+        // The mark store keeps whole seconds; the boundary may sit just before the note, never after it.
+        let boundary = try XCTUnwrap(marks.pass()?.asOf)
+        XCTAssertLessThanOrEqual(boundary, older)
+        XCTAssertLessThan(older.timeIntervalSince(boundary), 1)
+    }
+
     func testPrepareRoundTripsAcrossCallsWithoutModelMarksOrDocumentWrites() async throws {
         let before = try Data(contentsOf: document), originalRegistry = try Data(contentsOf: registry)
         let m = try await prepare(), id = m["run_id"] as! String

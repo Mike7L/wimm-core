@@ -25,6 +25,8 @@ public struct RecallSidecar {
     private var card: [String: Any]? { dict["noteCard"] as? [String: Any] }
     private var origin: [String: Any]? { dict["origin"] as? [String: Any] }
     private var document: [String: Any]? { dict["document"] as? [String: Any] }
+    /// A canceled recording: the library builds no note for it.
+    public var isCanceled: Bool { dict["isCanceled"] as? Bool == true }
     var isAgentDiscussion: Bool { origin?["source"] as? String == "agent-discussion" }
 
     /// The recorder's `duration`, else what transcription or the silence gate measured.

@@ -109,6 +109,8 @@ public enum SecretaryPacketFiles {
         /// Format-2 triage previews (source id → partial-view receipt); never admitted as read.
         var previewReceipts: [String: SecretaryReadReceipt]? = nil
         var packetOnly: Bool? = nil
+        /// The pass queue as `prepare` computed it; nil in sessions of older builds.
+        var waiting: [SecretaryWaitingNote]? = nil
 
         func packet() throws -> SecretaryPacket {
             guard version == 1, let workspace = SecretaryWorkspace(document: document),
@@ -237,6 +239,7 @@ public enum SecretaryPacketFiles {
         state.documentReadBudget = contextKB * 1000
         state.wallStartedAt = startedAt ?? now
         if packetOnly { state.packetOnly = true }
+        state.waiting = packet.waiting
         if !packet.previewReceipts.isEmpty { state.previewReceipts = packet.previewReceipts }
         state.unadmitted = try encodeObject(["blocked_sources": packet.payload["blocked_sources"] ?? [],
                                              "held_sources": packet.payload["held_sources"] ?? [],
@@ -766,9 +769,15 @@ extension SecretaryPacketFiles {
             }
             if record.findings.isEmpty {
                 let files = listed
-                if let scan = await SecretaryPassPlanner.scan(marks: marks, initialBoundary: .distantPast,
-                                                              recordings: files.map { files in { files } } ?? recordings,
-                                                              held: SecretaryUserHold.heldNotes(workspace: task.workspace)) {
+                // The queue was computed by `prepare`; only a session of an older build is listed again.
+                let scan: SecretaryPassScan?
+                if let waiting = state.waiting { scan = SecretaryPassPlanner.remaining(of: waiting, marks: marks) }
+                else {
+                    scan = await SecretaryPassPlanner.scan(marks: marks, initialBoundary: .distantPast,
+                                                           recordings: files.map { files in { files } } ?? recordings,
+                                                           held: SecretaryUserHold.heldNotes(workspace: task.workspace))
+                }
+                if let scan {
                     record.remainingNotes = scan.pending
                     if let boundary = SecretaryPassPlanner.advancedBoundary(after: scan, started: task.createdAt) {
                         try marks.setPass(.init(asOf: boundary, cursor: nil, comment: "verified secretary file packet", setAt: Date()))
