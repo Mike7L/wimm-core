@@ -510,11 +510,12 @@ extension SecretaryPacket {
     /// Sections the reply's edits target but the packet did not supply in full, as heading ids.
     /// Haiku (effort high, 2026-10-31) twice placed text next to an unsupplied section instead of
     /// asking for it; the whole reply was rejected with its good edits. The host reads them instead.
-    func missingSections(_ reply: EditsReply, prompt: String) -> [String] {
+    /// `only`: indices of the edits to look at (nil = all of them).
+    func missingSections(_ reply: EditsReply, prompt: String, only: Set<Int>? = nil) -> [String] {
         guard let input = try? JSONSerialization.jsonObject(with: Data(prompt.utf8)) as? [String: Any] else { return [] }
         let allowed = Set((input["document_blocks"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String })
         var missing: [String] = []
-        for op in reply.edits {
+        for (index, op) in reply.edits.enumerated() where only?.contains(index) ?? true {
             guard let target = op.operation == "insert_under_heading" ? op.section : op.block,
                   let index = blocks.firstIndex(where: { $0.id == target }),
                   let head = (0...index).reversed().first(where: { Self.heading(blocks[$0].text) != nil }),

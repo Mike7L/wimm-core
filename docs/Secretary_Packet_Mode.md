@@ -732,8 +732,13 @@ replies with lists only; Wimm turns the block diff into format-2 operations —
   topics shared no words with the document, 6 of 12 stayed `unfinished` in
   every run, and with the round all 12 went in (2 requests, $0.007, Haiku).
   `secretary apply` with a hand-written response still refuses
-  `read_sections`; use `secretary read RUN --section` first. Its apply report
-  names `read_sections_needed`.
+  `read_sections`; use `secretary read RUN --section` first. A dry run that
+  refuses an edit for an unsupplied block admits that section itself, within
+  the document read budget: the report lists it in `sections_supplied` with
+  the new blocks in `supplied_blocks`, and `read_sections_needed` keeps only
+  what did not fit. Only edits refused for that reason count; a citation
+  error asks for no section. The apply report also carries `pass_boundary`
+  (`before`, `after`).
 - **Effort:** format-2 packet passes on a Haiku model run at `effort: high`
   unless an effort is set explicitly (`SecretaryDispatcher.packetEffort`). At
   the default effort, 4 of 6 replies did not reason; at `high`, 6 of 6 did.

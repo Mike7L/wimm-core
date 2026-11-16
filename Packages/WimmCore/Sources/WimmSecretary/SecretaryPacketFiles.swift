@@ -581,6 +581,7 @@ public enum SecretaryPacketFiles {
     An empty, one-word or looping text for minutes of audio is not empty audio. If its service lines show no finished retranscription, list the source in unfinished with that obstacle and, if the wimm tool request_retranscription is available, queue it: the new text comes in a later packet. If a retranscription is already done and this is what it gave, that text is final: decide from what is there (an edit or done_no_additions), do not leave it unfinished and do not queue it again. Never transcribe it yourself.
     While this packet is open, do not edit the document or its registry directly and do not call mark_notes or set_pass_boundary: the host does all bookkeeping from your response.
     If a section is missing, use secretary read RUN --section with its outline ID. Use --find or --outline to locate it.
+    If a dry run refuses an edit because its block or section was not supplied, the report already carries that section: sections_supplied names it, supplied_blocks holds its new blocks, and they are valid targets from then on. Correct the edit and check again; read_sections_needed lists only sections that did not fit and must be read with --section.
     To add at the end of a long section, read it with --section ID --tail: one call returns the heading and the last blocks.
     Submit JSON with secretary apply RUN --response FILE; --dry-run validates without edits/marks.
     The host reports which edits it accepted and which sources it counted as used or reviewed.
@@ -658,15 +659,44 @@ extension SecretaryPacketFiles {
         }
         let resolution = try packet.resolveEdits(reply, prompt: prompt, marks: marks, checkLazyReply: false)
         timing.checkpoint("edit_validation")
+        let boundaryBefore = marks.pass()?.asOf
+        // Sections an edit could not reach. With a partial rejection only the edits refused for an
+        // unsupplied block count: a citation or wording error needs no further document context.
+        var sectionsNeeded: [String] = []
+        if !resolution.report.accepted {
+            sectionsNeeded = packet.missingSections(reply, prompt: prompt)
+        } else if let rejected = resolution.report.rejectedEdits, !rejected.isEmpty {
+            let unreached = Set(rejected.filter { $0.reason.contains("was not supplied") }.map(\.index))
+            if !unreached.isEmpty { sectionsNeeded = packet.missingSections(reply, prompt: prompt, only: unreached) }
+        }
+        // The file transport has no host round, so a check hands the missing sections over at once:
+        // their blocks join the packet (within the document read budget) and come back in this report.
+        var sectionsSupplied: [String] = [], suppliedBlocks: [[String: String]] = []
+        if dryRun, !sectionsNeeded.isEmpty,
+           let expanded = try? packet.prompt(sections: sectionsNeeded, validationPrompt: prompt),
+           expanded.utf8.count - prompt.utf8.count <= (state.documentReadBudget ?? 96_000) - state.documentReadBytes {
+            let known = Set(((try? object(state.input))?["document_blocks"] as? [[String: String]] ?? []).compactMap { $0["id"] })
+            suppliedBlocks = ((try? object(Data(expanded.utf8)))?["document_blocks"] as? [[String: String]] ?? [])
+                .filter { !known.contains($0["id"] ?? "") }
+            state.documentReadBytes += expanded.utf8.count - prompt.utf8.count
+            state.input = Data(expanded.utf8)
+            _ = try export(&state, marks: marks, changedSources: [], timing: timing)
+            sectionsSupplied = sectionsNeeded; sectionsNeeded = []
+            timing.checkpoint("sections_supplied")
+        }
         func report(committed: Bool, bookkeeping: SecretaryBookkeepingReport?, findings: [String], remaining: Int? = nil) throws -> Data {
             let outcomes = Dictionary(grouping: resolution.report.sources, by: \.outcome).mapValues { $0.map(\.id) }
             return try encodeObject(["committed": committed, "response_format": 2,
+                // Where the pass boundary stood before this apply and where it stands now (unchanged on a dry run).
+                "pass_boundary": ["before": boundaryBefore.map { SecretaryClock.stamp($0) as Any } ?? NSNull(),
+                                  "after": marks.pass().map { SecretaryClock.stamp($0.asOf) as Any } ?? NSNull()],
                 // Notes still waiting after this apply (unfinished and newly changed ones included); null on a dry run.
                 "remaining_notes": remaining ?? NSNull(),
                 "accepted": resolution.report.accepted, "rejection": resolution.report.rejection ?? NSNull(),
-                // The file transport has no host round: name the sections to read with secretary read --section.
-                "read_sections_needed": resolution.report.accepted && (resolution.report.rejectedEdits ?? []).isEmpty
-                    ? [] : packet.missingSections(reply, prompt: prompt),
+                // Sections a refused edit needed. A dry run supplies them at once (sections_supplied, with the
+                // new blocks in supplied_blocks); read_sections_needed keeps only what did not fit the budget.
+                "sections_supplied": sectionsSupplied, "supplied_blocks": suppliedBlocks,
+                "read_sections_needed": sectionsNeeded,
                 // Edits dropped with their source group; their sources are in queued_sources.
                 "rejected_edits": try JSONSerialization.jsonObject(with: JSONEncoder().encode(resolution.report.rejectedEdits ?? [])),
                 // Status lines («Состояние на …») of the topics the accepted edits touched and that this

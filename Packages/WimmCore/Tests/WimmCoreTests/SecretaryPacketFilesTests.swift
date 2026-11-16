@@ -552,6 +552,37 @@ final class SecretaryPacketFilesTests: XCTestCase {
         XCTAssertNil((again["work_counts"] as! [String: Int])["export_files_written"])
     }
 
+    func testDryRunSuppliesTheSectionARefusedEditNeededAndReportsTheBoundary() async throws {
+        let original = try String(contentsOf: document, encoding: .utf8)
+        let padding = (0..<60).map { "Paragraph \($0) " + String(repeating: "background ", count: 80) + "\n\n" }.joined()
+        try (original + padding + "## Far section\n\nUnique distant evidence.\n\n").write(to: document, atomically: true, encoding: .utf8)
+        let m = try await prepare(), id = m["run_id"] as! String
+        let input = try object(Data(contentsOf: URL(fileURLWithPath: m["input"] as! String)))
+        let far = try XCTUnwrap((input["outline"] as! [[String: String]]).first { $0["title"]!.contains("Far section") }?["id"])
+        let second = try XCTUnwrap((input["document_blocks"] as! [[String: String]]).first { $0["text"] == "Старый факт [S2].\n\n" }?["id"])
+        let body = try JSONSerialization.data(withJSONObject: [
+            "summary": "s",
+            "edits": [
+                ["operation": "insert_under_heading", "section": far, "text": "Новый план [S1].", "sources": ["S1"]],
+                ["operation": "replace_text", "block": second, "match": "Старый факт", "text": "Новый план [S2].", "sources": ["S2"]]
+            ],
+            "done_no_additions": [], "unfinished": [], "not_a_note": [], "questions": []
+        ])
+        let first = try object(await SecretaryPacketFiles.apply(runID: id, response: body, dryRun: true, marks: marks))
+        XCTAssertEqual((first["rejected_edits"] as? [[String: Any]])?.count, 1)
+        XCTAssertEqual(first["sections_supplied"] as? [String], [far])
+        XCTAssertEqual(first["read_sections_needed"] as? [String], [])
+        XCTAssertTrue((first["supplied_blocks"] as! [[String: String]]).contains { $0["text"]!.contains("Unique distant") })
+        let boundary = try XCTUnwrap(first["pass_boundary"] as? [String: Any])
+        XCTAssertTrue(boundary["before"] is NSNull); XCTAssertTrue(boundary["after"] is NSNull)
+        // The same answer now reaches the section: nothing is refused and nothing more is handed over.
+        let again = try object(await SecretaryPacketFiles.apply(runID: id, response: body, dryRun: true, marks: marks))
+        XCTAssertEqual((again["rejected_edits"] as? [[String: Any]])?.count, 0)
+        XCTAssertEqual(again["sections_supplied"] as? [String], [])
+        XCTAssertTrue(marks.marks().isEmpty)
+        XCTAssertEqual(try String(contentsOf: document, encoding: .utf8), original + padding + "## Far section\n\nUnique distant evidence.\n\n")
+    }
+
     func testAddressedRefreshBuildsOneNoteAndWritesOnlyItsSource() async throws {
         let m = try await prepare(), id = m["run_id"] as! String
         let state = try SecretaryPacketFiles.load(id, marks: marks)
