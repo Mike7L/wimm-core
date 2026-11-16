@@ -43,7 +43,14 @@ class IOSStreamingTranscriber: NSObject, ObservableObject {
     private var speechRecognizer: SFSpeechRecognizer?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private let audioEngine = AVAudioEngine()
+    /// Replaced on every route change: after AirPods come or go, the old
+    /// engine's input node can keep reporting the previous format while the
+    /// hardware already runs another one, and `installTap` then raises an
+    /// uncatchable NSException (TestFlight crash, 1.8.1).
+    private var audioEngine = AVAudioEngine()
+    /// Bumped on every route change and stop, so a delayed retry from an
+    /// earlier change never restarts a newer engine or a stopped recording.
+    private var routeChangeGeneration = 0
     
     private var startTime: Date?
     private var lastUpdateTime: Date?
@@ -195,9 +202,15 @@ class IOSStreamingTranscriber: NSObject, ObservableObject {
         // the bus or the format is invalid, so prevent both instead of handling them.
         inputNode.removeTap(onBus: 0)
         let recordingFormat = inputNode.outputFormat(forBus: 0)
+        let hardwareFormat = inputNode.inputFormat(forBus: 0)
         guard Self.isUsableTapFormat(sampleRate: recordingFormat.sampleRate,
-                                     channelCount: recordingFormat.channelCount) else {
-            log("[IOSStreaming] input format invalid (sr=\(recordingFormat.sampleRate) ch=\(recordingFormat.channelCount)); live text disabled")
+                                     channelCount: recordingFormat.channelCount),
+              Self.tapFormatMatchesHardware(
+                tapSampleRate: recordingFormat.sampleRate,
+                tapChannels: recordingFormat.channelCount,
+                hardwareSampleRate: hardwareFormat.sampleRate,
+                hardwareChannels: hardwareFormat.channelCount) else {
+            log("[IOSStreaming] input format not usable (sr=\(recordingFormat.sampleRate) ch=\(recordingFormat.channelCount) hw.sr=\(hardwareFormat.sampleRate) hw.ch=\(hardwareFormat.channelCount))")
             throw TranscriptionError.audioEngineError
         }
 
@@ -242,20 +255,48 @@ class IOSStreamingTranscriber: NSObject, ObservableObject {
     }
 
     private func handleEngineConfigurationChange() {
-        guard isTranscribing, !isStopping, let speechRecognizer else { return }
+        guard isTranscribing, !isStopping else { return }
         log("[IOSStreaming] engine configuration changed input=\(RecordingAudioSession.currentInputDescription())")
         transcribedText = transcriptAccumulator.commitCurrentPartial()
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
         recognitionTask = nil
         recognitionRequest = nil
+        routeChangeGeneration += 1
+        replaceAudioEngine()
+        restartAfterRouteChange(generation: routeChangeGeneration, attempt: 0)
+    }
+
+    /// Tear the old engine down and start from a fresh one, which reads the
+    /// current hardware format instead of a cached one.
+    private func replaceAudioEngine() {
+        stopObservingEngineConfigurationChanges()
         if audioEngine.isRunning { audioEngine.stop() }
+        audioEngine.inputNode.removeTap(onBus: 0)
+        audioEngine = AVAudioEngine()
+        observeEngineConfigurationChanges()
+    }
+
+    /// The route can still be settling when the notification arrives (format
+    /// mismatch or zero rate), so retry a few times before giving up on live
+    /// text. File recording is separate and continues either way.
+    private func restartAfterRouteChange(generation: Int, attempt: Int) {
+        guard generation == routeChangeGeneration, isTranscribing, !isStopping,
+              let speechRecognizer else { return }
         do {
             try startEngineWithTap()
         } catch {
-            log("[IOSStreaming] restart after route change failed: \(error.localizedDescription); live text stops, file recording continues")
             audioEngine.inputNode.removeTap(onBus: 0)
-            isTranscribing = false
+            if let delay = Self.routeChangeRetryDelay(afterAttempt: attempt) {
+                log("[IOSStreaming] restart after route change failed (attempt \(attempt + 1)): \(error.localizedDescription); retrying")
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    self?.restartAfterRouteChange(generation: generation, attempt: attempt + 1)
+                }
+            } else {
+                log("[IOSStreaming] restart after route change failed: \(error.localizedDescription); live text stops, file recording continues")
+                isTranscribing = false
+            }
             return
         }
         restartPolicy.reset()
@@ -352,6 +393,7 @@ class IOSStreamingTranscriber: NSObject, ObservableObject {
     /// Stop transcription and clean up
     func stopTranscribing() {
         isStopping = true
+        routeChangeGeneration += 1
         stopObservingEngineConfigurationChanges()
 
         // Stop audio engine
@@ -418,6 +460,21 @@ class IOSStreamingTranscriber: NSObject, ObservableObject {
     /// A tap format is only safe to install when it has a real sample rate and channels.
     nonisolated static func isUsableTapFormat(sampleRate: Double, channelCount: UInt32) -> Bool {
         sampleRate.isFinite && sampleRate > 0 && channelCount > 0
+    }
+
+    /// AVFAudio raises (SIGABRT) when the tap sample rate differs from the input
+    /// hardware rate; a stale node after a route change reports the old one.
+    nonisolated static func tapFormatMatchesHardware(tapSampleRate: Double, tapChannels: UInt32,
+                                                     hardwareSampleRate: Double, hardwareChannels: UInt32) -> Bool {
+        isUsableTapFormat(sampleRate: hardwareSampleRate, channelCount: hardwareChannels)
+            && isUsableTapFormat(sampleRate: tapSampleRate, channelCount: tapChannels)
+            && tapSampleRate == hardwareSampleRate
+    }
+
+    /// Delays between restart attempts after a route change; nil = give up.
+    nonisolated static func routeChangeRetryDelay(afterAttempt attempt: Int) -> Double? {
+        let delays: [Double] = [0.3, 0.7, 1.5]
+        return attempt < delays.count ? delays[attempt] : nil
     }
     
     /// Check if speech recognition is available
