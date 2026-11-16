@@ -84,4 +84,25 @@ else
   codesign --force --deep -s - "$CLI_APP_DIR" || true
 fi
 
-echo "Built and signed $CLI_NAME at $CLI_APP_DIR, $HOME/.local/share/wimm/$CLI_NAME"
+# Studio runs the WimmCLI.app next to its own bundle first
+# (SecretaryDispatcher.locateWimmCLI). When Studio is installed outside the
+# checkout (WIMM_STUDIO_APP, read as in make_studio.sh), put the signed bundle
+# there too, or Studio keeps calling whatever old copy lies beside it.
+# rsync replaces files by rename, so a running copy is not overwritten in place.
+if [[ -z "${WIMM_STUDIO_APP:-}" && -f "$ROOT_DIR/.env" ]]; then
+  WIMM_STUDIO_APP=$(sed -nE 's/^WIMM_STUDIO_APP=["'\'']?([^"'\'']*)["'\'']?[[:space:]]*$/\1/p' "$ROOT_DIR/.env" | tail -n1)
+fi
+STUDIO_APP="${WIMM_STUDIO_APP:-}"
+STUDIO_APP="${STUDIO_APP/#\~/$HOME}"
+STUDIO_CLI_APP=""
+if [[ "$STUDIO_APP" == *.app && -d "$(dirname "$STUDIO_APP")" ]]; then
+  STUDIO_CLI_APP="$(cd "$(dirname "$STUDIO_APP")" && pwd)/$CLI_NAME.app"
+  if [[ "$STUDIO_CLI_APP" != "$CLI_APP_DIR" ]]; then
+    mkdir -p "$STUDIO_CLI_APP"
+    rsync -a --delete "$CLI_APP_DIR/" "$STUDIO_CLI_APP/"
+  else
+    STUDIO_CLI_APP=""
+  fi
+fi
+
+echo "Built and signed $CLI_NAME at $CLI_APP_DIR, $HOME/.local/share/wimm/$CLI_NAME${STUDIO_CLI_APP:+, $STUDIO_CLI_APP}"
