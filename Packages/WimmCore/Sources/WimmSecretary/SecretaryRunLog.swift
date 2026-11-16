@@ -45,7 +45,8 @@ public struct SecretaryRunLog: Sendable, Equatable {
                 if !record.findings.isEmpty { problems.append("succeeded with \(record.findings.count) finding(s)") }
                 if record.error != nil { problems.append("succeeded but has an error") }
             }
-            if record.outcome != .succeeded, record.error == nil, record.findings.isEmpty, record.outcome != nil {
+            // `incomplete` is the normal end of a clean packet while notes still wait.
+            if record.outcome != .succeeded, record.outcome != .incomplete, record.error == nil, record.findings.isEmpty, record.outcome != nil {
                 problems.append("\(record.outcome!.rawValue) without error or finding")
             }
             if record.workflow == "packet" {

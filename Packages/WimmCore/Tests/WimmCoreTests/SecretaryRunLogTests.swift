@@ -83,6 +83,12 @@ final class SecretaryRunLogTests: XCTestCase {
         XCTAssertTrue(SecretaryRunLog.entry(id: b, in: workspace).problems.contains { $0.contains("without error or finding") })
     }
 
+    func testIncompleteCleanRunIsNotAProblem() throws {
+        let id = "20261104-100007-abab"
+        try makeRun(id, outcome: .incomplete, workflow: "agent")
+        XCTAssertFalse(SecretaryRunLog.entry(id: id, in: workspace).problems.contains { $0.contains("without error or finding") })
+    }
+
     func testTimingLineNamesTheSlowestStageAndTheModelShare() throws {
         XCTAssertNil(SecretaryRunLog.timingLine(nil))
         let line = try XCTUnwrap(SecretaryRunLog.timingLine(["total": 100_000, "model_round_1": 80_000, "model_status": 10_000,

@@ -578,7 +578,7 @@ public enum SecretaryPacketFiles {
     If the tool clips the file, read successive line ranges through the end before submitting decisions.
     Do not write scripts to parse input.json and do not skip a source's service lines (retranscription, coverage, asr_quality): they are grounds for your decision.
     Where text variants disagree, rely on the transcript: refined text and a model's title can be distorted, and an image description is a model's guess, not the user's words. Compare a recording's length with the amount of text.
-    An empty, one-word or looping text for minutes of audio is not empty audio and not grounds for an edit: list the source in unfinished with that obstacle. Do not transcribe it yourself; if the wimm tool request_retranscription is available, queue it, and the new text comes in a later packet.
+    An empty, one-word or looping text for minutes of audio is not empty audio. If its service lines show no finished retranscription, list the source in unfinished with that obstacle and, if the wimm tool request_retranscription is available, queue it: the new text comes in a later packet. If a retranscription is already done and this is what it gave, that text is final: decide from what is there (an edit or done_no_additions), do not leave it unfinished and do not queue it again. Never transcribe it yourself.
     While this packet is open, do not edit the document or its registry directly and do not call mark_notes or set_pass_boundary: the host does all bookkeeping from your response.
     If a section is missing, use secretary read RUN --section with its outline ID. Use --find or --outline to locate it.
     To add at the end of a long section, read it with --section ID --tail: one call returns the heading and the last blocks.
@@ -658,9 +658,11 @@ extension SecretaryPacketFiles {
         }
         let resolution = try packet.resolveEdits(reply, prompt: prompt, marks: marks, checkLazyReply: false)
         timing.checkpoint("edit_validation")
-        func report(committed: Bool, bookkeeping: SecretaryBookkeepingReport?, findings: [String]) throws -> Data {
+        func report(committed: Bool, bookkeeping: SecretaryBookkeepingReport?, findings: [String], remaining: Int? = nil) throws -> Data {
             let outcomes = Dictionary(grouping: resolution.report.sources, by: \.outcome).mapValues { $0.map(\.id) }
             return try encodeObject(["committed": committed, "response_format": 2,
+                // Notes still waiting after this apply (unfinished and newly changed ones included); null on a dry run.
+                "remaining_notes": remaining ?? NSNull(),
                 "accepted": resolution.report.accepted, "rejection": resolution.report.rejection ?? NSNull(),
                 // The file transport has no host round: name the sections to read with secretary read --section.
                 "read_sections_needed": resolution.report.accepted && (resolution.report.rejectedEdits ?? []).isEmpty
@@ -758,7 +760,7 @@ extension SecretaryPacketFiles {
             try JSONEncoder().encode(result).write(to: directory.appendingPathComponent("result.json"), options: .atomic)
             try SecretaryDispatcher.write(record, to: directory)
             SecretaryDispatcher.log(record)
-            let data = try timing.finish(report(committed: true, bookkeeping: record.bookkeeping, findings: record.findings))
+            let data = try timing.finish(report(committed: true, bookkeeping: record.bookkeeping, findings: record.findings, remaining: record.remainingNotes))
             state.phase = record.findings.isEmpty ? "applied" : "failed"; state.report = data
             try data.write(to: directory.appendingPathComponent("apply-report.json"), options: .atomic)
             try save(state, marks: marks)
