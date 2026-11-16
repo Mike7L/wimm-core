@@ -378,6 +378,26 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
             })
             return
         }
+        if !StoragePaths.isTestProcess {
+            // Live text first, the voice second: both compile for the Neural Engine, and a
+            // parallel voice warm-up once kept the live transcriber from loading (2026-11-16).
+            // The gate is set before anything asks for the voice.
+            let parakeetPreload = Task(priority: .utility) {
+                let started = Date()
+                do {
+                    try await ParakeetTranscriptionAdapter.preload(onlyIfInstalled: true)
+                    log(String(format: "[Capture] Parakeet preload finished in %.1fs", Date().timeIntervalSince(started)))
+                } catch {
+                    log("[Capture] Parakeet preload failed: \(error.localizedDescription)")
+                }
+            }
+            // During non-stop capture the preload waits behind live sessions; the model the
+            // live transcriber loaded is just as good a signal.
+            NeuralSpeech.shared.loadAfter {
+                await WarmupOrder.wait(for: { await parakeetPreload.value },
+                                       orUntil: { await ParakeetTranscriptionAdapter.isLoaded() })
+            }
+        }
         vik.onActivity = { [weak self] in
             self?.showHUD()
             self?.hudPanel?.setIslandExpanded(true)
@@ -401,15 +421,6 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
         registerExternalCaptureCommandObserver()
         if !StoragePaths.isTestProcess { externalShoulderVoice.start() }
         showHUD()
-        if !StoragePaths.isTestProcess {
-            Task(priority: .utility) {
-                do {
-                    try await ParakeetTranscriptionAdapter.preload(onlyIfInstalled: true)
-                } catch {
-                    log("[Capture] Parakeet preload failed: \(error.localizedDescription)")
-                }
-            }
-        }
         // Requests left over from a quit mid-run, then recordings that never got text.
         transcriptCatchUp.drain()
         transcriptCatchUp.sweep(excluding: capture.recordingURL)
