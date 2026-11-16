@@ -144,8 +144,9 @@ advancement afterwards (§10). A pass with no open threads simply lists none.
 - Personal document window: toolbar button with the pending count, run sheet
   with the live log and the result; `PersonalDocumentSecretary` drives it.
 
-The Wimm CLI the agent calls is resolved, in order: `WIMM_CLI_PATH`,
-`WimmCLI.app` next to the running app, `~/.local/share/wimm/WimmCLI`. Never the
+The Wimm CLI the agent calls is resolved, in order: `WIMM_CLI_PATH`, the
+running CLI itself, the installed `~/.local/share/wimm/WimmCLI` (what Studio
+uses), then a `WimmCLI.app` next to the running app. Never the
 copy inside `Wimm.app` (iCloud entitlements; killed with 137 outside the app).
 The Claude binary: `WIMM_CLAUDE_PATH`, defaults key `Secretary.claudePath`,
 PATH and the usual install places, then the Claude desktop app's managed copy.

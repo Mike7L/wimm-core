@@ -480,6 +480,30 @@ final class SecretaryDispatcherTests: XCTestCase {
                                                          runningExecutable: inside, home: root)?.path,
                        sibling.appendingPathComponent("WimmCLI").standardizedFileURL.path)
     }
+
+    func testAnAppTakesTheInstalledCLIBeforeACopyLeftBesideItAndACLITakesItself() throws {
+        func executable(_ path: String) throws -> URL {
+            let url = root.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: url)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+            return url.standardizedFileURL
+        }
+        let sibling = try executable("apps/WimmCLI.app/Contents/MacOS/WimmCLI")
+        let studio = root.appendingPathComponent("apps/Wimm Studio.app")
+        let studioBinary = studio.appendingPathComponent("Contents/MacOS/wimm-studio")
+        func located(running: URL) -> String? {
+            SecretaryDispatcher.locateWimmCLI(environment: [:], appBundle: running == studioBinary ? studio : nil,
+                                              runningExecutable: running, home: root)?.path
+        }
+        XCTAssertEqual(located(running: studioBinary), sibling.path)
+        let installed = try executable(".local/share/wimm/WimmCLI")
+        XCTAssertEqual(located(running: studioBinary), installed.path)
+        let development = try executable("build/debug/WimmCLI")
+        XCTAssertEqual(located(running: development), development.path)
+        XCTAssertEqual(SecretaryDispatcher.locateWimmCLI(environment: ["WIMM_CLI_PATH": sibling.path], appBundle: studio,
+                                                         runningExecutable: studioBinary, home: root)?.path, sibling.path)
+    }
 }
 
 private struct FakeExecutor: SecretaryExecutor {

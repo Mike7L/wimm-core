@@ -58,9 +58,22 @@ if [[ -d "$ROOT_DIR/Wimm.app/Contents/MacOS" ]]; then
   chmod +x "$ROOT_DIR/Wimm.app/Contents/MacOS/$CLI_NAME"
 fi
 
-mkdir -p "$HOME/.local/share/wimm"
-cp "$BIN" "$HOME/.local/share/wimm/$CLI_NAME"
-chmod +x "$HOME/.local/share/wimm/$CLI_NAME"
+# The installed copy: MCP is registered with it and Studio runs it. Replace it
+# by rename, since a copy over the file kills a process running it; its
+# resource bundles go beside it, where a bare executable looks for them.
+INSTALL_DIR="$HOME/.local/share/wimm"
+mkdir -p "$INSTALL_DIR"
+cp "$BIN" "$INSTALL_DIR/$CLI_NAME.installing.$$"
+chmod +x "$INSTALL_DIR/$CLI_NAME.installing.$$"
+mv -f "$INSTALL_DIR/$CLI_NAME.installing.$$" "$INSTALL_DIR/$CLI_NAME"
+for resource in "$(dirname "$BIN")/"*.bundle; do
+  [[ -d "$resource" ]] || continue
+  rsync -rlpc --delete "$resource/" "$INSTALL_DIR/$(basename "$resource")/"
+done
+# `wimm-cli` on PATH, where the user keeps such links.
+if [[ -d "$HOME/.local/bin" ]]; then
+  ln -sfn "$INSTALL_DIR/$CLI_NAME" "$HOME/.local/bin/wimm-cli"
+fi
 
 WIMM_BUILD_SIGNING_IDENTITIES="$(security find-identity -p codesigning -v 2>/dev/null || true)"
 CODESIGN_ID="${CODESIGN_ID:-}"
@@ -84,25 +97,4 @@ else
   codesign --force --deep -s - "$CLI_APP_DIR" || true
 fi
 
-# Studio runs the WimmCLI.app next to its own bundle first
-# (SecretaryDispatcher.locateWimmCLI). When Studio is installed outside the
-# checkout (WIMM_STUDIO_APP, read as in make_studio.sh), put the signed bundle
-# there too, or Studio keeps calling whatever old copy lies beside it.
-# rsync replaces files by rename, so a running copy is not overwritten in place.
-if [[ -z "${WIMM_STUDIO_APP:-}" && -f "$ROOT_DIR/.env" ]]; then
-  WIMM_STUDIO_APP=$(sed -nE 's/^WIMM_STUDIO_APP=["'\'']?([^"'\'']*)["'\'']?[[:space:]]*$/\1/p' "$ROOT_DIR/.env" | tail -n1)
-fi
-STUDIO_APP="${WIMM_STUDIO_APP:-}"
-STUDIO_APP="${STUDIO_APP/#\~/$HOME}"
-STUDIO_CLI_APP=""
-if [[ "$STUDIO_APP" == *.app && -d "$(dirname "$STUDIO_APP")" ]]; then
-  STUDIO_CLI_APP="$(cd "$(dirname "$STUDIO_APP")" && pwd)/$CLI_NAME.app"
-  if [[ "$STUDIO_CLI_APP" != "$CLI_APP_DIR" ]]; then
-    mkdir -p "$STUDIO_CLI_APP"
-    rsync -a --delete "$CLI_APP_DIR/" "$STUDIO_CLI_APP/"
-  else
-    STUDIO_CLI_APP=""
-  fi
-fi
-
-echo "Built and signed $CLI_NAME at $CLI_APP_DIR, $HOME/.local/share/wimm/$CLI_NAME${STUDIO_CLI_APP:+, $STUDIO_CLI_APP}"
+echo "Built and signed $CLI_NAME at $CLI_APP_DIR, $HOME/.local/share/wimm/$CLI_NAME"

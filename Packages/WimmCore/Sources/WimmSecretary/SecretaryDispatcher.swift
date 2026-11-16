@@ -41,14 +41,18 @@ public struct SecretaryDispatcher: Sendable {
                                      home: URL = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)) -> URL? {
         var candidates: [URL] = []
         if let explicit = environment["WIMM_CLI_PATH"], !explicit.isEmpty { candidates.append(URL(fileURLWithPath: explicit)) }
-        if let appBundle, appBundle.pathExtension == "app" {
-            candidates.append(appBundle.deletingLastPathComponent().appendingPathComponent("WimmCLI.app/Contents/MacOS/WimmCLI"))
-        }
+        // A CLI hands out itself. An app takes the one installed copy
+        // (`make_cli.sh`), the same one MCP is registered with: a `WimmCLI.app`
+        // beside an app installed outside the checkout is whatever was left
+        // there, and was once two days older than the code Studio ran.
         if let runningExecutable, runningExecutable.lastPathComponent == "WimmCLI",
            !runningExecutable.path.contains("/Wimm.app/") {
             candidates.append(runningExecutable)
         }
         candidates.append(home.appendingPathComponent(".local/share/wimm/WimmCLI"))
+        if let appBundle, appBundle.pathExtension == "app" {
+            candidates.append(appBundle.deletingLastPathComponent().appendingPathComponent("WimmCLI.app/Contents/MacOS/WimmCLI"))
+        }
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0.path) }?.standardizedFileURL
     }
 
