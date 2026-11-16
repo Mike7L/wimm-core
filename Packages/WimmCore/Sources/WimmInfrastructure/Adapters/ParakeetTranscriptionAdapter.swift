@@ -224,6 +224,12 @@ public struct ParakeetTranscriptionAdapter: FileTranscriptionPort, Sendable {
         return ParakeetModel.timedWords(from: tokens)
     }
 
+    /// True once the model is loaded in this process, by a preload or by the live transcriber.
+    public static func isLoaded(modelIdentifier: String = ParakeetModel.ultra) async -> Bool {
+        guard let version = version(for: ParakeetModel.variant(from: modelIdentifier) ?? "ultra") else { return false }
+        return await ParakeetManagerCache.shared.isLoaded(version)
+    }
+
     /// Downloads (~600 MB once) and compiles the model so the first note does not pay for it.
     public static func preload(
         modelIdentifier: String = ParakeetModel.ultra,
@@ -272,6 +278,8 @@ actor ParakeetManagerCache {
         let manager = managers.removeValue(forKey: version)
         await manager?.cleanup()
     }
+
+    func isLoaded(_ version: AsrModelVersion) -> Bool { managers[version] != nil }
 
     func manager(for version: AsrModelVersion) async throws -> AsrManager {
         if let manager = managers[version] {
@@ -322,6 +330,7 @@ public struct ParakeetTranscriptionAdapter: FileTranscriptionPort, Sendable {
         modelIdentifier: String = ParakeetModel.ultra,
         onlyIfInstalled: Bool = false
     ) async throws {}
+    public static func isLoaded(modelIdentifier: String = ParakeetModel.ultra) async -> Bool { false }
 }
 
 #endif

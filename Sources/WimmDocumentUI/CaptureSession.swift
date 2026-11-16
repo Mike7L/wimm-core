@@ -433,8 +433,20 @@ public final class CaptureSession {
         self.live = live
         let store = self.store
         loop = Task { [weak self] in
-            do { try await live.prepare() } catch {
-                log("[Capture] Parakeet live transcriber unavailable: \(error.localizedDescription)")
+            let requested = Date()
+            do {
+                try await live.prepare()
+                let waited = Date().timeIntervalSince(requested)
+                if waited >= 2 { log(String(format: "[Capture] Parakeet live transcriber ready after %.1fs", waited)) }
+            } catch {
+                let waited = Date().timeIntervalSince(requested)
+                // The note was sent or stopped before the model was ready: not a Parakeet fault,
+                // and no error for the user. The file run after the note still transcribes it.
+                if error is CancellationError || Task.isCancelled {
+                    log(String(format: "[Capture] note closed before the Parakeet live transcriber was ready (waited %.1fs); no live text for it", waited))
+                    return
+                }
+                log(String(format: "[Capture] Parakeet live transcriber unavailable after %.1fs: %@", waited, error.localizedDescription))
                 await MainActor.run {
                     guard let self, self.live === live else { return }
                     self.errorMessage = "Parakeet: \(error.localizedDescription)"

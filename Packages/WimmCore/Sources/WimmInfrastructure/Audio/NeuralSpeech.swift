@@ -23,47 +23,98 @@ public actor NeuralSpeech {
     #if canImport(FluidAudio)
     private var manager: Supertonic3Manager?
     private var styles: [Voice: Supertonic3VoiceStyle] = [:]
-    private var warmed = false
+    private var styleLoads: [Voice: Task<Supertonic3VoiceStyle, Error>] = [:]
     #endif
-    private var loading: Task<Void, Error>?
+    private let modelLoad = SingleFlight()
+    private let warmUp = SingleFlight()
+    private var warmed = false
+    private let startGate = StartGate()
+
+    /// Work the model load must wait for. Studio passes its Parakeet preload: the Supertonic
+    /// compile and the Parakeet compile both go to the Neural Engine, and on 2026-11-16 the
+    /// voice warm-up took 170 s while the live transcriber could not load its model in time.
+    /// Live text matters more than the voice, so the voice goes second. Without a gate (the
+    /// CLI) the model loads at once.
+    public nonisolated func loadAfter(_ gate: @escaping @Sendable () async -> Void) {
+        startGate.set(gate)
+    }
 
     /// Loads the model and the voices and runs one short phrase, so the first real line
-    /// does not pay for the Neural Engine compile. Safe to call repeatedly.
+    /// does not pay for the Neural Engine compile. Safe to call repeatedly and from several
+    /// places at once: the load and the warm-up each run once (two players used to warm
+    /// the model twice in parallel, and each logged its own line).
     public func prepare(voices: [Voice]) async throws {
         #if canImport(FluidAudio)
-        if loading == nil {
-            loading = Task {
-                let started = Date()
+        let gate = startGate.current
+        // Utility, not the caller's priority: the voice is never more urgent than capture.
+        try await modelLoad.run(priority: .utility) {
+            let requested = Date()
+            if let gate {
+                await gate()
+                let waited = Date().timeIntervalSince(requested)
+                if waited >= 0.5 {
+                    log(String(format: "[NeuralSpeech] waited %.1fs for the transcription model before loading", waited))
+                }
+            }
+            let started = Date()
+            try await LocalInferenceExecution.run(priority: .file) {
                 // The ANE-resident int4 build: same quality, a third of the memory.
                 let manager = Supertonic3Manager(vectorEstimator: .aneBucketed(.int4))
                 try await manager.initialize()
-                self.manager = manager
-                log(String(format: "[NeuralSpeech] model ready in %.1fs", Date().timeIntervalSince(started)))
+                await self.setManager(manager)
             }
+            log(String(format: "[NeuralSpeech] model ready in %.1fs", Date().timeIntervalSince(started)))
         }
-        do {
-            try await loading?.value
-        } catch {
-            loading = nil
-            throw error
-        }
+        let started = Date()
+        var loaded = 0
         for voice in voices where styles[voice] == nil {
-            guard let builtIn = Supertonic3Voice(name: voice.name) else {
-                throw NSError(domain: "NeuralSpeech", code: 2, userInfo: [
-                    NSLocalizedDescriptionKey: "Unknown voice \(voice.name)"])
-            }
-            styles[voice] = try await Supertonic3ResourceDownloader.loadVoiceStyle(builtIn)
+            if try await loadStyle(voice) { loaded += 1 }
         }
-        if !warmed, let voice = voices.first {
+        if loaded > 0 {
+            log(String(format: "[NeuralSpeech] %d voices loaded in %.1fs", loaded, Date().timeIntervalSince(started)))
+        }
+        guard let voice = voices.first else { return }
+        try await warmUp.run(priority: .utility) {
             let started = Date()
-            _ = try await synthesize("Да.", voice: voice)
-            warmed = true
-            log(String(format: "[NeuralSpeech] voices loaded and warmed in %.1fs", Date().timeIntervalSince(started)))
+            _ = try await self.synthesize("Да.", voice: voice)
+            await self.markWarmed()
+            log(String(format: "[NeuralSpeech] warm-up line synthesized in %.1fs", Date().timeIntervalSince(started)))
         }
         #else
         throw CocoaError(.featureUnsupported)
         #endif
     }
+
+    #if canImport(FluidAudio)
+    /// Loads one voice style; a caller that arrives during the load waits for the same one.
+    /// True when this call started the load.
+    private func loadStyle(_ voice: Voice) async throws -> Bool {
+        if styles[voice] != nil { return false }
+        let started = styleLoads[voice] == nil
+        let task: Task<Supertonic3VoiceStyle, Error>
+        if let existing = styleLoads[voice] {
+            task = existing
+        } else {
+            guard let builtIn = Supertonic3Voice(name: voice.name) else {
+                throw NSError(domain: "NeuralSpeech", code: 2, userInfo: [
+                    NSLocalizedDescriptionKey: "Unknown voice \(voice.name)"])
+            }
+            task = Task(priority: .utility) { try await Supertonic3ResourceDownloader.loadVoiceStyle(builtIn) }
+            styleLoads[voice] = task
+        }
+        do {
+            styles[voice] = try await task.value
+            styleLoads[voice] = nil
+            return started
+        } catch {
+            styleLoads[voice] = nil
+            throw error
+        }
+    }
+
+    private func setManager(_ manager: Supertonic3Manager) { self.manager = manager }
+    #endif
+    private func markWarmed() { warmed = true }
 
     public var isReady: Bool {
         #if canImport(FluidAudio)
@@ -71,6 +122,21 @@ public actor NeuralSpeech {
         #else
         false
         #endif
+    }
+
+    /// Holds the gate set by `loadAfter`. Set synchronously at launch, before any player
+    /// asks for the voice, so no actor hop can reorder the two.
+    final class StartGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var gate: (@Sendable () async -> Void)?
+        func set(_ gate: @escaping @Sendable () async -> Void) {
+            lock.lock(); defer { lock.unlock() }
+            self.gate = gate
+        }
+        var current: (@Sendable () async -> Void)? {
+            lock.lock(); defer { lock.unlock() }
+            return gate
+        }
     }
 
     /// 44.1 kHz mono samples of `text` read in Russian by `voice`.
