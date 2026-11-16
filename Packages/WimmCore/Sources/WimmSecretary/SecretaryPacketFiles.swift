@@ -237,8 +237,9 @@ public enum SecretaryPacketFiles {
     }
 
     /// Source/part offsets are UTF-8 bytes; section offsets are whole blocks, outline offsets headings.
+    /// `tail` (section only) returns the heading and the last blocks that fit instead of a page from `offset`.
     public static func read(runID: String, operation: String, query: String = "", offset: Int = 0,
-                            limit: Int = 8_000, refresh: Bool = false) async throws -> Data {
+                            limit: Int = 8_000, refresh: Bool = false, tail: Bool = false) async throws -> Data {
         let timing = SecretaryFileTiming("read.\(operation)")
         try requirePublicAccess()
         let marks = AgentMarkStore()
@@ -258,17 +259,20 @@ public enum SecretaryPacketFiles {
             timing.count("library_note_count", library.count); timing.checkpoint("library_load")
         } else { library = RecallLibrary([]) }
         return try read(runID: runID, operation: operation, query: query, offset: offset, limit: limit,
-                        refresh: refresh, library: library, marks: marks, timing: timing)
+                        refresh: refresh, tail: tail, library: library, marks: marks, timing: timing)
     }
 
     static func read(runID: String, operation: String, query: String = "", offset: Int = 0, limit: Int = 8_000,
-                     refresh: Bool = false, library: RecallLibrary, marks: AgentMarkStore,
+                     refresh: Bool = false, tail: Bool = false, library: RecallLibrary, marks: AgentMarkStore,
                      timing suppliedTiming: SecretaryFileTiming? = nil) throws -> Data {
         let timing = suppliedTiming ?? SecretaryFileTiming("read.\(operation)")
         defer { if suppliedTiming == nil { timing.write(runID: runID, marks: marks) } }
         try requirePublicAccess()
         guard offset >= 0, (1...24_000).contains(limit), !refresh || operation == "source" else {
             throw SecretaryPacket.Failure("Invalid offset/limit; limit must be 1–24000 bytes and refresh requires source.")
+        }
+        guard !tail || (operation == "section" && offset == 0) else {
+            throw SecretaryPacket.Failure("--tail reads the end of a section; use it with --section and without --offset.")
         }
         var state = try load(runID, marks: marks)
         let workspace = try state.packet().task.workspace
@@ -322,7 +326,7 @@ public enum SecretaryPacketFiles {
             return try timing.finish(page(Data(text.utf8), offset: offset, limit: limit, label: query))
         }
         guard ["section", "find", "outline"].contains(operation) else { throw SecretaryPacket.Failure("Unknown read operation.") }
-        let turn = try packet.addressedRead([.init(id: "cli", operation: operation, query: query, purpose: "CLI document context", offset: offset)],
+        let turn = try packet.addressedRead([.init(id: "cli", operation: operation, query: query, purpose: "CLI document context", offset: offset, tail: tail ? true : nil)],
             validationPrompt: String(decoding: state.input, as: UTF8.self), library: library, marks: marks,
             sourceLimit: state.sourceLimit, documentLimit: max(0, (state.documentReadBudget ?? 96_000) - state.documentReadBytes), includeExisting: true, outputLimit: limit)
         timing.checkpoint("context_read")
@@ -534,6 +538,7 @@ public enum SecretaryPacketFiles {
     If a separate oversize-previews.md is linked, consult it only to triage oversized sources as not_a_note.
     If the tool clips the file, read successive line ranges through the end before submitting decisions.
     If a section is missing, use secretary read RUN --section with its outline ID. Use --find or --outline to locate it.
+    To add at the end of a long section, read it with --section ID --tail: one call returns the heading and the last blocks.
     Submit JSON with secretary apply RUN --response FILE; --dry-run validates without edits/marks.
     The host reports which edits it accepted and which sources it counted as used or reviewed.
     If the dry-run report lists status_refresh_needed, an accepted edit changed a topic that opens with a status line. Where the state really changed, add "status_updates":[{"block":"<id>","text":"new status body"}] to the same response: two or three sentences of what is true now, at most 800 characters, without the bold date label (the host writes the label and the date) and citing only references the topic already has; earlier steps stay in the history below. Leave a line out if its state did not change.
