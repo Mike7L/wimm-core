@@ -870,8 +870,10 @@ public actor LibraryRecallSource {
     private let freshness: TimeInterval = 5
 
     public init(buildMode: BuildMode = .inProcess, includeFingerprints: Bool = false, cacheDirectory: URL? = nil) {
-        self.init(buildMode: buildMode, includeFingerprints: includeFingerprints, cacheDirectory: cacheDirectory,
-                  builderVersion: Self.cacheBuilderVersion)
+        self.buildMode = buildMode
+        self.includeFingerprints = includeFingerprints
+        self.cacheDirectory = cacheDirectory
+        self.builderVersion = Self.cacheBuilderVersion
     }
 
     /// `builderVersion` is a parameter only so a test can play a newer build.
