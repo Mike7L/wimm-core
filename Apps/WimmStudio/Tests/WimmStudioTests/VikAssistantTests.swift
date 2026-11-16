@@ -124,6 +124,26 @@ final class VikAssistantTests: XCTestCase {
         await waitUntil { h.capture.starts == 1 }
     }
 
+    func testLongSilenceGetsOneReassuranceAfterTheAcknowledgement() async {
+        let h = VikHarness(acknowledgeAfter: .milliseconds(20), reassureAfter: .milliseconds(80))
+        defer { h.assistant.shutdown() }
+        h.send()
+        await waitUntil { h.voice.lines.count == 2 }
+        XCTAssertEqual(h.voice.lines, [VikAssistant.acknowledgementPhrase, VikAssistant.reassurancePhrase])
+        h.voice.onStarted?(); h.voice.onStarted?()
+        XCTAssertEqual(h.assistant.phase, .thinking) // Neither fixed phrase is the reply.
+        try? await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(h.voice.lines.count, 2)
+
+        let answered = VikHarness(acknowledgeAfter: .milliseconds(20), reassureAfter: .milliseconds(120))
+        defer { answered.assistant.shutdown() }
+        answered.send()
+        await waitUntil { answered.voice.lines == [VikAssistant.acknowledgementPhrase] }
+        answered.reply?.yield("Ответ. ")
+        try? await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(answered.voice.lines, [VikAssistant.acknowledgementPhrase, "Ответ."])
+    }
+
     func testFastReplyAndCancelledExchangeGetNoAcknowledgement() async {
         let fast = VikHarness(acknowledgeAfter: .milliseconds(80))
         defer { fast.assistant.shutdown() }
@@ -557,11 +577,13 @@ private final class VikHarness {
     var reply: AsyncThrowingStream<String, Error>.Continuation?
     var opened: [URL] = []
 
-    init(document: String = "", timeout: Duration = .seconds(20), acknowledgeAfter: Duration? = nil) {
+    init(document: String = "", timeout: Duration = .seconds(20), acknowledgeAfter: Duration? = nil,
+         reassureAfter: Duration? = nil) {
         assistant = VikAssistant(capture: capture, voice: voice, document: { document },
                                  isPrivate: { [weak self] in self?.privateMode ?? true },
                                  finalizationTimeout: timeout,
                                  acknowledgeAfter: acknowledgeAfter,
+                                 reassureAfter: reassureAfter,
                                  openCodeTask: { [weak self] in self?.opened.append($0); return true },
                                  stream: { [weak self] query, note, tools in
             self?.calls.append((query, note, tools.map(\.name)))

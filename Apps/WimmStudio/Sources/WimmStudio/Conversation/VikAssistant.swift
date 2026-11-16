@@ -38,7 +38,7 @@ final class VikAssistant {
     var enabled = true {
         didSet {
             preferences?.set(enabled, forKey: "WimmStudio.vikEnabled")
-            if !enabled { cancel() }
+            if !enabled { cancel(reason: "disabled") }
             else if monitor != nil, !isPrivate() { voice.prepare() }
         }
     }
@@ -51,7 +51,7 @@ final class VikAssistant {
         didSet {
             guard keepMicOpen != oldValue else { return }
             preferences?.set(keepMicOpen, forKey: Self.keepMicOpenKey)
-            cancel()
+            cancel(reason: "mic_mode_changed")
         }
     }
     static let keepMicOpenKey = "WimmStudio.vikKeepMicOpen"
@@ -111,6 +111,9 @@ final class VikAssistant {
     /// Acknowledgement lines queued ahead of the reply; their start is not the reply's first audio.
     @ObservationIgnored private var acknowledgementLines = 0
     static let acknowledgementPhrase = "Секунду."
+    /// Second fixed phrase when the model is still silent long after the first; nil = off.
+    @ObservationIgnored private let reassureAfter: Duration?
+    static let reassurancePhrase = "Ещё читаю, подожди."
 
     init(capture: any VikCapturing, voice: any VikVoicePlaying,
          document: @escaping () -> String = { "" },
@@ -118,6 +121,7 @@ final class VikAssistant {
          preferences: UserDefaults? = nil,
          finalizationTimeout: Duration = .seconds(20),
          acknowledgeAfter: Duration? = .milliseconds(1200),
+         reassureAfter: Duration? = .seconds(10),
          openCodeTask: @escaping (URL) -> Bool = { StoragePaths.isTestProcess ? false : NSWorkspace.shared.open($0) },
          stream: ReplyStream? = nil) {
         self.capture = capture
@@ -127,6 +131,7 @@ final class VikAssistant {
         self.preferences = preferences
         self.finalizationTimeout = finalizationTimeout
         self.acknowledgeAfter = acknowledgeAfter
+        self.reassureAfter = reassureAfter
         self.enabled = preferences?.object(forKey: "WimmStudio.vikEnabled") as? Bool ?? true
         self.keepMicOpen = preferences?.bool(forKey: Self.keepMicOpenKey) ?? false
         self.stream = stream
@@ -146,7 +151,7 @@ final class VikAssistant {
 
     func shutdown() {
         monitor?.cancel(); monitor = nil
-        cancel()
+        cancel(reason: "shutdown")
     }
 
     /// Only observes the draft and privacy. Submission uses CaptureSession's
@@ -164,17 +169,18 @@ final class VikAssistant {
         }
         if isResponding {
             guard keepMicOpen else {
-                if !ownsCapture || (phase != .finishing && (capture.isRecording || capture.isBusy)) { cancel() }
+                if !ownsCapture { cancel(reason: "lease_lost") }
+                else if phase != .finishing && (capture.isRecording || capture.isBusy) { cancel(reason: "capture_active") }
                 return
             }
             // Open microphone: the next note can stop the reply by voice, and
             // a new address replaces it.
             guard capture.isRecording, let file = capture.recordingURL, file != sourceFile else { return }
             guard VikRequest.extract(from: capture.liveText) != nil else {
-                if VikRequest.isStop(capture.liveText) { cancel() }
+                if VikRequest.isStop(capture.liveText) { cancel(reason: "stop_phrase") }
                 return
             }
-            cancel()
+            cancel(reason: "new_address")
         }
         guard capture.isRecording, !capture.isSending, let file = capture.recordingURL else { return }
         if draftFile != file {
@@ -226,7 +232,7 @@ final class VikAssistant {
            let query = VikRequest.extract(from: capture.liveText), !query.isEmpty {
             waitForFinalText(file: file, query: query, resume: false)
         } else {
-            cancel()
+            cancel(reason: "capture_\(action)")
         }
     }
 
@@ -252,7 +258,7 @@ final class VikAssistant {
             guard self.ownsCapture else {
                 // The note changed under the request: nothing will close it or deliver its final text.
                 log("[Vik] close_skipped lease_lost")
-                self.cancel(); return
+                self.cancel(reason: "lease_lost"); return
             }
             let stopped = await self.capture.stop(ifUnchangedSince: revision, recordingURL: file,
                                                   silenceRevision: silenceRevision)
@@ -279,7 +285,7 @@ final class VikAssistant {
         }
         guard keepMicOpen || (ownsCapture && !capture.isRecording && !capture.isBusy) else {
             log("[Vik] final_text_revoked owns=\(ownsCapture) recording=\(capture.isRecording) busy=\(capture.isBusy)")
-            cancel(); return
+            cancel(reason: "final_text_revoked"); return
         }
         guard !isPrivate() else { fail("Алёна недоступна в приватном режиме."); return }
         deadline?.cancel(); deadline = nil
@@ -311,8 +317,11 @@ final class VikAssistant {
         phase = .idle
     }
 
-    func cancel() {
+    /// `reason` goes to the log only: a reply that ends without `playback_complete`
+    /// must say why (stop phrase, new address, capture command, lost lease…).
+    func cancel(reason: String = "user") {
         if isResponding || phase == .listening {
+            logEnd(reason)
             if let file = isResponding ? sourceFile : draftFile { handled.insert(file) }
             phase = .idle
         }
@@ -339,7 +348,7 @@ final class VikAssistant {
     private func fail(_ message: String) {
         // Fixed wording only: the reason a request died must be readable after the fact.
         log("[Vik] failed phase=\(phase) reason=\(message.prefix(60))")
-        cancel()
+        cancel(reason: "failed")
         phase = .failed
         errorMessage = message
     }
@@ -360,7 +369,7 @@ final class VikAssistant {
         deadline = Task { [weak self] in
             do { try await Task.sleep(for: timeout) } catch { return }
             guard let self, self.serial == token, self.phase == .finishing else { return }
-            guard self.ownsCapture else { log("[Vik] final_text_deadline lease_lost"); self.cancel(); return }
+            guard self.ownsCapture else { log("[Vik] final_text_deadline lease_lost"); self.cancel(reason: "lease_lost"); return }
             self.fail("Live-текст не завершился вовремя. Запрос не отправлен.\(self.hint)")
         }
     }
@@ -403,13 +412,13 @@ final class VikAssistant {
             self.finishIfReady()
         }
         if let delay = acknowledgeAfter {
+            let second = reassureAfter.flatMap { $0 > delay ? $0 - delay : nil }
             acknowledgement = Task { [weak self] in
                 do { try await Task.sleep(for: delay) } catch { return }
-                guard let self, self.serial == token, self.phase == .thinking, self.answer.isEmpty,
-                      self.ownsCapture, !self.isPrivate() else { return }
-                self.latency("ack")
-                self.acknowledgementLines += 1
-                self.speak(Self.acknowledgementPhrase)
+                guard self?.acknowledge(token, stage: "ack", phrase: Self.acknowledgementPhrase) == true,
+                      let second else { return }
+                do { try await Task.sleep(for: second) } catch { return }
+                _ = self?.acknowledge(token, stage: "reassure", phrase: Self.reassurancePhrase)
             }
         }
         turn = Task { [weak self] in
@@ -472,6 +481,15 @@ final class VikAssistant {
         }
     }
 
+    /// Speaks a fixed phrase while the model is still silent. No model call.
+    private func acknowledge(_ token: UUID, stage: String, phrase: String) -> Bool {
+        guard serial == token, phase == .thinking, answer.isEmpty, ownsCapture, !isPrivate() else { return false }
+        latency(stage)
+        acknowledgementLines += 1
+        speak(phrase)
+        return true
+    }
+
     /// Opens a Claude Code draft; the user's Enter there is the only start.
     private func codeTaskReply(_ task: String, note: String, source: URL) -> AsyncThrowingStream<String, Error> {
         let message: String
@@ -507,6 +525,7 @@ final class VikAssistant {
         guard isResponding, streamFinished, !voiceBusy, ownsCapture,
               keepMicOpen || (!capture.isRecording && !capture.isBusy) else { return }
         latency("playback_complete")
+        logEnd("complete")
         phase = .idle
         let resume = resumeAfterReply
         resumeAfterReply = false
@@ -528,6 +547,11 @@ final class VikAssistant {
                 return try await tool.call(args)
             }
         }
+    }
+
+    private func logEnd(_ reason: String) {
+        let elapsed = isResponding ? " after_ms=\(Int(Date().timeIntervalSince(started) * 1000))" : ""
+        log("[Vik] reply_end reason=\(reason) phase=\(phase)\(elapsed) answer_chars=\(answer.count) voice_busy=\(voiceBusy)")
     }
 
     private func latency(_ stage: String) {
