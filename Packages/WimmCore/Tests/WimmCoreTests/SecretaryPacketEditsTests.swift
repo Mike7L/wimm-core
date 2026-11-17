@@ -814,7 +814,11 @@ final class SecretaryPacketEditsTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(timings["bookkeeping"]), subtotal, accuracy: 0.001)
         XCTAssertTrue(try String(contentsOf: document, encoding: .utf8).contains("Семейный маяк.\n\nНовый эпизод [S2].\n\n"))
         let replay = try await SecretaryPacketFiles.apply(runID: id, response: body, marks: store, recordings: { self.files })
-        XCTAssertEqual(replay, applied)
+        // The stored report cannot time the save that stores it; everything else is replayed as is.
+        var replayed = try JSONSerialization.jsonObject(with: replay) as! [String: Any], first = report
+        XCTAssertNil((replayed["timings_ms"] as? [String: Double])?["session_save"])
+        replayed["timings_ms"] = nil; first["timings_ms"] = nil
+        XCTAssertEqual(replayed as NSDictionary, first as NSDictionary)
     }
 }
 

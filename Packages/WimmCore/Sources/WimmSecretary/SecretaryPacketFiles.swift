@@ -803,7 +803,10 @@ extension SecretaryPacketFiles {
             state.phase = record.findings.isEmpty ? "applied" : "failed"; state.report = data
             try data.write(to: directory.appendingPathComponent("apply-report.json"), options: .atomic)
             try save(state, marks: marks)
-            return data
+            // The caller and the report file get the time of the whole operation, save included.
+            let closed = timing.close(data, stage: "session_save")
+            try? closed.write(to: directory.appendingPathComponent("apply-report.json"), options: .atomic)
+            return closed
         } catch {
             state.phase = "failed"; try? save(state, marks: marks)
             record.outcome = .failed; record.error = error.localizedDescription; record.finishedAt = SecretaryClock.stamp(Date())

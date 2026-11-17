@@ -50,6 +50,12 @@ public enum SecretaryPassPlanner {
         return scan
     }
 
+    /// What the packet header promises: the saved queue without the notes of this portion.
+    /// It is what `remaining(of:marks:)` answers after an apply that settles every one of them.
+    static func remaining(of waiting: [SecretaryWaitingNote], afterPortion files: Set<String>) -> Int {
+        waiting.count { !files.contains($0.file) }
+    }
+
     /// The library never lists a canceled recording (`LibraryRecallSource.build`), so no
     /// packet offers it and it must not count as pending either.
     public static func isCanceled(_ url: URL) -> Bool {

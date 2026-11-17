@@ -138,6 +138,7 @@ struct SecretaryPacket {
         var noteObjects: [[String: Any]] = [], receipts: [SecretaryReadReceipt] = [], newSources: [[String: Any]] = []
         var fullSourcesByID: [String: String] = [:]
         var selected: [String] = [], projectedSourceIDs: [String] = [], bytes = 0
+        var selectedFiles = Set<String>()
         var blockedSources: [[String: String]] = []
         var heldSources: [[String: String]] = []
         var noTextSources: [[String: String]] = []
@@ -317,6 +318,7 @@ struct SecretaryPacket {
             noteObjects.append(["source": id, "previous": previous, "full_text": suppliedText])
             fullSourcesByID[id] = suppliedText
             receipts.append(renderedReceipt); selected.append(id); bytes += suppliedText.utf8.count
+            selectedFiles.insert(URL(fileURLWithPath: note.filePath).lastPathComponent)
         }
         guard !selected.isEmpty || !previews.isEmpty else {
             if !viewingSources.isEmpty || !skippedSources.isEmpty || !unfinishedSources.isEmpty, heldSources.isEmpty, blockedSources.isEmpty {
@@ -350,7 +352,7 @@ struct SecretaryPacket {
         guard openQueue.utf8.count <= 24_000 else { throw Failure("Open questions exceed packet limit; use regular workflow.") }
         let outlineEntries: [[String: String]] = blocks.compactMap { b in heading(b.text).map { ["id": b.id, "title": String($0.line.prefix(160))] } }
         var payload: [String: Any] = ["run": task.id, "as_of": SecretaryClock.stamp(task.createdAt), "document": task.workspace.doc,
-            "sources": noteObjects, "selected_count": selected.count, "remaining": changed.total - selected.count,
+            "sources": noteObjects, "selected_count": selected.count, "remaining": SecretaryPassPlanner.remaining(of: waitingNotes, afterPortion: selectedFiles),
             "document_blocks": objects(supplied), "outline": outlineEntries, "outline_truncated": false,
             "review_queue": openQueue, "source_text_truncated": !projectedSourceIDs.isEmpty, "solo_large_source": bytes > sourceByteLimit,
             "response_format": 2, "blocked_sources": blockedSources, "held_sources": heldSources, "no_text_sources": noTextSources,

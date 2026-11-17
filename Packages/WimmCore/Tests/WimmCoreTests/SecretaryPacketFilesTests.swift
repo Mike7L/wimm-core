@@ -422,6 +422,68 @@ final class SecretaryPacketFilesTests: XCTestCase {
         XCTAssertLessThan(older.timeIntervalSince(boundary), 1)
     }
 
+    /// The header's "ждут после этой порции" is the saved queue without this portion, the number
+    /// `apply` reports next. A held note is in neither (2026-11-17: the header said 52, apply 50).
+    func testPacketHeaderPromisesWhatApplyReportsAndAHeldNoteDoesNotCount() async throws {
+        let heldFile = root.appendingPathComponent("recordings/held.txt")
+        try "Удержанная запись.\n".write(to: heldFile, atomically: true, encoding: .utf8)
+        try FileStore.mutateSidecar(at: FileStore.metadataURL(forRecordingURL: heldFile)) { $0["recordingId"] = "note-held"; return true }
+        try "# Личный документ\n\n## Маяк\n\nСтарый факт [S1].\n\n[S1]: ../recordings/one.meta.json\n".write(to: document, atomically: true, encoding: .utf8)
+        let rows: [[String: Any]] = [
+            ["source_id": "S1", "path": "../recordings/one.meta.json", "note_file": "one.txt", "status": "pending", "reason": "unread"],
+            ["source_id": "S3", "path": "../recordings/held.meta.json", "note_file": "held.txt", "status": "pending", "reason": "unread",
+             "user_exclusion": ["active": true, "authority": "user", "scope": "source", "resume": "explicit_user_release", "reason": "не сейчас"]]]
+        try JSONSerialization.data(withJSONObject: ["sources": rows, "source_count": 2, "counts": ["pending": 2], "batches": []]).write(to: registry)
+        let older = Date().addingTimeInterval(-600)
+        func note(_ id: String, _ file: URL, _ at: Date) -> RecallNote {
+            RecallNote(id: id, date: at, kind: "text", title: "Маяк", summary: nil, text: "", filePath: file.path, updated: at)
+        }
+        // The hold's own bookkeeping mark is older than the note's text, so the note is in the pass queue.
+        try marks.update(["held.txt": .init(status: .pending, source: "S3", markedAt: older, noteId: "note-held",
+                                            text: "old", analysis: "old", wording: "old")])
+        let library = RecallLibrary([note("note-held", heldFile, Date()), note("note-0", files[0], older.addingTimeInterval(300)), note("note-1", files[1], older)])
+        let m = try object(await SecretaryPacketFiles.prepare(document: document, cli: URL(fileURLWithPath: "/unused-cli"),
+            sourceKB: 64, library: library, marks: marks, maxSources: 1)), id = m["run_id"] as! String
+        let state = try SecretaryPacketFiles.loadTracked(id, marks: marks).state
+        XCTAssertEqual(try state.packet().selected, ["S1"])
+        XCTAssertEqual(state.waiting?.map(\.file).sorted(), ["one.txt", "two.txt"])
+        let input = try object(Data(contentsOf: URL(fileURLWithPath: m["input"] as! String)))
+        let unadmitted = try object(try XCTUnwrap(state.unadmitted))
+        XCTAssertEqual((unadmitted["held_sources"] as? [[String: String]])?.map { $0["source"] }, ["S3"], "the held note was met and set aside")
+        XCTAssertEqual(input["remaining"] as? Int, 1, "two.txt waits; held.txt is not in the queue")
+        XCTAssertTrue(try XCTUnwrap(SecretaryPacketFiles.packetPages(state).first).contains("ждут после этой порции: 1 "))
+        let block = try XCTUnwrap((input["document_blocks"] as! [[String: String]]).first { $0["text"] == "Старый факт [S1].\n\n" }?["id"])
+        let body = try JSONSerialization.data(withJSONObject: [
+            "summary": "s",
+            "edits": [["operation": "replace_text", "block": block, "match": "Старый факт", "text": "Новый план [S1].", "sources": ["S1"]]],
+            "done_no_additions": [], "unfinished": [], "not_a_note": [], "questions": []
+        ])
+        let applied = try object(await SecretaryPacketFiles.apply(runID: id, response: body, marks: marks, recordings: { self.files + [heldFile] }))
+        XCTAssertEqual(applied["findings"] as? [String], [])
+        XCTAssertEqual(applied["remaining_notes"] as? Int, input["remaining"] as? Int)
+    }
+
+    /// One total for the whole `apply`, the session save included, in the output, in
+    /// apply-report.json and in the timing file (2026-11-17: 10.2 s printed, 14.1 s on file).
+    func testApplyReportsTheSameFullTotalItWritesToTheTimingFile() async throws {
+        let m = try await prepare(), id = m["run_id"] as! String
+        let applied = try object(await SecretaryPacketFiles.apply(runID: id, response: try response(m), marks: marks, recordings: { self.files }))
+        XCTAssertEqual(applied["findings"] as? [String], [])
+        let printed = try XCTUnwrap(applied["timings_ms"] as? [String: Double])
+        XCTAssertNotNil(printed["session_save"])
+        let directory = marks.directory.appendingPathComponent("SecretaryFileSessions/\(id).timings")
+        let records = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .map { try object(Data(contentsOf: $0)) }.filter { $0["operation"] as? String == "apply" }
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.first?["timings_ms"] as? [String: Double], printed)
+        let workspace = try XCTUnwrap(SecretaryWorkspace(document: document))
+        let report = try object(Data(contentsOf: workspace.runsDirectory.appendingPathComponent("\(id)/apply-report.json")))
+        XCTAssertEqual(report["timings_ms"] as? [String: Double], printed)
+        // A replay returns the report stored with the session; the new timing record is its own.
+        let replayed = try object(await SecretaryPacketFiles.apply(runID: id, response: try response(m), marks: marks, recordings: { self.files }))
+        XCTAssertEqual(replayed["remaining_notes"] as? Int, applied["remaining_notes"] as? Int)
+    }
+
     func testPrepareRoundTripsAcrossCallsWithoutModelMarksOrDocumentWrites() async throws {
         let before = try Data(contentsOf: document), originalRegistry = try Data(contentsOf: registry)
         let m = try await prepare(), id = m["run_id"] as! String

@@ -8,6 +8,8 @@ final class SecretaryFileTiming {
     private var stages: [String: Double] = [:]
     private var counts: [String: Int] = [:]
     private var outcome = "failed"
+    /// The durations the report carries; the timing file repeats them, so both say one total.
+    private var reported: [String: Double]?
     let operation: String
 
     init(_ operation: String) { self.operation = operation }
@@ -26,9 +28,24 @@ final class SecretaryFileTiming {
         checkpoint("report")
         guard var object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return data }
         outcome = (object["findings"] as? [String])?.isEmpty == false ? "findings" : "succeeded"
-        object["timings_ms"] = durations()
+        let durations = durations()
+        reported = durations
+        object["timings_ms"] = durations
         object["work_counts"] = counts
         return try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+    }
+
+    /// Work done after the report was built (`apply` saves the session with the report inside,
+    /// 3.9 s of 14 on 2026-11-17) is part of the operation: the returned report gets it as its
+    /// own stage and the full total. The copy stored in the session cannot time its own save.
+    func close(_ data: Data, stage: String) -> Data {
+        checkpoint(stage)
+        guard var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return data }
+        let durations = durations()
+        object["timings_ms"] = durations
+        guard let closed = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) else { return data }
+        reported = durations
+        return closed
     }
 
     func replayed() { outcome = "replayed"; checkpoint("replay") }
@@ -45,7 +62,7 @@ final class SecretaryFileTiming {
         let directory = marks.directory.appendingPathComponent("SecretaryFileSessions/\(runID).timings")
         let object: [String: Any] = ["operation": operation, "outcome": outcome,
             "recorded_at": ISO8601DateFormatter().string(from: Date()),
-            "timings_ms": durations(), "work_counts": counts]
+            "timings_ms": reported ?? durations(), "work_counts": counts]
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])

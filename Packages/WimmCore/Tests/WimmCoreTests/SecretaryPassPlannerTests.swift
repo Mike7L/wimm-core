@@ -71,6 +71,9 @@ final class SecretaryPassPlannerTests: XCTestCase {
         XCTAssertEqual(SecretaryPassPlanner.advancedBoundary(after: scan, started: Date(timeIntervalSince1970: 2_000_000)),
                        Date(timeIntervalSince1970: 1_300_000))
         XCTAssertEqual(SecretaryPassPlanner.remaining(of: [], marks: store).pending, 0)
+        // The packet header: the same queue without the portion, whatever else the portion names.
+        XCTAssertEqual(SecretaryPassPlanner.remaining(of: queue, afterPortion: ["read.m4a", "reread.m4a", "elsewhere.m4a"]), 2)
+        XCTAssertEqual(SecretaryPassPlanner.remaining(of: queue, afterPortion: []), 4)
     }
 
     func testNoBoundaryMeansUnknown() async {
