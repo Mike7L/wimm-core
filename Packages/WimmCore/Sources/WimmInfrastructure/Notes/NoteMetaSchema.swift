@@ -20,7 +20,8 @@ public enum MetadataKey: String {
     case agentRouting = "agentRouting"
     case contentHash = "contentHash"
     case analysisGlossary = "analysisGlossary"
-    // PseudonymizationReceipt@v1 of the last masked analysis (null when unmasked).
+    // Legacy: receipt of a masked analysis (pseudonymization was removed
+    // 2026-11-17). No longer written; cleared with the other analysis stamps.
     case analysisPseudonymization = "analysisPseudonymization"
     // Device provenance: {"platform": "macOS"|"iPhone"|"iPad", "device": <name>}
     case origin = "origin"

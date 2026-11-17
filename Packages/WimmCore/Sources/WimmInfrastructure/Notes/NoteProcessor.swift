@@ -64,25 +64,19 @@ public actor NoteProcessor {
     }
 
     // MARK: - Main Entry Point
-    /// One vocabulary read per analysis: the glossary that is sent (without
-    /// sensitive terms in private mode) and the terms that are masked.
-    private func resolvedVocabulary(privateMode: Bool, archiveSnapshot: Bool = true) async throws -> PersonalGlossaryStore.AnalysisVocabulary {
-        guard let personalGlossaryStore else {
-            return .init(glossary: transcriptionGlossary, pseudonymDictionary: [])
-        }
-        return try await personalGlossaryStore.analysisVocabulary(
-            bundled: transcriptionGlossary, privateMode: privateMode, archiveSnapshot: archiveSnapshot)
+    /// One vocabulary read per analysis: the glossary that is sent.
+    private func resolvedGlossary() async throws -> TranscriptionGlossary? {
+        guard let personalGlossaryStore else { return transcriptionGlossary }
+        return try await personalGlossaryStore.analysisGlossary(bundled: transcriptionGlossary)
     }
 
-    private func makeClient(model: String, vocabulary: PersonalGlossaryStore.AnalysisVocabulary, privateMode: Bool) -> LLMJSONClient {
+    private func makeClient(model: String, glossary: TranscriptionGlossary?) -> LLMJSONClient {
         LLMJSONClient(
             model: model,
             tracer: nil,
             capability: .think,
-            transcriptionGlossary: vocabulary.glossary,
-            personalGlossaryStore: nil,
-            privateMode: privateMode,
-            pseudonymDictionary: vocabulary.pseudonymDictionary
+            transcriptionGlossary: glossary,
+            personalGlossaryStore: nil
         )
     }
 
@@ -119,16 +113,13 @@ public actor NoteProcessor {
         progress?(0.3)
 
         // 2. Generate NoteCard via LLM
-        let privateMode = PrivateMode.isEnabled
-        let vocabulary = try await resolvedVocabulary(privateMode: privateMode)
-        let transcriptionGlossary = vocabulary.glossary
+        let transcriptionGlossary = try await resolvedGlossary()
         let requestedModel = requestContext?["model"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let analysisModel = requestedModel.flatMap { $0.isEmpty ? nil : $0 } ?? Config.smartModel
-        let client = makeClient(model: analysisModel, vocabulary: vocabulary, privateMode: privateMode)
+        let client = makeClient(model: analysisModel, glossary: transcriptionGlossary)
         var card: NoteCard
         var glossaryWasApplied = false
-        var pseudonymization: PseudonymizationReceipt?
 
         let localHypothesis = await transcriptRepository.localTranscriptText(for: file)
         if let generated = await LLMCostContext.with(
@@ -148,7 +139,6 @@ public actor NoteProcessor {
             card = generated.card
             card.markProcessed()
             glossaryWasApplied = transcriptionGlossary != nil
-            pseudonymization = generated.pseudonymization
         } else {
             log("NoteProcessor: LLM failed, using naive fallback for \(file.lastPathComponent)")
             let fallbackText = await transcriptRepository.textOfRecord(for: file) ?? context
@@ -191,7 +181,7 @@ public actor NoteProcessor {
         } else {
             await metadataRepository.upsertMetadata(for: file, updates: [MetadataKey.analysisGlossary.rawValue: NSNull()])
         }
-        await stampPseudonymization(pseudonymization, for: file)
+        await clearLegacyPseudonymization(for: file)
 
         // 4a. Notify UI that NoteCard was created
         Task { @MainActor in
@@ -250,10 +240,8 @@ public actor NoteProcessor {
             throw ProcessingError.emptyContent
         }
 
-        let privateMode = PrivateMode.isEnabled
-        let vocabulary = try await resolvedVocabulary(privateMode: privateMode)
-        let transcriptionGlossary = vocabulary.glossary
-        let client = makeClient(model: Config.smartModel, vocabulary: vocabulary, privateMode: privateMode)
+        let transcriptionGlossary = try await resolvedGlossary()
+        let client = makeClient(model: Config.smartModel, glossary: transcriptionGlossary)
         let localHypothesis = await transcriptRepository.localTranscriptText(for: file)
         guard
             let result = await LLMCostContext.with(
@@ -291,38 +279,15 @@ public actor NoteProcessor {
         } else {
             await metadataRepository.upsertMetadata(for: file, updates: [MetadataKey.analysisGlossary.rawValue: NSNull()])
         }
-        await stampPseudonymization(result.pseudonymization, for: file)
+        await clearLegacyPseudonymization(for: file)
 
         return card
     }
 
-    /// What a private-mode analysis of `file` would send: same context builder,
-    /// vocabulary read, request builder and masking as `process`. No model call.
-    public func privateEgressPreview(file: URL) async throws -> PrivateEgressPreview {
-        let context = await buildContext(for: file, readOnly: true)
-        let localHypothesis = await transcriptRepository.localTranscriptText(for: file)
-        return try await privateEgressPreview(text: context, localTranscript: localHypothesis)
-    }
-
-    /// Local preview for supplied text (including CLI stdin). Uses the analysis
-    /// request builder and one vocabulary read; no model call or library writes.
-    public func privateEgressPreview(
-        text: String, localTranscript: String? = nil, lang: String? = nil
-    ) async throws -> PrivateEgressPreview {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw ProcessingError.emptyContent
-        }
-        let vocabulary = try await resolvedVocabulary(privateMode: true, archiveSnapshot: false)
-        let client = makeClient(model: Config.smartModel, vocabulary: vocabulary, privateMode: true)
-        return try await client.previewPrivateEgress(
-            noteId: UUID().uuidString, transcript: text, lang: lang, localTranscript: localTranscript)
-    }
-
-    /// Receipt of a masked analysis; cleared when the card came from an unmasked call or a fallback.
-    private func stampPseudonymization(_ receipt: PseudonymizationReceipt?, for file: URL) async {
+    /// A fresh analysis is never masked; drop a stale receipt from the removed pseudonymization.
+    private func clearLegacyPseudonymization(for file: URL) async {
         await metadataRepository.upsertMetadata(
-            for: file,
-            updates: [MetadataKey.analysisPseudonymization.rawValue: receipt?.metadata ?? NSNull()])
+            for: file, updates: [MetadataKey.analysisPseudonymization.rawValue: NSNull()])
     }
 
     // MARK: - Context Building (SINGLE SOURCE OF TRUTH)

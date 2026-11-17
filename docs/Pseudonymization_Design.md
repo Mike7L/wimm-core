@@ -1,5 +1,7 @@
 # Pseudonymization before model calls
 
+> **Removed 2026-11-17.** Private mode is now a cloud kill switch; this is history. See `Private_Mode_Kill_Switch_Decision_2026-11-17.md`.
+
 ## Решение 2026-10-31: развитие отложено
 
 Полноценную деперсонализацию пока не развиваем как отдельный большой проект:

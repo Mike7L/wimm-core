@@ -116,10 +116,6 @@ final class VisionDocumentAndSceneExtractorTests: XCTestCase {
             description,
             "[scene: outdoor, wine bottle, table | 2 people (1 face), 1 dog]"
         )
-
-        // Scene descriptions must not trigger false-positive pseudonym suspects.
-        let suspects = PseudonymSuspects.find(inMasked: description ?? "")
-        XCTAssertEqual(suspects, [])
     }
 
     func testSceneFormatter_MixedPhotoWithSmallInscriptionKeepsScene() {

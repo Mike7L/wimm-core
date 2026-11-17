@@ -50,7 +50,7 @@ actor VikContextTools {
 
     private func checkAccess() async throws {
         try Task.checkCancellation()
-        if PrivateMode.isEnabled { throw PseudonymizationError.cloudRequestRefused("Vik context") }
+        if PrivateMode.isEnabled { throw PrivateModeError.cloudRequestRefused("Vik context") }
         guard await isAllowed() else { throw CancellationError() }
     }
 

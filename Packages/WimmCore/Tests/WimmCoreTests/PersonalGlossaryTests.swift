@@ -103,7 +103,7 @@ final class PersonalGlossaryTests: XCTestCase {
         XCTAssertTrue(future.sensitive)
     }
 
-    func testPrivateModeWithholdsSensitiveTermsButMasksThem() async throws {
+    func testLegacySensitiveTermsAreOrdinaryGlossaryEntries() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let store = PersonalGlossaryStore(directory: folder)
@@ -118,17 +118,10 @@ final class PersonalGlossaryTests: XCTestCase {
         let stored = try await store.read()
         XCTAssertEqual(stored.terms.filter(\.sensitive).count, 2)
 
-        let open = try await store.analysisVocabulary(bundled: nil, privateMode: false)
-        XCTAssertEqual(Set(open.glossary?.entries.map(\.canonical) ?? []), ["Люмен", "Маша"])
-        let closed = try await store.analysisVocabulary(bundled: nil, privateMode: true)
-        XCTAssertEqual(closed.glossary?.entries.map(\.canonical), ["Люмен"])
-        XCTAssertEqual(Set(closed.pseudonymDictionary.map(\.canonical)), ["Маша", "Акме"])
-        XCTAssertEqual(closed.pseudonymDictionary.first { $0.canonical == "Маша" }?.kind, .person)
-        // The private artifact is archived, so its receipt can be replayed.
-        let sha = try XCTUnwrap(closed.glossary?.sha256)
+        let glossary = try await store.analysisGlossary(bundled: nil)
+        XCTAssertEqual(Set(glossary?.entries.map(\.canonical) ?? []), ["Люмен", "Маша"])
+        let sha = try XCTUnwrap(glossary?.sha256)
         let replay = try await store.snapshot(sha256: sha)
-        XCTAssertEqual(replay.entries.map(\.canonical), ["Люмен"])
-        let json = try LLMJSONClient.noteCardInputJSON(noteId: "t", transcript: "x", localHypothesis: nil, lang: "ru", glossary: closed.glossary)
-        XCTAssertFalse(json.contains("Маша"))
+        XCTAssertEqual(Set(replay.entries.map(\.canonical)), ["Люмен", "Маша"])
     }
 }

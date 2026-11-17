@@ -357,6 +357,5 @@ worker (the same accepted risk as `transcript retry`).
 The agent on the other end is usually a cloud model, so every tool call is
 egress of note text. With private mode on (`PrivateMode.isEnabled`) the
 tools **fail closed** with an explanatory tool error instead of returning
-unmasked text. Pseudonymizing the replies (the same `PseudonymFilter` +
-per-request map the analysis path uses) is possible, but then the agent
-would cite masked names back to the user — left for when someone needs it.
+note text. Private mode is a plain cloud kill switch; there is no masked
+reply path (`Private_Mode_Kill_Switch_Decision_2026-11-17.md`).

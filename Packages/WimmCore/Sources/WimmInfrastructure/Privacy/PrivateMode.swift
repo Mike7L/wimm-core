@@ -1,12 +1,13 @@
 import Foundation
 
-/// Private mode: note text reaches cloud models only pseudonymized, and paths
-/// that cannot be masked (cloud audio, cloud OCR) refuse. Off by default.
+/// Private mode: nothing reaches a cloud model. Every cloud request refuses;
+/// on-device work (Parakeet, Vision OCR, local search) is unaffected. Off by
+/// default. There is no masked middle ground: pseudonymization was removed
+/// (2026-11-17) because no one used it and it taxed every cloud feature.
 ///
-/// Enforcement has two layers. `LLMJSONClient` masks and marks its own request
-/// with `withPseudonymizedEgress`; `LLMTransport` refuses to build any cloud
-/// request that is not marked. So a new caller that skips masking fails
-/// closed instead of leaking.
+/// `LLMTransport` checks before it builds any request, so a new caller that
+/// goes through it fails closed. Code that bypasses it calls
+/// `checkCloudEgress` itself.
 public enum PrivateMode {
     /// `WIMM_PRIVATE_MODE=1|0` overrides the stored setting (tests, CLI runs).
     public static var isEnabled: Bool {
@@ -17,32 +18,32 @@ public enum PrivateMode {
         return SharedUserDefaults.store.bool(forKey: DefaultsKey.privateMode)
     }
 
-    public enum Egress: Sendable { case unmarked, pseudonymized, noUserContent }
-
-    @TaskLocal public static var egress: Egress = .unmarked
-
-    /// Marks requests built inside `operation` as already masked.
-    public static func withPseudonymizedEgress<T>(
-        isolation: isolated (any Actor)? = #isolation, _ operation: () async throws -> T
-    ) async rethrows -> T {
-        try await $egress.withValue(.pseudonymized, operation: operation, isolation: isolation)
-    }
-
-    /// Called by `LLMTransport` before it builds a cloud request.
+    /// Called before any cloud request is built.
     public static func checkCloudEgress(provider: String) throws {
-        guard isEnabled, egress == .unmarked else { return }
-        throw PseudonymizationError.cloudRequestRefused("an unmasked \(provider) request")
+        guard isEnabled else { return }
+        throw PrivateModeError.cloudRequestRefused("a \(provider) request")
     }
 
     /// True for the refusal above, so UI can say "private mode" instead of a generic failure.
     public static func isRefusal(_ error: Error?) -> Bool {
-        guard let error = error as? PseudonymizationError, case .cloudRequestRefused = error else { return false }
+        guard let error = error as? PrivateModeError, case .cloudRequestRefused = error else { return false }
         return true
     }
 
-    /// Called by the cloud audio adapters, which cannot be masked.
+    /// Called by the cloud audio adapters.
     public static func refuseCloudAudio(provider: String) throws {
         guard isEnabled else { return }
-        throw PseudonymizationError.cloudRequestRefused("audio to \(provider)")
+        throw PrivateModeError.cloudRequestRefused("audio to \(provider)")
+    }
+}
+
+public enum PrivateModeError: LocalizedError, Equatable, Sendable {
+    case cloudRequestRefused(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .cloudRequestRefused(let what):
+            return "Private mode: \(what) was not sent to the cloud."
+        }
     }
 }

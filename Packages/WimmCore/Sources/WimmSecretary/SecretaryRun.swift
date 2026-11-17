@@ -404,7 +404,7 @@ public enum SecretaryError: LocalizedError, Equatable {
         switch self {
         case .notAWorkspace(let path): "\(path) is not inside a workspace with a secretary/ folder."
         case .nothingToDo: "Nothing is waiting for the secretary: no open comment threads and no new or changed notes."
-        case .privateMode: "Private mode is on: an outside agent would read the document unmasked, so secretary runs are off."
+        case .privateMode: "Private mode is on: secretary runs are off."
         case .unsupportedPlatform: "Secretary runs require macOS and cannot launch an external agent on this platform."
         case .busy(let run): "Another secretary run is in progress (\(run))."
         case .executorMissing(let name): "\(name) was not found. Install it or set its path."

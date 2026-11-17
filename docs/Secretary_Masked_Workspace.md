@@ -1,5 +1,7 @@
 # Secretary on a masked workspace copy
 
+> **Removed 2026-11-17.** Private mode is now a cloud kill switch; this is history. See `Private_Mode_Kill_Switch_Decision_2026-11-17.md`.
+
 Date: 2026-10-25
 
 Status: **design, nothing built; phase 0 partly measured (§13).** Extends `Secretary_Dispatcher.md` (§4.1

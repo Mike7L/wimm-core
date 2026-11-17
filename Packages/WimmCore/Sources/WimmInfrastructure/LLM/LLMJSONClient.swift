@@ -9,26 +9,16 @@ public actor LLMJSONClient {
     private let tracer: (@Sendable (String) -> Void)?
     private let transcriptionGlossary: TranscriptionGlossary?
     private let personalGlossaryStore: PersonalGlossaryStore?
-    /// nil reads `PrivateMode.isEnabled` once per call.
-    private let privateMode: Bool?
-    /// Sensitive terms to mask; nil loads them from `personalGlossaryStore`.
-    private let pseudonymDictionary: [PseudonymFilter.DictionaryTerm]?
-    private let pseudonymMapArchive: PseudonymMapArchive?
 
     public struct NoteCardResult: Sendable {
         public let card: NoteCard
-        /// Set only when the request went out masked.
-        public let pseudonymization: PseudonymizationReceipt?
     }
 
     public init(
         model: String, tracer: (@Sendable (String) -> Void)?, transport: LLMTransport = .shared,
         capability: ModelCapability = .understand,
         transcriptionGlossary: TranscriptionGlossary? = .production,
-        personalGlossaryStore: PersonalGlossaryStore? = .shared,
-        privateMode: Bool? = nil,
-        pseudonymDictionary: [PseudonymFilter.DictionaryTerm]? = nil,
-        pseudonymMapArchive: PseudonymMapArchive? = .shared
+        personalGlossaryStore: PersonalGlossaryStore? = .shared
     ) {
         self.model = model
         self.tracer = tracer
@@ -36,9 +26,6 @@ public actor LLMJSONClient {
         self.capability = capability
         self.transcriptionGlossary = transcriptionGlossary
         self.personalGlossaryStore = personalGlossaryStore
-        self.privateMode = privateMode
-        self.pseudonymDictionary = pseudonymDictionary
-        self.pseudonymMapArchive = pseudonymMapArchive
     }
 
     public init(
@@ -54,48 +41,20 @@ public actor LLMJSONClient {
         self.capability = capability
         self.transcriptionGlossary = transcriptionGlossary
         self.personalGlossaryStore = personalGlossaryStore
-        self.privateMode = nil
-        self.pseudonymDictionary = nil
-        self.pseudonymMapArchive = .shared
     }
 
     private func call(
-        system: String, userJSON: String, origin: String = #function, reason: String? = nil,
-        privacy: Privacy? = nil
+        system: String, userJSON: String, origin: String = #function, reason: String? = nil
     ) async throws -> PerformResult {
         return try await perform(
             system: system, userJSON: userJSON, temperature: 0.2, schema: nil,
             timeout: LLMCfg.requestTimeout, responseMimeType: "application/json",
-            traceTag: "LLM response ←", origin: origin, reason: reason, privacy: privacy)
-    }
-
-    /// Whether and with which dictionary one call is masked. Resolved once per
-    /// call so the glossary that is sent and the masking agree.
-    struct Privacy: Sendable {
-        let enabled: Bool
-        let dictionary: [PseudonymFilter.DictionaryTerm]
-        /// Lowercased glossary names: they are sent as spelling evidence, so
-        /// the suspect rules must not mask them.
-        var readable: Set<String> = []
-
-        static func readableNames(in glossary: TranscriptionGlossary?) -> Set<String> {
-            Set((glossary?.entries ?? []).flatMap { [$0.canonical] + $0.observedForms }.map { $0.lowercased() })
-        }
+            traceTag: "LLM response ←", origin: origin, reason: reason)
     }
 
     struct PerformResult: Sendable {
         let text: String
         let metadata: [String: String]
-        let pseudonymization: PseudonymizationReceipt?
-    }
-
-    private func resolvedPrivacy() async throws -> Privacy {
-        let enabled = privateMode ?? PrivateMode.isEnabled
-        guard enabled else { return Privacy(enabled: false, dictionary: []) }
-        if let pseudonymDictionary { return Privacy(enabled: true, dictionary: pseudonymDictionary) }
-        let dictionary = try await personalGlossaryStore?
-            .analysisVocabulary(bundled: nil, privateMode: true).pseudonymDictionary ?? []
-        return Privacy(enabled: true, dictionary: dictionary)
     }
 
     public func makeNoteCard(
@@ -108,7 +67,7 @@ public actor LLMJSONClient {
             localTranscript: localTranscript, origin: origin, reason: reason)?.card
     }
 
-    /// `makeNoteCard` plus the pseudonymization receipt for the caller to stamp.
+    /// `makeNoteCard` as a result value.
     public func makeNoteCardResult(
         noteId: String, transcript: String, lang: String?, fileName: String,
         localTranscript: String? = nil,
@@ -117,18 +76,17 @@ public actor LLMJSONClient {
         let request: NoteCardRequest
         do {
             guard let built = try await noteCardRequest(
-                noteId: noteId, transcript: transcript, lang: lang, localTranscript: localTranscript,
-                privateMode: privateMode ?? PrivateMode.isEnabled)
+                noteId: noteId, transcript: transcript, lang: lang, localTranscript: localTranscript)
             else { return nil }
             request = built
         } catch {
             logAndTrace("Cannot build NoteCard request (vocabulary or encoding): \(error)")
             return nil
         }
-        let sys = request.system, user = request.user, privacy = request.privacy
+        let sys = request.system, user = request.user
         do {
             let result = try await call(
-                system: sys, userJSON: user, origin: origin, reason: reason, privacy: privacy)
+                system: sys, userJSON: user, origin: origin, reason: reason)
             let metadata = result.metadata
             let clean = LLMText.stripFences(result.text)
             // Be tolerant to note_id vs note_file
@@ -149,7 +107,7 @@ public actor LLMJSONClient {
                     provider: metadata["provider"],
                     model_used: metadata["model"]
                 )
-                return NoteCardResult(card: card, pseudonymization: result.pseudonymization)
+                return NoteCardResult(card: card)
             }
         } catch {
             logAndTrace("NoteCard LLM error: \(error)")
@@ -160,37 +118,24 @@ public actor LLMJSONClient {
     struct NoteCardRequest: Sendable {
         let system: String
         let user: String
-        let privacy: Privacy
     }
 
-    /// The one place a NoteCard request is assembled: analysis and the private
-    /// preview both call it, so the preview cannot drift from what is sent.
+    /// The one place a NoteCard request is assembled.
     private func noteCardRequest(
-        noteId: String, transcript: String, lang: String?, localTranscript: String?, privateMode enabled: Bool,
-        archiveVocabulary: Bool = true
+        noteId: String, transcript: String, lang: String?, localTranscript: String?
     ) async throws -> NoteCardRequest? {
         if transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return nil
         }
         var sys = PromptLoader.load("transcription_note_card_extraction")
         let transcriptionGlossary: TranscriptionGlossary?
-        let privacy: Privacy
         if let personalGlossaryStore {
-            let vocabulary = try await personalGlossaryStore.analysisVocabulary(
-                bundled: self.transcriptionGlossary, privateMode: enabled, archiveSnapshot: archiveVocabulary)
-            transcriptionGlossary = vocabulary.glossary
-            privacy = Privacy(enabled: enabled, dictionary: pseudonymDictionary ?? vocabulary.pseudonymDictionary,
-                              readable: Privacy.readableNames(in: transcriptionGlossary))
+            transcriptionGlossary = try await personalGlossaryStore.analysisGlossary(bundled: self.transcriptionGlossary)
         } else {
             transcriptionGlossary = self.transcriptionGlossary
-            privacy = Privacy(enabled: enabled, dictionary: pseudonymDictionary ?? [],
-                              readable: Privacy.readableNames(in: transcriptionGlossary))
         }
         if transcriptionGlossary?.protocolVersion == "context-v4-personal" {
             sys += "\n" + TranscriptionGlossary.personalPromptContract
-        }
-        if privacy.enabled {
-            sys += "\n" + Self.pseudonymPromptContract
         }
         let trimmedLocal = localTranscript?.trimmingCharacters(in: .whitespacesAndNewlines)
         let user = try Self.noteCardInputJSON(
@@ -200,34 +145,7 @@ public actor LLMJSONClient {
             lang: lang,
             glossary: transcriptionGlossary
         )
-        return NoteCardRequest(system: sys, user: user, privacy: privacy)
-    }
-
-    /// What a private-mode NoteCard analysis of this text would send, built by
-    /// the same request builder and masking code as the real call. Local only:
-    /// no model call, no log entry, and the map is not archived.
-    public func previewPrivateEgress(
-        noteId: String, transcript: String, lang: String?, localTranscript: String? = nil
-    ) async throws -> PrivateEgressPreview {
-        guard let request = try await noteCardRequest(
-            noteId: noteId, transcript: transcript, lang: lang, localTranscript: localTranscript,
-            privateMode: true, archiveVocabulary: false)
-        else { throw PseudonymizationError.cloudRequestRefused("an empty note") }
-        do {
-            let inspection = try PseudonymizedPayload.inspect(
-                user: request.user, filter: Self.egressFilter(request.privacy))
-            return PrivateEgressPreview(
-                system: request.system, inspection: inspection,
-                dictionaryTerms: request.privacy.dictionary.count, refusal: nil)
-        } catch let error as PseudonymizationError {
-            return PrivateEgressPreview(
-                system: request.system, inspection: nil,
-                dictionaryTerms: request.privacy.dictionary.count, refusal: error.localizedDescription)
-        }
-    }
-
-    static func egressFilter(_ privacy: Privacy) -> PseudonymFilter {
-        PseudonymFilter(dictionary: privacy.dictionary, readable: privacy.readable)
+        return NoteCardRequest(system: sys, user: user)
     }
 
     static func noteCardInputJSON(
@@ -387,12 +305,11 @@ public actor LLMJSONClient {
     private func perform(
         system: String, userJSON: String, temperature: Double, schema: [String: Any]?,
         timeout: TimeInterval, responseMimeType: String, traceTag: String,
-        modelOverride: String? = nil, origin: String = #function, reason: String? = nil,
-        privacy: Privacy? = nil
+        modelOverride: String? = nil, origin: String = #function, reason: String? = nil
     ) async throws -> PerformResult {
         if let mode = ProcessInfo.processInfo.environment["WIMM_TEST_MODE"] {
             if mode == "FAIL_JSON" {
-                return PerformResult(text: "Invalid JSON {", metadata: ["provider": "test", "model": "mock_fail"], pseudonymization: nil)
+                return PerformResult(text: "Invalid JSON {", metadata: ["provider": "test", "model": "mock_fail"])
             }
             // Default success mock
             let mockJson = """
@@ -407,33 +324,16 @@ public actor LLMJSONClient {
                     "agent_reason": "Testing"
                 }
                 """
-            return PerformResult(text: mockJson, metadata: ["provider": "test", "model": "mock"], pseudonymization: nil)
+            return PerformResult(text: mockJson, metadata: ["provider": "test", "model": "mock"])
         }
 
         let effModel = modelOverride ?? model
         let provider = ModelProviderFactory.create(
             capability: capability, identifier: effModel, transport: transport)
         let logOrigin = resolvedOrigin(origin)
-        // Attribution is read from the real payload: masking may rewrite note ids.
         var logAttributes = buildLogAttributes(origin: logOrigin, userJSON: userJSON)
 
-        // Single egress point. Everything below — the queue preview, the
-        // tracer, the event log and the provider — sees only the masked copy.
-        let effectivePrivacy: Privacy
-        if let privacy { effectivePrivacy = privacy } else { effectivePrivacy = try await resolvedPrivacy() }
-        var pseudonymized: PseudonymizedPayload?
-        var pseudonymization: PseudonymizationReceipt?
-        let isCloud = provider.provider == .gemini || provider.provider == .openrouter
-        if effectivePrivacy.enabled && isCloud {
-            let payload = try PseudonymizedPayload.mask(user: userJSON, filter: Self.egressFilter(effectivePrivacy))
-            let mapSha256 = try pseudonymMapArchive?.archive(payload.map) ?? payload.map.sha256()
-            pseudonymized = payload
-            pseudonymization = PseudonymizationReceipt(mapSha256: mapSha256, counts: payload.map.counts)
-            logAttributes["private_mode"] = "1"
-            logAttributes["pseudonym_map_sha256"] = mapSha256
-            logAttributes["pseudonym_entities"] = String(payload.map.entries.count)
-        }
-        let sentUser = pseudonymized?.user ?? userJSON
+        let sentUser = userJSON
         if let reason = reason, !reason.isEmpty {
             logAttributes["reason"] = reason
         }
@@ -484,9 +384,7 @@ public actor LLMJSONClient {
                 responseMimeType: responseMimeType,
                 traceTag: traceTag
             )
-            let response = try await PrivateMode.withPseudonymizedEgress {
-                try await provider.performDetailed(request: request, tracer: tracer)
-            }
+            let response = try await provider.performDetailed(request: request, tracer: tracer)
             let result = response.text
             var responseAttributes = logAttributes
             if let usage = response.usage, !usage.isEmpty {
@@ -511,8 +409,7 @@ public actor LLMJSONClient {
                     )
                 }
             }
-            let restored = try pseudonymized?.unmask(response: result) ?? result
-            return PerformResult(text: restored, metadata: provider.metadata, pseudonymization: pseudonymization)
+            return PerformResult(text: result, metadata: provider.metadata)
         } catch {
             let errorAttributes = enrichLogAttributesForError(logAttributes, error: error)
             LLMLogger.shared.logResponse(
@@ -538,10 +435,6 @@ public actor LLMJSONClient {
             throw error
         }
     }
-
-    static let pseudonymPromptContract = """
-    Private mode: personal data in the input is replaced by placeholders such as ⟦P3⟧ (person), ⟦O1⟧ (organisation), ⟦L2⟧ (place), ⟦X1⟧ (other name or number), ⟦E1⟧ (email), ⟦T1⟧ (phone), ⟦I1⟧ (IBAN), ⟦C1⟧ (card), ⟦A1⟧ (address). Copy every placeholder exactly as written, including any suffix such as ⟦P3:f1⟧. Never invent, renumber, merge, translate or explain placeholders, and never guess what they stand for. In Russian output you may mark the grammatical case of a person, organisation or place placeholder by appending :nom, :gen, :dat, :acc, :ins or :prep, e.g. ⟦P3:dat⟧; use no other suffixes.
-    """
 
     private static func queueType(for capability: ModelCapability) -> ModelType {
         switch capability {

@@ -16,8 +16,8 @@ public enum DefaultsKey {
     public static let skipSilencePlayback = "skipSilencePlayback"
     public static let activeNoteId = "activeNoteId"
 
-    // Private mode: pseudonymize note text before cloud LLM calls and refuse
-    // cloud audio/OCR (Bool, default false; env WIMM_PRIVATE_MODE overrides).
+    // Private mode: refuse every cloud request (Bool, default false;
+    // env WIMM_PRIVATE_MODE overrides).
     public static let privateMode = "privateMode"
 
     // Micro audio: a silence-trimmed `_micro.m4a` upload copy (smaller than mini) that

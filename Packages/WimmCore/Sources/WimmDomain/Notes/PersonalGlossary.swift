@@ -1,7 +1,6 @@
 import Foundation
 
-/// What a personal term names. Drives the placeholder type when the term is
-/// masked before a cloud call (`⟦P3⟧` person, `⟦O1⟧` org, `⟦L2⟧` place).
+/// What a personal term names (person, organisation, place, other).
 public enum PersonalGlossaryKind: String, Codable, CaseIterable, Sendable {
     case person, org, place, other
 
@@ -23,8 +22,8 @@ public struct PersonalGlossaryTerm: Codable, Identifiable, Equatable, Sendable {
     public var confirmedAt: Date
     /// Optional; files written before 2026-10-19 have no kind.
     public var kind: PersonalGlossaryKind?
-    /// Masked before cloud calls in private mode and never sent in
-    /// `note.glossary` there. Absent in older files, read as `false`.
+    /// Legacy flag from the removed pseudonymization; kept so files round-trip.
+    /// No code acts on it. Absent in older files, read as `false`.
     public var sensitive: Bool
 
     public init(id: UUID = UUID(), canonical: String = "", context: String = "",

@@ -626,11 +626,10 @@ public struct TranscriptionService: Sendable {
 
 
 
-        // Private mode: audio cannot be pseudonymized, so it never goes to a
-        // cloud engine. Say so explicitly instead of a generic failure.
+        // Private mode: audio never goes to a cloud engine. Say so explicitly instead of a generic failure.
         if PrivateMode.isEnabled {
             log("transcribe refused: private mode is on, cloud engine \(engine.rawValue) file=\(file.lastPathComponent)")
-            return .failure(.privateMode, underlying: PseudonymizationError.cloudRequestRefused("audio"))
+            return .failure(.privateMode, underlying: PrivateModeError.cloudRequestRefused("audio"))
         }
         let route = cloudRoute(engine: engine, configuredModel: model)
         let effProvider = route.provider
