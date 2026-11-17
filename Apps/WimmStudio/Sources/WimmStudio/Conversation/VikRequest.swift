@@ -48,10 +48,10 @@ enum VikCodeTask {
     }
 
     /// Short form for the `idea-review` skill: «Алёна, идея: …» or just
-    /// «Алёна, идея» after the thought itself. Same draft, never sent by Wimm.
+    /// «Алёна, идея» / «запусти эту идею» after the thought itself. Same draft, never sent by Wimm.
     private static func ideaTask(from query: String) -> String? {
         guard let range = query.range(
-            of: #"(?iu)^(?:(?:проработай|оцени|разбери|покритикуй|посмотри|глянь)\s+)?иде[яю](?![\p{L}\p{N}])"#,
+            of: #"(?iu)^(?:(?:проработай|оцени|разбери|покритикуй|посмотри|глянь|запусти|запускай)\s+(?:(?:вот\s+)?(?:эту|мою)\s+)?)?иде[яю](?![\p{L}\p{N}])"#,
             options: .regularExpression) else { return nil }
         let idea = String(query[range.upperBound...])
             .replacingOccurrences(of: #"^[\s,.!?:;—–-]+"#, with: "", options: .regularExpression)
@@ -82,12 +82,19 @@ enum VikCodeTask {
 
 /// Holds the trailing incomplete sentence until another piece arrives. A
 /// sentence boundary needs whitespace after punctuation, so «3.5» stays whole.
+/// The first piece may end at a clause pause: the first sound waits for the whole
+/// first piece to be synthesized, and a 20 s first sentence took up to 0.9 s.
 struct VikSentences {
     private var buffer = ""
+    private var emitted = false
+    /// A first clause shorter than this is not worth its own pause.
+    static let firstClauseMinimum = 30
 
     mutating func append(_ piece: String, final: Bool = false) -> [String] {
         buffer += piece
         var result: [String] = []
+        if !emitted, let clause = takeFirstClause() { result.append(clause) }
+        defer { if !result.isEmpty { emitted = true } }
         while let range = buffer.range(of: #"[.!?…][\s\n]+|\n+"#, options: .regularExpression) {
             let sentence = String(buffer[..<range.upperBound]).trimmingCharacters(in: .whitespacesAndNewlines)
             buffer = String(buffer[range.upperBound...])
@@ -99,5 +106,23 @@ struct VikSentences {
             buffer = ""
         }
         return result
+    }
+
+    /// The opening clause of the first sentence, cut at «, », «: », «; » or « — » once it
+    /// is long enough; a short tail after the cut keeps the sentence whole.
+    private mutating func takeFirstClause() -> String? {
+        let end = buffer.range(of: #"[.!?…][\s\n]+|\n+"#, options: .regularExpression)?.lowerBound
+        let head = buffer[..<(end ?? buffer.endIndex)]
+        var search = head.startIndex
+        while let pause = head.range(of: #"[,:;]\s+|\s[—–]\s+"#, options: .regularExpression, range: search..<head.endIndex) {
+            search = pause.upperBound
+            let clause = head[..<pause.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard clause.count >= Self.firstClauseMinimum else { continue }
+            if let end, buffer.distance(from: pause.upperBound, to: end) < 15 { return nil }
+            let cut = String(buffer[..<pause.upperBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            buffer = String(buffer[pause.upperBound...])
+            return cut
+        }
+        return nil
     }
 }

@@ -7,7 +7,9 @@ final class VikIdeaPhraseTests: XCTestCase {
         XCTAssertEqual(VikCodeTask.extract(from: "Посмотри идею — склад в гараже"), "Проработай идею: склад в гараже")
         XCTAssertEqual(VikCodeTask.extract(from: "оцени идею"), "Проработай идею, сказанную в этой заметке до обращения.")
         XCTAssertEqual(VikCodeTask.extract(from: "Идея."), "Проработай идею, сказанную в этой заметке до обращения.")
-        for text in ["идеи есть?", "идеальный план", "у меня идея", "какая идея была вчера", "оцени заметку"] {
+        XCTAssertEqual(VikCodeTask.extract(from: "запусти эту идею."), "Проработай идею, сказанную в этой заметке до обращения.")
+        XCTAssertEqual(VikCodeTask.extract(from: "Оцени вот эту идею: склад"), "Проработай идею: склад")
+        for text in ["идеи есть?", "идеальный план", "у меня идея", "какая идея была вчера", "оцени заметку", "запусти запись", "эту идею забудь"] {
             XCTAssertNil(VikCodeTask.extract(from: text), text)
         }
     }
