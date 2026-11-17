@@ -82,9 +82,10 @@ final class CLIRetranscribeTests: XCTestCase {
 
     func testApplyReplacesTranscriptAndKeepsTheOldOneAsPreviousRun() throws {
         let (out, status) = try runWimm(["transcript", "retranscribe", "Wimm_2026-10-13_01-08-40_BD002026.m4a",
-                                         "--model", "gemini-test-model", "--no-analyze", "--apply"])
+                                         "--model", "gemini-test-model", "--apply"])
         XCTAssertEqual(status, 0, out)
         XCTAssertTrue(out.contains("speech: 3 → 8 words"), out)
+        XCTAssertFalse(out.contains("analy"), "no note analysis unless --analyze: \(out)")
         let transcription = try transcription()
         XCTAssertEqual(transcription["transcript"] as? String, Self.mocked)
         let previous = try XCTUnwrap(transcription["previousRuns"] as? [[String: Any]])

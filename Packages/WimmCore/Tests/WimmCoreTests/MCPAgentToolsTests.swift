@@ -192,7 +192,7 @@ final class MCPAgentToolsTests: XCTestCase {
         let (reply, isError) = try await tool("request_retranscription",
             #"{"ids":["Wimm_2026-10-13_01-08-40_BD002026","BBBB","nope"],"reason":"looped"}"#)
         XCTAssertFalse(isError)
-        XCTAssertTrue(reply.hasPrefix("1 of 3 queued with gemini-test-model"))
+        XCTAssertTrue(reply.hasPrefix("1 of 3 queued with gemini-test-model, no analysis"), reply)
         XCTAssertTrue(reply.contains("BBBB: not audio (image)"))
         XCTAssertTrue(reply.contains("nope: no single note matches"))
         XCTAssertEqual(workerStarts.count, 1)
@@ -246,7 +246,7 @@ final class MCPAgentToolsTests: XCTestCase {
             return content.first?["text"] as? String ?? ""
         }
 
-        let reply = try await call("request_retranscription", #"{"ids":["CCCC"]}"#)
+        let reply = try await call("request_retranscription", #"{"ids":["CCCC"],"analyze":true}"#)
         XCTAssertTrue(reply.hasPrefix("2 of 2 queued"), reply)
         XCTAssertTrue(reply.contains("Evernote_20190409_19:04:22.m4a (attachment): queued"))
         let entries = RetranscriptionQueue(directory: state).entries()

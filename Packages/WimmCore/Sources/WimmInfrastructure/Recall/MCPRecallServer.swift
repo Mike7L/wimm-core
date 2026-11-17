@@ -275,7 +275,7 @@ public struct MCPRecallServer: Sendable {
                 "properties": [
                     "ids": ["type": "array", "items": ["type": "string"], "description": "Notes to retranscribe (max 200): \(noteRefHelp)"],
                     "model": ["type": "string", "description": "Transcription model, e.g. gemini-3-flash-preview or parakeet:ultra (default: the model chosen in Wimm Settings)"],
-                    "analyze": ["type": "boolean", "description": "Re-run the note analysis (title, summary, refined text) after a transcript with speech (default true)"],
+                    "analyze": ["type": "boolean", "description": "Re-run the note analysis (title, summary, refined text) after a transcript with speech. Default false: it is a paid cloud model call per note, so ask only when the user wants it"],
                     "reason": ["type": "string", "description": "Why — kept with the request"],
                 ],
                 "required": ["ids"],
@@ -804,7 +804,9 @@ public struct MCPRecallServer: Sendable {
         if isPrivate(), !ParakeetModel.isParakeet(model) {
             throw ToolError("Wimm is in private mode: \(model) would send the audio to the cloud. Use model parakeet:ultra (on-device), or turn private mode off in Wimm.")
         }
-        let analyze = bool(arguments["analyze"]) ?? true
+        // A NoteCard is a paid model call per note and nothing reads it for
+        // labels any more, so a retranscription never re-analyzes unasked.
+        let analyze = bool(arguments["analyze"]) ?? false
         let reason = Self.trimmed(arguments["reason"], max: 500)
         let requestedAt = now()
         var lines: [String] = []

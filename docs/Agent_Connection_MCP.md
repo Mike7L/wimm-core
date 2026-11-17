@@ -23,7 +23,7 @@ costs Wimm nothing in tokens.
 | `recent_notes` | optional `days`, `since`, `until`, `updated_since`, `include_empty` (default true), `limit` (≤ 100) | Newest first: header line, facts line, summary or text preview |
 | `get_note` | `id` (full or unambiguous prefix, or the file name) | Provenance lines + every text variant as its own labeled block (capped at 20k chars in total) |
 | `changed_notes` | `since` (date, or `"last_pass"`), `cursor`, `skip_unchanged_marked`, `limit` (≤ 200) | Oldest change first, keyset-paged; each note says what changed and how it relates to the agent's mark |
-| `request_retranscription` | `ids` (≤ 200), optional `model`, `analyze` (default true), `reason` | Queues audio notes — or the audio attachments of a text note (Evernote) — for a fresh transcription (see *Agent writes*) |
+| `request_retranscription` | `ids` (≤ 200), optional `model`, `analyze` (default false: a paid NoteCard call per note), `reason` | Queues audio notes — or the audio attachments of a text note (Evernote) — for a fresh transcription (see *Agent writes*) |
 | `retranscription_queue` | optional `state`, `limit` | Requests newest first with their outcome |
 | `mark_notes` | `marks: [{id, status, source?, comment?}]` (≤ 500) | Stores the agent's status per note: `applied` / `pending` / `noise` / `failed`, or `clear` |
 | `marked_notes` | optional `status`, `source`, `changed_since_mark`, `limit`, `offset` | Marked notes, newest mark first |
@@ -321,21 +321,23 @@ whose recordings live under `Attachments/Evernote/<id>/` and are listed only in
 its sidecar's `attachments` array (`NoteAttachmentMedia`). Asked for such a
 note, `request_retranscription` queues **one entry per audio attachment**:
 `file` is the attachment, `parentFile` / `attachmentID` point back at the note,
-and only the last one carries `analyze` (one analysis per note). The worker
+and only the last one carries `analyze` when it was asked for (one analysis per note). The worker
 transcribes the attachment (its own run history stays next to the file), then
 writes the text onto that attachment entry in the note's sidecar with
 `NoteAttachmentMedia.setText` — in place, under `mutateSidecar`, and a
-no-speech verdict never replaces earlier text — and analyzes the note. Old
+no-speech verdict never replaces earlier text — and, if asked, analyzes the note. Old
 queue files decode unchanged (both fields optional); `get_note` and
 `changed_notes` find an attachment request through `parentFile`.
 
 **The same run from a terminal**: `wimm-cli transcript retranscribe <id>
-[--model M] [--lang L] [--no-analyze] [--apply]` resolves the note exactly as
+[--model M] [--lang L] [--analyze] [--apply]` resolves the note exactly as
 `get_note` does (id, prefix, or file name), prints the note, the model
 (on-device or cloud) and the current word count, and is a dry-run until
 `--apply`. It runs synchronously in the CLI process — no queue — through the
 same `NoteRetranscription.run` the worker uses, and prints the old → new word
-counts. `transcript retry <path>` remains the path-based variant.
+counts. `transcript retry <path>` remains the path-based variant. Neither re-runs the
+note analysis (a paid NoteCard call) unless `--analyze` is passed
+(2026-11-17; before that both analyzed by default).
 
 Not coordinated: the sidecar lock is in-process, so a running Wimm.app
 writing the same sidecar at the same moment is not serialized against the

@@ -29,6 +29,9 @@ struct TranscriptRetry: AsyncParsableCommand {
     @Option(name: .long, help: "Spoken language hint")
     var lang: String = "Auto"
 
+    @Flag(name: .long, help: "Also re-run the note analysis (a paid cloud call) after a transcript with speech")
+    var analyze: Bool = false
+
     func run() async throws {
         let file = URL(fileURLWithPath: path).standardizedFileURL
         guard FileManager.default.fileExists(atPath: file.path) else {
@@ -66,6 +69,7 @@ struct TranscriptRetry: AsyncParsableCommand {
                 print("No speech detected; analysis is not applicable.")
                 return
             }
+            guard analyze else { return }
             print("Running note analysis...")
             _ = try await NoteProcessor.shared.reprocess(
                 file: file,
@@ -135,8 +139,8 @@ struct TranscriptRetranscribe: AsyncParsableCommand {
     @Option(name: .long, help: "Spoken language hint")
     var lang: String = "Auto"
 
-    @Flag(inversion: .prefixedNo, help: "Re-run the note analysis after a transcript with speech")
-    var analyze: Bool = true
+    @Flag(inversion: .prefixedNo, help: "Also re-run the note analysis (a paid cloud call) after a transcript with speech")
+    var analyze: Bool = false
 
     @Flag(name: .long, help: "Run the transcription (default: report only)")
     var apply: Bool = false
