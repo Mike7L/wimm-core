@@ -176,7 +176,7 @@ public final class CaptureSession {
             speech = speechFactory()
             let gate = SilenceGate(policy: SilenceSplitPolicy.stored(), store: store, speech: speech)
             self.gate = gate
-            let format = try startAudio(source)
+            let format = try await startAudioRetrying(source, revision: revision)
             gate.start(with: try AudioFileSink(url: url, format: format))
             self.format = format
             recordingURL = url
@@ -196,8 +196,68 @@ public final class CaptureSession {
             gateLoop = nil
             speech = nil
             phase = .idle
-            errorMessage = error.localizedDescription
+            if case CaptureSessionError.superseded? = error as? CaptureSessionError { return }
+            errorMessage = Self.microphoneMessage(for: error, device: inputDeviceName)
         }
+    }
+
+    /// A Bluetooth headset switching profile rejects the input format for a
+    /// moment ('!dat', or a sample-rate mismatch), so a failed microphone start
+    /// is retried this long before it is reported.
+    @ObservationIgnored var microphoneRetryWindow: Duration = .seconds(3)
+    static let microphoneRetryInterval: Duration = .milliseconds(250)
+
+    /// Starts `first`, or a fresh source after each failure, until one runs or
+    /// the retry window ends. Stops early when another capture command came in.
+    private func startAudioRetrying(_ first: any LiveAudioSource, revision: UInt64) async throws -> AVAudioFormat {
+        let clock = ContinuousClock()
+        let deadline = clock.now + microphoneRetryWindow
+        var source = first
+        var attempt = 1
+        while true {
+            do {
+                let format = try startAudio(source)
+                self.source = source
+                if attempt > 1 { log("[Capture] \(inputDeviceName ?? "input") started on attempt \(attempt)") }
+                return format
+            } catch {
+                source.stop()
+                let device = (source as? MicrophoneAudioSource)?.inputDevice?.name ?? "unknown input"
+                log("[Capture] \(device) failed to start (attempt \(attempt)): \(Self.describe(error))")
+                guard clock.now < deadline else { throw error }
+                try? await Task.sleep(for: Self.microphoneRetryInterval)
+                guard actionRevision == revision else { throw CaptureSessionError.superseded }
+                source = sourceFactory()
+                self.source = source
+                attempt += 1
+            }
+        }
+    }
+
+    static func describe(_ error: Error) -> String {
+        let ns = error as NSError
+        return "\(ns.domain) \(ns.code)\(fourCC(ns.code).map { " '\($0)'" } ?? ""): \(ns.localizedDescription)"
+    }
+
+    static func fourCC(_ code: Int) -> String? {
+        guard code > 0x2020_2020, code <= 0x7E7E_7E7E else { return nil }
+        let bytes = [24, 16, 8, 0].map { UInt8((code >> $0) & 0xFF) }
+        guard bytes.allSatisfy({ (0x20...0x7E).contains($0) }) else { return nil }
+        return String(decoding: bytes, as: UTF8.self)
+    }
+
+    /// The input refused its format ('!dat' from CoreAudio, or our own
+    /// sample-rate check): what a Bluetooth profile switch looks like.
+    static func isFormatRefusal(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.code == 0x2164_6174 || (ns.domain == "MicrophoneAudioSource" && ns.code == 2003)
+    }
+
+    static func microphoneMessage(for error: Error, device: String?) -> String {
+        guard isFormatRefusal(error) else { return error.localizedDescription }
+        let name = device.map { "«\($0)»" } ?? ""
+        return "Микрофон \(name) не принял формат записи — наушники, вероятно, переключали режим. Нажмите запись ещё раз или выберите другой вход."
+            .replacingOccurrences(of: "  ", with: " ")
     }
 
     private func clearSignals() {
@@ -519,7 +579,7 @@ public final class CaptureSession {
     private func startLevel() {
         // The meter needs more than the 1 s text refresh to look alive.
         levelLoop = Task { [weak self] in
-            var restartFailures = 0
+            var failingSince: ContinuousClock.Instant?
             var silentRestarts = 0
             var silenceWarning: String?
             while !Task.isCancelled {
@@ -545,7 +605,10 @@ public final class CaptureSession {
                         _ = try self.startAudio(replacement)
                         self.source = replacement
                         self.stampInputDevice()
-                        restartFailures = 0
+                        if failingSince != nil {
+                            log("[Capture] \(self.inputDeviceName ?? device) restarted after a failed restart")
+                            failingSince = nil
+                        }
                         if silent {
                             silentRestarts += 1
                             if silentRestarts == Self.silentRestartsBeforeWarning {
@@ -556,9 +619,14 @@ public final class CaptureSession {
                         }
                     } catch {
                         replacement.stop()
-                        restartFailures += 1
-                        if restartFailures >= 10 {
-                            self.errorMessage = error.localizedDescription
+                        let now = ContinuousClock.now
+                        if failingSince == nil {
+                            failingSince = now
+                            log("[Capture] \(device) failed to restart: \(Self.describe(error))")
+                        }
+                        if let since = failingSince, now - since >= self.microphoneRetryWindow {
+                            log("[Capture] \(device) still failing after \(self.microphoneRetryWindow), stopping: \(Self.describe(error))")
+                            self.errorMessage = Self.microphoneMessage(for: error, device: self.inputDeviceName ?? device)
                             await self.stop()
                             return
                         }
@@ -602,9 +670,11 @@ public final class CaptureSession {
 private enum CaptureSessionError: LocalizedError {
     case missingGate
     case liveUnavailable
+    case superseded
     var errorDescription: String? {
         switch self {
         case .missingGate: return "Recording gate was not ready."
+        case .superseded: return "Another capture command came in."
         case .liveUnavailable: return "Live transcription is unavailable."
         }
     }
