@@ -24,7 +24,10 @@ public actor NeuralSpeech {
     private var manager: Supertonic3Manager?
     private var styles: [Voice: Supertonic3VoiceStyle] = [:]
     private var styleLoads: [Voice: Task<Supertonic3VoiceStyle, Error>] = [:]
+    /// Voice loads started since no caller was loading voices, for one log line.
+    private var styleBurst: (started: Date, count: Int)?
     #endif
+    private var voiceLoaders = 0
     private let modelLoad = SingleFlight()
     private let warmUp = SingleFlight()
     private var warmed = false
@@ -65,13 +68,16 @@ public actor NeuralSpeech {
             }
             log(String(format: "[NeuralSpeech] model ready in %.1fs", Date().timeIntervalSince(started)))
         }
-        let started = Date()
-        var loaded = 0
-        for voice in voices where styles[voice] == nil {
-            if try await loadStyle(voice) { loaded += 1 }
+        voiceLoaders += 1
+        defer {
+            voiceLoaders -= 1
+            if voiceLoaders == 0, let burst = styleBurst {
+                styleBurst = nil
+                log(String(format: "[NeuralSpeech] %d voices loaded in %.1fs", burst.count, Date().timeIntervalSince(burst.started)))
+            }
         }
-        if loaded > 0 {
-            log(String(format: "[NeuralSpeech] %d voices loaded in %.1fs", loaded, Date().timeIntervalSince(started)))
+        for voice in voices where styles[voice] == nil {
+            try await loadStyle(voice)
         }
         guard let voice = voices.first else { return }
         try await warmUp.run(priority: .utility) {
@@ -87,10 +93,11 @@ public actor NeuralSpeech {
 
     #if canImport(FluidAudio)
     /// Loads one voice style; a caller that arrives during the load waits for the same one.
-    /// True when this call started the load.
-    private func loadStyle(_ voice: Voice) async throws -> Bool {
-        if styles[voice] != nil { return false }
-        let started = styleLoads[voice] == nil
+    /// Two players load the voices together and take turns starting the next one, so
+    /// `prepare` logs the whole burst once, when no caller is still loading voices, not each
+    /// caller's share (2026-11-17: "5 voices loaded" twice for 10 voices).
+    private func loadStyle(_ voice: Voice) async throws {
+        if styles[voice] != nil { return }
         let task: Task<Supertonic3VoiceStyle, Error>
         if let existing = styleLoads[voice] {
             task = existing
@@ -101,11 +108,12 @@ public actor NeuralSpeech {
             }
             task = Task(priority: .utility) { try await Supertonic3ResourceDownloader.loadVoiceStyle(builtIn) }
             styleLoads[voice] = task
+            if styleBurst == nil { styleBurst = (Date(), 0) }
+            styleBurst?.count += 1
         }
         do {
             styles[voice] = try await task.value
             styleLoads[voice] = nil
-            return started
         } catch {
             styleLoads[voice] = nil
             throw error
