@@ -184,6 +184,55 @@ final class TranscriptionLogTests: XCTestCase {
         XCTAssertEqual(storedTranscript(for: file), "It's so early. I am very tired.")
     }
 
+    func testNoSpeechRunIsRecordedOverLiveTextCopy() throws {
+        // Studio capture promotes the live text into `transcript` (no provider).
+        // A file run that hears no speech must still be recorded; the live text
+        // stays readable in `localTranscript`.
+        let file = tempDir.appendingPathComponent("live-only.m4a")
+        try Data(repeating: 1, count: 16).write(to: file)
+        FileStore.mutateTranscription(for: file) { t in
+            t["transcript"] = "The first fellow and west."
+            t["localTranscript"] = "The first fellow and west."
+            t["speechStatus"] = TranscriptionSpeechStatus.speech.rawValue
+            return true
+        }
+
+        recordRunSuccess(
+            file: file, provider: "parakeet", model: "parakeet:ultra",
+            audioDuration: 24, startedAt: Date(), elapsedSeconds: 0.2,
+            transcript: "", speechStatus: .noSpeech, rawResponse: nil
+        )
+        let t = storedTranscription(for: file)
+        XCTAssertEqual(t["transcript"] as? String, "")
+        XCTAssertEqual(t["provider"] as? String, "parakeet")
+        XCTAssertEqual(t["speechStatus"] as? String, TranscriptionSpeechStatus.noSpeech.rawValue)
+        XCTAssertEqual(t["localTranscript"] as? String, "The first fellow and west.")
+        XCTAssertNil(t["previousRuns"], "the live copy is not a run to archive")
+    }
+
+    func testNoSpeechKeepsLiveTextThatAFileRunConfirmed() throws {
+        // Once a file run wrote text (provider set), a later no-speech run is ignored
+        // even when that text equals the live text.
+        let file = tempDir.appendingPathComponent("confirmed.m4a")
+        try Data(repeating: 1, count: 16).write(to: file)
+        FileStore.mutateTranscription(for: file) { t in
+            t["localTranscript"] = "hello there"
+            return true
+        }
+        recordRunSuccess(
+            file: file, provider: "parakeet", model: "parakeet:ultra",
+            audioDuration: 5, startedAt: Date(), elapsedSeconds: 1,
+            transcript: "hello there", speechStatus: .speech, rawResponse: nil
+        )
+        recordRunSuccess(
+            file: file, provider: "gemini", model: "gemini-2.5-flash",
+            audioDuration: 5, startedAt: Date(), elapsedSeconds: 1,
+            transcript: "", speechStatus: .noSpeech, rawResponse: nil
+        )
+        XCTAssertEqual(storedTranscript(for: file), "hello there")
+        XCTAssertEqual(storedTranscription(for: file)["provider"] as? String, "parakeet")
+    }
+
     func testEmptyFirstTranscriptionIsStillRecorded() throws {
         // No prior transcript → an empty result (genuine silence) is recorded as
         // "" so the note still carries transcription metadata.

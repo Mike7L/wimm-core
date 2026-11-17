@@ -92,10 +92,15 @@ public func recordRunSuccess(
         // Never let an empty re-transcription clobber real text. This branch is
         // deliberately a no-op, including leaving failure markers intact: an
         // empty result after prior text is suspicious, not a successful repair.
+        // The live text promoted into `transcript` during capture is not a run:
+        // a file run's no-speech verdict is recorded over it (the live text
+        // stays in `localTranscript`), or a made-up live line on silence would
+        // pass as speech forever.
         if speechStatus == .noSpeech,
            let prior = (existing["transcript"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
-           !prior.isEmpty {
+           !prior.isEmpty,
+           !TranscriptRuns.isRealtimeCopy(existing) {
             return false
         }
 

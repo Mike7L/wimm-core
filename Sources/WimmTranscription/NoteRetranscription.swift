@@ -20,12 +20,14 @@ public enum NoteRetranscription {
         return "private mode: \(model) would send the audio to the cloud — use parakeet:ultra or turn private mode off"
     }
 
-    /// Words in the transcript the sidecar holds now (read only).
+    /// Words in the transcript run the sidecar holds now (read only). The live
+    /// text promoted into `transcript` is not a run: a no-speech verdict replaces it.
     public static func storedWordCount(file: URL) -> Int {
-        let transcript = (try? Data(contentsOf: FileStore.metadataURL(forRecordingURL: file)))
-            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-            .flatMap { ($0["transcription"] as? [String: Any])?["transcript"] as? String } ?? ""
-        return wordCount(transcript)
+        guard let transcription = (try? Data(contentsOf: FileStore.metadataURL(forRecordingURL: file)))
+            .flatMap({ try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })
+            .flatMap({ $0["transcription"] as? [String: Any] }),
+              let current = TranscriptRuns.runs(in: transcription).first(where: \.isCurrent) else { return 0 }
+        return wordCount(current.text)
     }
 
     public static func wordCount(_ text: String) -> Int {

@@ -90,7 +90,9 @@ reasons behind the rules are in `docs/` (index: `docs/README.md`).
   `clean derived` keeps orphan derived files; no command deletes an original
   (`clean originals` was removed; do not re-add it). PDF preview `{base}.heic` is not a note.
 - Transcripts: a re-run moves the old text to `transcription.previousRuns`
-  (`recordRunSuccess`); `[[NO_SPEECH]]` never replaces text; a failed manual
+  (`recordRunSuccess`); `[[NO_SPEECH]]` never replaces a run's text, but is
+  recorded over live text promoted into `transcript`
+  (`TranscriptRuns.isRealtimeCopy`); a failed manual
   re-run never writes the failure placeholder over a good run. Clearing a
   hallucination is the explicit `wimm-cli transcript clear-no-speech --apply`.
   Kinds realtime/local/cloud are derived by provider (`TranscriptKinds.swift`);
