@@ -717,30 +717,41 @@ struct SecretaryPacket {
         let blocks: [Block]
         let headings: [Heading?]
         let definitions: [Bool]
-        let words: [Set<String>]
         let citations: [Set<String>]
         let lowered: [String]
         /// Blocks whose literal checks can run on the bytes of `lowered` (`isPlain`).
         let plain: [Bool]
-        let frequency: [String: Int]
+        /// Word → blocks (citation definitions excluded) that contain it, and its words.
+        let postings: [String: [Int]]
+        let vocabulary: [String]
 
         init(_ blocks: [Block], headings: [Heading?]? = nil, definitions: [Bool]? = nil) {
             self.blocks = blocks
             self.headings = headings ?? blocks.map { SecretaryPacket.heading($0.text) }
             let definitions = definitions ?? blocks.map { SecretaryPacket.isDefinition($0.text) }
             self.definitions = definitions
-            let words = blocks.map { SecretaryPacket.terms($0.text) }
-            self.words = words
             citations = blocks.map { SecretaryPacket.contextIDs($0.text) }
             lowered = blocks.map { $0.text.lowercased() }
             plain = blocks.map { SecretaryPacket.isPlain($0.text) }
-            var frequency: [String: Int] = [:]
-            for (i, tokens) in words.enumerated() where !definitions[i] {
-                for word in tokens { frequency[word, default: 0] += 1 }
+            var postings: [String: [Int]] = [:]
+            for (i, block) in blocks.enumerated() where !definitions[i] {
+                for word in SecretaryPacket.terms(block.text) { postings[word, default: []].append(i) }
             }
-            self.frequency = frequency
+            self.postings = postings
+            vocabulary = Array(postings.keys)
+        }
+
+        /// Blocks with a word that starts with `stem`.
+        func blocks(startingWith stem: String) -> Set<Int> {
+            var out = Set<Int>()
+            for word in vocabulary where word.hasPrefix(stem) { out.formUnion(postings[word]!) }
+            return out
         }
     }
+
+    /// A query word without its last two letters (at least four left): "налоговая" finds
+    /// "налоговой", "страховка" finds "страховку" but not "страх".
+    static func queryStem(_ word: String) -> String { String(word.prefix(max(4, word.count - 2))) }
 
     /// Text in which a literal search may compare bytes: every scalar is a character
     /// of its own, and lowercasing equals case folding and stays in the set — ASCII
@@ -773,9 +784,17 @@ struct SecretaryPacket {
     }
 
     static func contextSelection(index: BlockIndex, requests: [String], existing: Set<String>, limit: Int) -> ContextSelection {
-        let blocks = index.blocks, headings = index.headings, words = index.words, citations = index.citations
-        let definitions = index.definitions, frequency = index.frequency
+        let blocks = index.blocks, headings = index.headings, citations = index.citations
+        let definitions = index.definitions
         let lowered = index.lowered, plain = index.plain
+        var stemBlocks: [String: Set<Int>] = [:]
+        func matching(_ stem: String) -> Set<Int> {
+            if let known = stemBlocks[stem] { return known }
+            let found = index.blocks(startingWith: stem)
+            stemBlocks[stem] = found
+            return found
+        }
+        func covers(_ titleWords: Set<String>, _ stem: String) -> Bool { titleWords.contains { $0.hasPrefix(stem) } }
         struct Lane { let candidates: [Int] }
         var lanes: [Lane] = []
         var matched = Array(repeating: Set<Int>(), count: requests.count)
@@ -783,15 +802,16 @@ struct SecretaryPacket {
             for clause in request.split(separator: ";").map(String.init) {
                 let lower = clause.lowercased()
                 let ids = contextIDs(clause)
-                let query = terms(clause).filter { frequency[$0, default: 0] <= max(3, blocks.count / 10) }
+                // A word found in more than a tenth of the blocks names no topic.
+                let query = Set(terms(clause).map(queryStem)).filter { matching($0).count <= max(3, blocks.count / 10) }
                 let prefix = clause.split(separator: ":", maxSplits: 1).first.map(String.init) ?? clause
-                let prefixWords = terms(prefix).filter { $0.contains(where: \.isLetter) }
+                let prefixWords = Set(terms(prefix).filter { $0.contains(where: \.isLetter) }.map(queryStem))
                 var sections = Set<Int>()
                 for (i, h) in headings.enumerated() {
                     guard let h else { continue }
                     let titleWords = terms(h.title).filter { $0.contains(where: \.isLetter) }
-                    let overlap = titleWords.intersection(query).count
-                    let prefixMatch = clause.contains(":") && !prefixWords.isEmpty && prefixWords.isSubset(of: titleWords)
+                    let overlap = query.filter { covers(titleWords, $0) }.count
+                    let prefixMatch = clause.contains(":") && !prefixWords.isEmpty && prefixWords.allSatisfy { covers(titleWords, $0) }
                     guard lower.contains(h.title) || prefixMatch || (overlap >= 2 && overlap * 2 >= titleWords.count) else { continue }
                     sections.insert(i)
                     for j in (i + 1)..<blocks.count {
@@ -802,9 +822,10 @@ struct SecretaryPacket {
                 var ranked: [(Int, Int)] = []
                 let needle = lower.trimmingCharacters(in: .whitespacesAndNewlines)
                 let needleBytes = plainNeedle(needle)
+                let queryBlocks = query.map(matching)
                 for i in blocks.indices where !definitions[i] {
                     let citation = !citations[i].isDisjoint(with: ids)
-                    let hits = words[i].intersection(query).count
+                    let hits = queryBlocks.filter { $0.contains(i) }.count
                     let exact: Bool
                     if let needleBytes, plain[i] { exact = containsBytes(lowered[i], needleBytes) }
                     else { exact = lowered[i].contains(needle) }
@@ -848,7 +869,7 @@ struct SecretaryPacket {
             return ContextMatch(request: request, status: all.isEmpty ? "not_found" : (omitted.isEmpty ? "matched" : "partial"),
                 matchedBlocks: all.map { blocks[$0].id }, suppliedBlocks: supplied.map { blocks[$0].id },
                 omittedForBudget: omitted.map { blocks[$0].id }, referencedSources: contextIDs(request).sorted(),
-                unmatchedTerms: terms(request).filter { $0.contains(where: \.isLetter) && frequency[$0, default: 0] == 0 }.sorted(),
+                unmatchedTerms: terms(request).filter { $0.contains(where: \.isLetter) && matching(queryStem($0)).isEmpty }.sorted(),
                 clauses: request.split(separator: ";").map { clause in
                     let query = String(clause).trimmingCharacters(in: .whitespacesAndNewlines)
                     let queryBytes = plainNeedle(query)

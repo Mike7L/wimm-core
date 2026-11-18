@@ -528,6 +528,21 @@ final class SecretaryPacketTests: XCTestCase {
         XCTAssertFalse(initial.contains { $0.text.contains("private/path") })
     }
 
+    func testContextSearchMatchesWordsByStem() {
+        let blocks = SecretaryPacket.blocks("# Документ\n\n## Бумаги\n\nНапоминание налоговой о декларации за 2022 год.\n\n## Семейные праздники\n\nТорт и подарки.\n\n## Машина\n\nПродлил страховку.\n\n## Сад\n\nПоливка без страха.\n\n")
+        let result = SecretaryPacket.contextSelection(blocks: blocks,
+            requests: ["налоговая декларация", "семейный праздник", "страховка", "Израилем"], existing: [], limit: 1000)
+        XCTAssertTrue(result.blocks.contains { $0.text.contains("Напоминание налоговой") })
+        XCTAssertTrue(result.blocks.contains { $0.text.contains("Торт и подарки") })
+        XCTAssertTrue(result.blocks.contains { $0.text.contains("Продлил страховку") })
+        XCTAssertFalse(result.blocks.contains { $0.text.contains("Поливка") })
+        XCTAssertEqual(result.reports.map(\.status), ["matched", "matched", "matched", "not_found"])
+        XCTAssertEqual(result.reports[0].unmatchedTerms, [])
+        XCTAssertEqual(result.reports[3].unmatchedTerms, ["израилем"])
+        XCTAssertEqual(SecretaryPacket.queryStem("израилем"), "израил")
+        XCTAssertEqual(SecretaryPacket.queryStem("долг"), "долг")
+    }
+
     func testExpansionSharesBudgetAndNeverAdmitsBareHeadingWhenBodyDoesNotFit() {
         let text = "## Wimm\n\n" + String(repeating: "Большая тема. ", count: 50) + "\n\n## Кулинарные материалы\n\nРецепт пирога.\n\n"
         let result = SecretaryPacket.contextSelection(blocks: SecretaryPacket.blocks(text),
