@@ -364,6 +364,23 @@ final class SecretaryPacketEditsTests: XCTestCase {
         XCTAssertFalse(SecretaryPacket.waitsForViewing(kind: "audio", text: "--- transcript ---\nOK"))
     }
 
+    /// 2026-11-18: an empty no-speech verdict is admitted as silence whatever the provider;
+    /// a failed transcription or one with text left over still waits.
+    func testNoSpeechVerdictIsAdmittedAsSilenceFromAnyProvider() throws {
+        func sidecar(_ name: String, _ transcription: [String: Any]) throws -> String {
+            let url = root.appendingPathComponent("\(name).meta.json")
+            try FileStore.mutateSidecar(at: url) { $0["transcription"] = transcription; return true }
+            return url.path
+        }
+        XCTAssertTrue(SecretaryPacket.admitsVerifiedSilence(sidecar: try sidecar("local",
+            ["transcript": "", "speechStatus": "no_speech", "provider": "parakeet"])))
+        XCTAssertTrue(SecretaryPacket.admitsVerifiedSilence(sidecar: try sidecar("cloud",
+            ["transcript": " ", "speechStatus": "no_speech", "provider": "gemini"])))
+        XCTAssertFalse(SecretaryPacket.admitsVerifiedSilence(sidecar: try sidecar("failed",
+            ["transcript": "", "speechStatus": "failed", "provider": "parakeet"])))
+        XCTAssertFalse(SecretaryPacket.admitsVerifiedSilence(sidecar: try sidecar("missing", [:])))
+    }
+
     func testDispatcherReadsASectionOnceThenAppliesTheWholeJob() async throws {
         let probe = try prepare()
         let family = try section(probe, "### Маяк", under: "## Семья")
@@ -561,6 +578,13 @@ final class SecretaryPacketEditsTests: XCTestCase {
             edit("insert_after", block: try block(packet, "Сводка"), text: "c [S2].\n\n", sources: ["S2"])]])
         XCTAssertEqual(packet.missingSections(body, prompt: narrow), [family])
         XCTAssertEqual(packet.missingSections(body, prompt: try packet.prompt()), [])
+        // A supplied block is a valid target even when the rest of its section is not in the packet.
+        input["document_blocks"] = (try JSONSerialization.jsonObject(with: Data(packet.prompt().utf8)) as! [String: Any])["document_blocks"]
+            .flatMap { ($0 as? [[String: String]])?.filter { $0["id"] != family } }
+        let headless = String(decoding: try JSONSerialization.data(withJSONObject: input), as: UTF8.self)
+        let beside = try reply(["edits": [edit("insert_after", block: familyText, text: "b [S2].\n\n", sources: ["S2"])]])
+        XCTAssertEqual(packet.missingSections(beside, prompt: headless), [])
+        XCTAssertEqual(packet.missingSections(body, prompt: headless), [family], "insert_under_heading still needs the whole section")
     }
 
     func testDispatcherReadsAnUnsuppliedTargetSectionInsteadOfRejecting() async throws {

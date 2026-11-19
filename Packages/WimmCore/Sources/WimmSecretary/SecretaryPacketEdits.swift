@@ -517,6 +517,9 @@ extension SecretaryPacket {
         var missing: [String] = []
         for (index, op) in reply.edits.enumerated() where only?.contains(index) ?? true {
             guard let target = op.operation == "insert_under_heading" ? op.section : op.block,
+                  // A block edit needs only its own block (as validation does): the rest of the section
+                  // adds nothing, and the extra round lost a valid reply (Haiku, 2026-11-17).
+                  op.operation == "insert_under_heading" || !allowed.contains(target),
                   let index = blocks.firstIndex(where: { $0.id == target }),
                   let head = (0...index).reversed().first(where: { Self.heading(blocks[$0].text) != nil }),
                   let range = sectionRange(blocks[head].id),
@@ -618,17 +621,17 @@ extension SecretaryPacket {
         ProcessInfo.processInfo.environment["WIMM_SECRETARY_ADMIT_IMAGES"] == "1"
     }
 
-    /// `prepare --admit-silent` (2026-11-14, user decision): an audio note whose current transcript is an
-    /// empty cloud `no_speech` verdict is admitted so the editor can close it as silence, instead of
-    /// waiting for text forever. Read-only sidecar check; local-only verdicts still wait.
+    /// An audio note whose current transcript is an empty `no_speech` verdict is admitted so the editor
+    /// can close it as silence, instead of waiting for text forever. Local (Parakeet) verdicts count
+    /// too (2026-11-18, user decision; was cloud-only behind `--admit-silent` since 2026-11-14): the user
+    /// restores or trashes a misjudged note. A failed or pending transcription still waits.
+    /// Read-only sidecar check.
     static func admitsVerifiedSilence(sidecar: String) -> Bool {
-        guard ProcessInfo.processInfo.environment["WIMM_SECRETARY_ADMIT_SILENT"] == "1",
-              let data = try? Data(contentsOf: URL(fileURLWithPath: sidecar)),
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: sidecar)),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let transcription = object["transcription"] as? [String: Any] else { return false }
         let text = (transcription["transcript"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return text.isEmpty && transcription["speechStatus"] as? String == "no_speech"
-            && transcription["provider"] as? String == "gemini"
     }
 
     static func waitsForViewing(kind: String, text: String) -> Bool {

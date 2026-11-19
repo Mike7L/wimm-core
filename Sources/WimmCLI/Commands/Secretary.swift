@@ -44,12 +44,11 @@ struct Secretary: AsyncParsableCommand {
         @Option(name: .customLong("exclude-source-id"), help: "With --unread-pending: leave this exact source queued during this sweep; repeatable, no marks are changed") var excludedSourceIDs: [String] = []
         @Option(name: .customLong("source-id"), help: "With --packet-only: include this registry source in the dry sample. Repeat for each source.") var sourceIDs: [String] = []
         @Flag(name: .long, help: "Admit low-text images instead of parking them as waiting for viewing; only for an editor that views the image itself") var admitImages = false
-        @Flag(name: .long, help: "Admit audio notes whose cloud retranscription found no speech, so the editor can close them as silence") var admitSilent = false
+        @Flag(name: .long, help: .hidden) var admitSilent = false // No-op: no-speech notes are admitted by default (2026-11-18).
         func run() async throws {
             guard let cli = SecretaryDispatcher.locateWimmCLI() else { throw SecretaryError.wimmCLIMissing }
             guard packetOnly || sourceIDs.isEmpty else { throw ValidationError("--source-id needs --packet-only.") }
             if admitImages { setenv("WIMM_SECRETARY_ADMIT_IMAGES", "1", 1) }
-            if admitSilent { setenv("WIMM_SECRETARY_ADMIT_SILENT", "1", 1) }
             let url = URL(fileURLWithPath: (document as NSString).expandingTildeInPath).standardizedFileURL
             let data = try await SecretaryPacketFiles.prepare(document: url, cli: cli, sourceKB: packetKB,
                                                               packetOnly: packetOnly, sampleSourceIDs: Set(sourceIDs), unreadPending: unreadPending, retryUnfinished: retryUnfinished, maxSources: maxSources ?? (unreadPending ? 32 : nil), excludedSourceIDs: Set(excludedSourceIDs), contextKB: contextKB)
