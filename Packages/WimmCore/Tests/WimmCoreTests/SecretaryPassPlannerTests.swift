@@ -45,6 +45,29 @@ final class SecretaryPassPlannerTests: XCTestCase {
         XCTAssertEqual(scan.oldestPending, Date(timeIntervalSince1970: 2_000_000))
     }
 
+    func testPendingBytesSumOnlyPendingNotesAndFallBackToLiveText() async throws {
+        try store.setPass(.init(asOf: boundary, cursor: nil, comment: nil, setAt: boundary))
+        let found = await SecretaryPassPlanner.scan(
+            marks: store, recordings: { [self.note("old"), self.note("a"), self.note("b")] },
+            lastChange: { Date(timeIntervalSince1970: $0.lastPathComponent == "old.m4a" ? 1 : 2_000_000) },
+            canceled: { _ in false },
+            textBytes: { $0.lastPathComponent == "a.m4a" ? 300 : 700 })
+        XCTAssertEqual(try XCTUnwrap(found).pendingBytes, 1_000)
+
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let run = directory.appendingPathComponent("run.m4a"), live = directory.appendingPathComponent("live.m4a")
+        let text = directory.appendingPathComponent("typed.md")
+        try Data(#"{"transcription":{"transcript":"Привет","localTranscript":"длинный живой текст"}}"#.utf8)
+            .write(to: FileStore.metadataURL(forRecordingURL: run))
+        try Data(#"{"transcription":{"localTranscript":" живой "}}"#.utf8)
+            .write(to: FileStore.metadataURL(forRecordingURL: live))
+        try Data("abc\n".utf8).write(to: text)
+        XCTAssertEqual(SecretaryPassPlanner.textBytes(run), "Привет".utf8.count)
+        XCTAssertEqual(SecretaryPassPlanner.textBytes(live), "живой".utf8.count)
+        XCTAssertEqual(SecretaryPassPlanner.textBytes(text), 3)
+        XCTAssertEqual(SecretaryPassPlanner.textBytes(directory.appendingPathComponent("none.m4a")), 0)
+    }
+
     func testCanceledFlagIsReadFromTheSidecar() throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let canceled = directory.appendingPathComponent("canceled.m4a"), kept = directory.appendingPathComponent("kept.m4a")

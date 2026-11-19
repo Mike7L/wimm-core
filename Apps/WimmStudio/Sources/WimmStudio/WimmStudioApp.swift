@@ -204,8 +204,14 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
     @ObservationIgnored private(set) lazy var vik = VikAssistant(
         capture: capture, voice: VikVoice(),
         document: { [weak self] in self?.documentModel.document?.text ?? "" },
-        preferences: .standard
+        preferences: .standard,
+        runSecretary: { [weak self] in self?.startSecretaryPassFromVoice() ?? "Секретарь недоступен." }
     )
+    @ObservationIgnored private var secretaryOfferTask: Task<Void, Never>?
+    /// Backlog size at the last question, and the run that was latest then: a new run
+    /// or a backlog below one packet allows the next question.
+    @ObservationIgnored private var secretaryOfferedBytes: Int?
+    @ObservationIgnored private var secretaryOfferedAfterRun: Date?
     @ObservationIgnored private var vikFailureShown = false
     @ObservationIgnored private var hotKeyTokens: [HotKeyCenter.Token] = []
     @ObservationIgnored private var captureCommandObserver: NSObjectProtocol?
@@ -305,6 +311,45 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in self?.trackVikBanner() }
         }
+    }
+
+    private func startSecretaryPassFromVoice() -> String? {
+        let model = documentModel
+        guard model.hasSecretaryWorkspace else { return "Документ не в рабочей папке секретаря." }
+        guard !model.secretary.isRunning else { return "Секретарь уже работает." }
+        guard !model.isEditing else { return "Документ сейчас редактируется, секретаря не запускаю." }
+        model.runSecretary(.pass)
+        return nil
+    }
+
+    /// Every few minutes: when the notes waiting for a pass fill one packet, Алёна asks
+    /// whether to start the secretary. Local reads only; never starts a run itself.
+    private func monitorSecretaryBacklog() {
+        guard !StoragePaths.isTestProcess, secretaryOfferTask == nil else { return }
+        secretaryOfferTask = Task(priority: .utility) { [weak self] in
+            do { try await Task.sleep(for: .seconds(60)) } catch { return }
+            while !Task.isCancelled {
+                await self?.checkSecretaryBacklog()
+                do { try await Task.sleep(for: .seconds(5 * 60)) } catch { return }
+            }
+        }
+    }
+
+    private func checkSecretaryBacklog() async {
+        let model = documentModel
+        guard vik.enabled, !PrivateMode.isEnabled, model.hasSecretaryWorkspace,
+              !model.secretary.isRunning, !model.isEditing else { return }
+        if secretaryOfferedAfterRun != model.secretary.startedAt { secretaryOfferedBytes = nil }
+        guard let scan = await SecretaryPassPlanner.scan() else { return }
+        let packetBytes = SecretaryPacketSettings.normalize(model.secretary.packetSourceKB) * 1000
+        if scan.pendingBytes < packetBytes { secretaryOfferedBytes = nil }
+        guard VikSecretaryOffer.shouldOffer(bytes: scan.pendingBytes, packetBytes: packetBytes,
+                                            lastOfferedBytes: secretaryOfferedBytes),
+              !model.secretary.isRunning, !PrivateMode.isEnabled,
+              let question = vik.offerSecretary(pending: scan.pending, bytes: scan.pendingBytes) else { return }
+        secretaryOfferedBytes = scan.pendingBytes
+        secretaryOfferedAfterRun = model.secretary.startedAt
+        saveConfirmation.show(message: "Алёна: \(question)", systemImage: "tray.full", duration: .seconds(20))
     }
 
     /// A note was created or edited here: refresh the library and queue it for the iPhone.
@@ -427,6 +472,7 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
         }
         trackVikBanner()
         vik.startMonitoring()
+        monitorSecretaryBacklog()
         recentNotes.reload()
         if !StoragePaths.isTestProcess {
             sessionImportTask = Task(priority: .utility) { [weak self, importer = StudioSessionImport()] in
@@ -557,6 +603,7 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         vik.shutdown()
+        secretaryOfferTask?.cancel()
         sessionImportTask?.cancel()
         capture.finishForTermination()
         cloudSync?.stop()

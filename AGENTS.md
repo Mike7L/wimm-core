@@ -49,7 +49,11 @@ reasons behind the rules are in `docs/` (index: `docs/README.md`).
   conversation history, file edits or command tools. One exception (trial):
   «задача для кода» (short form «идея …» for the `idea-review` skill) opens
   a Claude Code draft by deep link, no model call; it
-  must never auto-submit without a new user decision.
+  must never auto-submit without a new user decision. Second exception: when
+  the pending notes fill one secretary packet (`SecretaryPassScan.pendingBytes`
+  ≥ packet size), she asks once per packet whether to start a pass (spoken only
+  with the mic closed or in headphones mode, else banner only); only a spoken
+  yes or «запусти секретаря» starts it (`VikSecretaryOffer`), never code alone.
 - Note place: sidecar `location` (`NoteLocation`), written once via
   `NoteLocation.stamp` and never replaced. A note made now gets the device
   position (`DeviceLocation`, never blocks capture, none if refused); an

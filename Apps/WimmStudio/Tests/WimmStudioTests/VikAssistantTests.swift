@@ -236,6 +236,62 @@ final class VikAssistantTests: XCTestCase {
         XCTAssertEqual(h.calls.count, 0)
     }
 
+    func testSecretaryOfferPolicyAndAnswers() {
+        XCTAssertFalse(VikSecretaryOffer.shouldOffer(bytes: 400_000, packetBytes: 512_000, lastOfferedBytes: nil))
+        XCTAssertTrue(VikSecretaryOffer.shouldOffer(bytes: 512_000, packetBytes: 512_000, lastOfferedBytes: nil))
+        XCTAssertFalse(VikSecretaryOffer.shouldOffer(bytes: 900_000, packetBytes: 512_000, lastOfferedBytes: 520_000))
+        XCTAssertTrue(VikSecretaryOffer.shouldOffer(bytes: 1_032_000, packetBytes: 512_000, lastOfferedBytes: 520_000))
+        XCTAssertEqual(VikSecretaryOffer(pending: 21, bytes: 600_000, at: Date()).question.prefix(52),
+                       "Накопился пакет для секретаря: 21 заметка, около 600")
+        XCTAssertEqual(VikSecretaryOffer.notes(12), "заметок")
+        XCTAssertEqual(VikSecretaryOffer.notes(3), "заметки")
+
+        XCTAssertEqual(VikSecretaryCommand.parse("Запусти секретаря, пожалуйста", offered: false), .run)
+        XCTAssertEqual(VikSecretaryCommand.parse("да", offered: true), .run)
+        XCTAssertEqual(VikSecretaryCommand.parse("Да, запускай!", offered: true), .run)
+        XCTAssertEqual(VikSecretaryCommand.parse("нет, не сейчас", offered: true), .decline)
+        XCTAssertNil(VikSecretaryCommand.parse("да", offered: false))
+        XCTAssertNil(VikSecretaryCommand.parse("да, а что я говорил про клиентов вчера?", offered: true))
+        XCTAssertNil(VikSecretaryCommand.parse("данные за вчера", offered: true))
+    }
+
+    func testSecretaryOfferIsSpokenOnlyWithMicClosedAndYesStartsAPassWithoutModel() async {
+        let h = VikHarness()
+        defer { h.assistant.shutdown() }
+        // Recording without headphones: the question would land in the note, so it is not spoken.
+        XCTAssertNotNil(h.assistant.offerSecretary(pending: 5, bytes: 600_000))
+        XCTAssertTrue(h.voice.lines.isEmpty)
+        h.privateMode = true
+        XCTAssertNil(h.assistant.offerSecretary(pending: 5, bytes: 600_000))
+        h.privateMode = false
+        h.capture.isRecording = false
+        XCTAssertNotNil(h.assistant.offerSecretary(pending: 5, bytes: 600_000))
+        XCTAssertEqual(h.voice.lines.count, 1)
+        XCTAssertTrue(h.voice.lines[0].contains("Запустить?"))
+
+        h.capture.isRecording = true
+        h.send("Эй Алёна да")
+        h.capture.finish(.success("Эй Алёна, да."))
+        await waitUntil { h.assistant.savedReply != nil }
+        XCTAssertEqual(h.secretaryRuns, 1)
+        XCTAssertEqual(h.calls.count, 0)
+        XCTAssertEqual(h.assistant.answer, "Запускаю секретаря.")
+        XCTAssertNil(h.assistant.secretaryOffer)
+    }
+
+    func testSecretaryDeclineAnswersWithoutModel() async {
+        let h = VikHarness()
+        defer { h.assistant.shutdown() }
+        h.assistant.offerSecretary(pending: 5, bytes: 600_000)
+        h.send("Эй Алёна нет")
+        h.capture.finish(.success("Эй Алёна, нет."))
+        await waitUntil { h.assistant.savedReply != nil }
+        XCTAssertEqual(h.assistant.answer, "Хорошо, не запускаю.")
+        XCTAssertEqual(h.calls.count, 0)
+        XCTAssertEqual(h.secretaryRuns, 0)
+        XCTAssertNil(h.assistant.secretaryOffer)
+    }
+
     func testLiveTextStabilityAloneNeverSubmits() {
         let h = VikHarness()
         defer { h.assistant.shutdown() }
@@ -615,6 +671,8 @@ private final class VikHarness {
     var calls: [(query: String, note: String, tools: [String])] = []
     var reply: AsyncThrowingStream<String, Error>.Continuation?
     var opened: [URL] = []
+    var secretaryRuns = 0
+    var secretaryRefusal: String?
 
     init(document: String = "", timeout: Duration = .seconds(20), acknowledgeAfter: Duration? = nil,
          reassureAfter: Duration? = nil) {
@@ -624,6 +682,10 @@ private final class VikHarness {
                                  acknowledgeAfter: acknowledgeAfter,
                                  reassureAfter: reassureAfter,
                                  openCodeTask: { [weak self] in self?.opened.append($0); return true },
+                                 runSecretary: { [weak self] in
+            self?.secretaryRuns += 1
+            return self?.secretaryRefusal
+        },
                                  stream: { [weak self] query, note, tools in
             self?.calls.append((query, note, tools.map(\.name)))
             return AsyncThrowingStream { self?.reply = $0 }

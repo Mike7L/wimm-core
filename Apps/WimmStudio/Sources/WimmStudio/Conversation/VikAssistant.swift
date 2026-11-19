@@ -36,6 +36,8 @@ final class VikAssistant {
     private(set) var nowSpeaking = ""
     private(set) var errorMessage: String?
     private(set) var savedReply: URL?
+    /// The open question «запустить секретаря?»; a short yes/no answers it.
+    private(set) var secretaryOffer: VikSecretaryOffer?
     var enabled = true {
         didSet {
             preferences?.set(enabled, forKey: "WimmStudio.vikEnabled")
@@ -116,6 +118,8 @@ final class VikAssistant {
     @ObservationIgnored private let document: () -> String
     @ObservationIgnored private let stream: ReplyStream?
     @ObservationIgnored private let openCodeTask: (URL) -> Bool
+    /// Starts a secretary pass; nil when it started, else why not (spoken as is).
+    @ObservationIgnored private let runSecretary: () -> String?
     @ObservationIgnored private let isPrivate: () -> Bool
     @ObservationIgnored private let preferences: UserDefaults?
     @ObservationIgnored private let finalizationTimeout: Duration
@@ -155,6 +159,7 @@ final class VikAssistant {
          acknowledgeAfter: Duration? = .milliseconds(1200),
          reassureAfter: Duration? = .seconds(10),
          openCodeTask: @escaping (URL) -> Bool = { StoragePaths.isTestProcess ? false : NSWorkspace.shared.open($0) },
+         runSecretary: @escaping () -> String? = { "Секретарь здесь недоступен." },
          stream: ReplyStream? = nil) {
         self.capture = capture
         self.voice = voice
@@ -168,6 +173,24 @@ final class VikAssistant {
         self.keepMicOpen = preferences?.bool(forKey: Self.keepMicOpenKey) ?? false
         self.stream = stream
         self.openCodeTask = openCodeTask
+        self.runSecretary = runSecretary
+    }
+
+    /// Asks aloud whether to start the secretary. Silent (banner only) while the
+    /// microphone records without headphones: the question would land in the note.
+    /// Returns the question when it was asked; nil when Alyona is busy, off or private.
+    @discardableResult
+    func offerSecretary(pending: Int, bytes: Int, now: Date = Date()) -> String? {
+        guard enabled, !isPrivate(), phase == .idle || phase == .failed else { return nil }
+        let offer = VikSecretaryOffer(pending: pending, bytes: bytes, at: now)
+        secretaryOffer = offer
+        let spoken = keepMicOpen || (!capture.isRecording && !capture.isBusy)
+        log("[Vik] secretary_offer pending=\(pending) bytes=\(bytes) spoken=\(spoken)")
+        if spoken {
+            voice.prepare()
+            voice.enqueue(offer.question)
+        }
+        return offer.question
     }
 
     func startMonitoring() {
@@ -476,7 +499,9 @@ final class VikAssistant {
             })
             let tools = self.timed(reader.tools)
             let reply: AsyncThrowingStream<String, Error>
-            if let task = VikCodeTask.extract(from: query) { reply = self.codeTaskReply(task, note: note, source: source) }
+            let offered = self.secretaryOffer?.isFresh() == true
+            if let command = VikSecretaryCommand.parse(query, offered: offered) { reply = self.secretaryReply(command) }
+            else if let task = VikCodeTask.extract(from: query) { reply = self.codeTaskReply(task, note: note, source: source) }
             else if let stream = self.stream { reply = stream(query, note, tools) }
             else {
                 let context: String
@@ -536,6 +561,22 @@ final class VikAssistant {
         acknowledgementLines += 1
         speak(phrase)
         return true
+    }
+
+    /// The user's spoken decision on the secretary; no model call.
+    private func secretaryReply(_ command: VikSecretaryCommand) -> AsyncThrowingStream<String, Error> {
+        secretaryOffer = nil
+        let message: String
+        switch command {
+        case .decline:
+            log("[Vik] secretary_declined")
+            message = "Хорошо, не запускаю."
+        case .run:
+            let refusal = runSecretary()
+            log("[Vik] secretary_run started=\(refusal == nil)")
+            message = refusal ?? "Запускаю секретаря."
+        }
+        return AsyncThrowingStream { $0.yield(message); $0.finish() }
     }
 
     /// Opens a Claude Code draft; the user's Enter there is the only start.

@@ -1,4 +1,5 @@
 import Foundation
+import WimmDomain
 import WimmInfrastructure
 
 /// Whether a full pass has anything to decide, answered from Wimm's own data
@@ -19,6 +20,9 @@ public struct SecretaryPassScan: Sendable, Equatable {
     public var unmarked = 0
     /// Oldest change among the pending notes; the boundary may advance no further.
     public var oldestPending: Date?
+    /// UTF-8 bytes of the pending notes' body text (live text when there is no run yet):
+    /// an estimate of the packet source budget they would fill, not the packet itself.
+    public var pendingBytes = 0
 }
 
 /// One note of the queue as `prepare` saw it: saved with the file session so `apply`
@@ -71,7 +75,8 @@ public enum SecretaryPassPlanner {
         fingerprint: ((URL) -> NoteFingerprint)? = nil,
         kinds: ((URL, Date) -> [NoteChangeKind])? = nil,
         held: (URL) -> Bool = { _ in false },
-        canceled: (URL) -> Bool = SecretaryPassPlanner.isCanceled
+        canceled: (URL) -> Bool = SecretaryPassPlanner.isCanceled,
+        textBytes: (URL) -> Int = SecretaryPassPlanner.textBytes
     ) async -> SecretaryPassScan? {
         let recordings = recordings ?? { await FileRepository().recordings() }
         let lastChange = lastChange ?? { LibraryRecallSource.lastChange(of: $0) }
@@ -92,6 +97,7 @@ public enum SecretaryPassPlanner {
         var pending = 0
         var unmarked = 0
         var oldest: Date?
+        var bytes = 0
         for url in await recordings() {
             guard let changed = lastChange(url), changed >= boundary else { continue }
             // Preparation never offers a held note, so it must not pin the boundary either.
@@ -102,9 +108,27 @@ public enum SecretaryPassPlanner {
             guard !canceled(url) else { continue }
             if mark == nil { unmarked += 1 }
             pending += 1
+            bytes += textBytes(url)
             oldest = min(oldest ?? changed, changed)
         }
-        return SecretaryPassScan(boundary: boundary, pending: pending, unmarked: unmarked, oldestPending: oldest)
+        return SecretaryPassScan(boundary: boundary, pending: pending, unmarked: unmarked, oldestPending: oldest,
+                                 pendingBytes: bytes)
+    }
+
+    /// The note's body (`NoteContent`), else the live text of a recording without a run.
+    public static func textBytes(_ url: URL) -> Int {
+        var sidecar: [String: Any]?
+        let read = { () -> [String: Any] in
+            if let sidecar { return sidecar }
+            let loaded = (try? Data(contentsOf: FileStore.metadataURL(forRecordingURL: url)))
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+            sidecar = loaded
+            return loaded
+        }
+        if let body = NoteContent.load(anchor: url, sidecar: read()).body { return body.utf8.count }
+        guard NoteContent.kind(of: url) == .audio,
+              let live = (read()["transcription"] as? [String: Any])?["localTranscript"] as? String else { return 0 }
+        return live.trimmingCharacters(in: .whitespacesAndNewlines).utf8.count
     }
 
     /// Where the boundary can move after a clean pass that started at `started`:
