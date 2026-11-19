@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Source this from local build/test entry points. Keep the laptop usable while
 # compiling FluidAudio/WhisperKit, including whole-module Release compilation.
-WIMM_BUILD_JOBS="${WIMM_BUILD_JOBS:-2}"
+WIMM_BUILD_JOBS="${WIMM_BUILD_JOBS:-3}"
 if [[ ! "$WIMM_BUILD_JOBS" =~ ^[1-9][0-9]*$ ]]; then
   echo "WIMM_BUILD_JOBS must be a positive integer" >&2
   return 2

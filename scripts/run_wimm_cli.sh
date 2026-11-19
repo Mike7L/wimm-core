@@ -60,7 +60,7 @@ if [[ "$USE_TUI" == "1" || "$USE_TUI" == "true" || "$USE_TUI" == "yes" ]]; then
       args=("${args[@]:1}")
     fi
 
-    exec nice -n 10 swift run --jobs "$WIMM_BUILD_JOBS" \
+    exec env SWIFT_DETERMINISTIC_HASHING=1 nice -n 10 swift run --jobs "$WIMM_BUILD_JOBS" \
       -Xswiftc -num-threads -Xswiftc "$WIMM_BUILD_JOBS" \
       --package-path "$ROOT_DIR" wimm-tui "${args[@]}"
   fi
