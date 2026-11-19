@@ -50,6 +50,18 @@ reasons behind the rules are in `docs/` (index: `docs/README.md`).
   «задача для кода» (short form «идея …» for the `idea-review` skill) opens
   a Claude Code draft by deep link, no model call; it
   must never auto-submit without a new user decision.
+- Note place: sidecar `location` (`NoteLocation`), written once via
+  `NoteLocation.stamp` and never replaced. A note made now gets the device
+  position (`DeviceLocation`, never blocks capture, none if refused); an
+  imported photo/video gets only the place inside the file (`MediaLocation`),
+  never the import place. It is printed as `location:` in note reads and
+  packets; code never turns coordinates into an address or a link to people.
+- Note dates: the note's date (file name) is when the thing was made: an
+  imported photo/video takes its shooting time from the file (`MediaOrigin`),
+  else the import time. The import moment is sidecar `addedAt`
+  (`NoteAddedDate`), printed as `added:`. Dates mentioned inside the content
+  (a letter's own date, an appointment) are text for the secretary; code
+  never extracts them.
 - Letters/cases/trips stay as files in the `_ME` workspace, they do not become
   notes.
 - **Studio and iPhone note labels:** use a preview of the note text, or the

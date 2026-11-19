@@ -32,6 +32,10 @@
 	<string>Wimm Studio shows your camera as a mirror during a conversation. Nothing is recorded.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSLocationUsageDescription</key>
+	<string>Wimm Studio stores where a note was captured, in the note's own metadata.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Wimm Studio stores where a note was captured, in the note's own metadata.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Wimm Studio records audio to transcribe your speech.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

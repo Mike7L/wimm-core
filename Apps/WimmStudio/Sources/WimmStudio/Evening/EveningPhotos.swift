@@ -140,6 +140,8 @@ final class EveningPhotos {
         origin["addedAt"] = ISO8601.string(from: Date())
         let trimmed = caption.trimmingCharacters(in: .whitespacesAndNewlines)
         FileStore.upsertMetadata(for: url, updates: ["title": trimmed.isEmpty ? "Фото" : trimmed, "origin": origin])
+        // Where the photo was shot, from the file itself; none if it has no GPS tag.
+        if let location = MediaLocation.read(imageData: data) { NoteLocation.stamp(location, for: url) }
         Task.detached(priority: .utility) { await recognizeText(in: url) }
         return url
     }

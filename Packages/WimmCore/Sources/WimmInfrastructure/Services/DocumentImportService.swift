@@ -70,9 +70,9 @@ public struct DocumentImporter: @unchecked Sendable {
             let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
         else { return "" }
         #elseif canImport(UIKit)
-        guard let image = UIImage(contentsOfFile: url.path),
-            let cgImage = image.cgImage
-        else { return "" }
+        // `UIImage.cgImage` is the unrotated sensor bitmap; decode with the
+        // EXIF orientation applied so OCR reads the photo upright.
+        guard let cgImage = try? LocalPhotoInput.load(url) else { return "" }
         #else
         return ""
         #endif

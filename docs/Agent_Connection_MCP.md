@@ -136,6 +136,8 @@ The header line is unchanged; a facts line follows it:
 
 ```
 id / date / kind / file            (unchanged)
+added: 2026-11-19T10:02:11+01:00 (added to the library)   (only when it differs from date:
+                                    an imported photo/video is dated by when it was shot)
 meta: /…/Wimm_…_421FDA8E.meta.json
 sha256: <hex of that file, = shasum -a 256>
 updated: 2026-10-24 12:59:10       (mtimes, read at call time)
@@ -143,6 +145,8 @@ sync_updated: <syncUpdatedAt>
 duration / speech / failure: <transcriptionFailure.reason>
 transcription: gemini/gemini-flash-lite-latest (<startedAt>)
 device: iPhone (iPhone15,2)
+location: 48.20849, 16.37208 (±25 m, device)   (sidecar `location`; "from the media file" =
+                                    where an imported photo/video was shot; absent = unknown)
 title / summary
 title_source: model (analysis <processed_at>) …  | fallback — no model analysis …
 coverage: ~15 s text for 4101 s audio — …   (only when the longest transcript

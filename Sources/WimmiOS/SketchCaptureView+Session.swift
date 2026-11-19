@@ -5,6 +5,7 @@ import PhotosUI
 import UIKit
 #endif
 import WimmDomain
+import WimmInfrastructure
 import UniformTypeIdentifiers
 import VisionKit
 
@@ -126,9 +127,9 @@ extension SketchCaptureView {
     /// attachment of the recording (one note = one media, 2026-11-09). It is
     /// written at once, so it no longer waits for the recording to start.
     /// `savedAttachments` only lists this session's photos on screen.
-    func persistImages(_ images: [UIImage], quality: Double) async {
+    func persistImages(_ images: [UIImage], quality: Double, originals: [MediaOrigin]? = nil) async {
         guard !images.isEmpty else { return }
-        let saved = await appState.importImages(images, quality: quality)
+        let saved = await appState.importImages(images, quality: quality, originals: originals)
         await MainActor.run {
             savedAttachments.append(contentsOf: saved.map { NoteAttachment(url: $0, type: "image") })
         }

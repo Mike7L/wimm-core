@@ -34,6 +34,8 @@
 	<string>WIMM reads your heart rate during a recording to store it with the note</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>WIMM runs a workout session during a recording so that AirPods or Apple Watch measure your heart rate. The workout is not saved.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>WIMM stores where a note was captured, together with the note</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>WIMM needs microphone access to record voice notes</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

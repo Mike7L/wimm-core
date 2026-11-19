@@ -4,6 +4,7 @@ import UIKit
 import UniformTypeIdentifiers
 import ImageIO
 import WimmDomain
+import WimmInfrastructure
 
 /// Standalone imports from the home screen: camera shots, gallery media,
 /// files and clipboard content become individual journal items.
@@ -34,6 +35,7 @@ extension AppState {
                 isComplete: true
             ).save()
             NoteOrigin.stamp(url)
+            DeviceLocation.stampCurrent(for: url)
             let card = NoteCard(
                 note_file: url.lastPathComponent,
                 lang: nil,
@@ -53,13 +55,21 @@ extension AppState {
 
     /// Each image becomes its own note (one note = one media). Returns the
     /// new notes' files, in order.
+    ///
+    /// `originals` nil: the images were shot just now (camera), so each note
+    /// gets the device's position and today's date. Otherwise it holds, per
+    /// image, what the picked original says (`MediaOrigin`): re-encoding drops
+    /// the file's EXIF, and neither the import place nor the import time is
+    /// where or when a library photo was taken. The note is dated by the
+    /// shooting time; `addedAt` keeps the import moment.
     @discardableResult
-    func importImages(_ images: [UIImage], quality: Double = 0.85) async -> [URL] {
+    func importImages(_ images: [UIImage], quality: Double = 0.85, originals: [MediaOrigin]? = nil) async -> [URL] {
         guard !images.isEmpty else { return [] }
         var saved: [URL] = []
-        for image in images {
+        for (index, image) in images.enumerated() {
             guard let (data, ext) = Self.encodeImage(image, quality: quality) else { continue }
-            let allocation = Self.uniqueImportURL(fileExtension: ext)
+            let original = originals.map { $0.indices.contains(index) ? $0[index] : MediaOrigin() }
+            let allocation = Self.uniqueImportURL(fileExtension: ext, createdAt: original?.shotAt)
             let destination = allocation.url
             do {
                 try data.write(to: destination, options: .atomic)
@@ -68,7 +78,8 @@ extension AppState {
                     fileURL: destination,
                     transcription: L10n.iOS.Capture.photo,
                     title: L10n.iOS.Capture.photo,
-                    summary: ""
+                    summary: "",
+                    place: original.map { .known($0.place) } ?? .device
                 )
                 saved.append(destination)
             } catch {
@@ -92,7 +103,8 @@ extension AppState {
                 fileURL: destination,
                 transcription: "",
                 title: L10n.iOS.Recording.scannedDocument,
-                summary: ""
+                summary: "",
+                place: .device
             )
         } catch {
             print("[QuickImport] Failed to save scan: \(error)")
@@ -118,7 +130,7 @@ extension AppState {
                 continue
             }
 
-            let allocation = Self.uniqueImportURL(fileExtension: ext)
+            let allocation = Self.uniqueImportURL(fileExtension: ext, createdAt: await MediaOrigin.shotAt(fileAt: source))
             let destination = allocation.url
             do {
                 try FileManager.default.copyItem(at: source, to: destination)
@@ -167,7 +179,7 @@ extension AppState {
                 try? fm.removeItem(at: source)
                 continue
             }
-            let allocation = Self.uniqueImportURL(fileExtension: ext)
+            let allocation = Self.uniqueImportURL(fileExtension: ext, createdAt: await MediaOrigin.shotAt(fileAt: source))
             let destination = allocation.url
             do {
                 try fm.moveItem(at: source, to: destination)
@@ -243,7 +255,8 @@ extension AppState {
                     fileURL: destination,
                     transcription: text,
                     title: Self.extractTitle(from: text),
-                    summary: text
+                    summary: text,
+                    place: .device
                 )
             } catch {
                 print("[QuickImport] Failed to save pasted text: \(error)")
@@ -257,7 +270,18 @@ extension AppState {
 
     // MARK: - Shared plumbing
 
-    private func persistImport(fileURL: URL, transcription: String, title: String, summary: String) async {
+    /// Where an imported note's place comes from.
+    enum ImportPlace {
+        /// Made on this device just now.
+        case device
+        /// Already read from the original; nil = it has none.
+        case known(NoteLocation?)
+        /// The file's own tag (photo EXIF, video location), or none.
+        case file
+    }
+
+    private func persistImport(fileURL: URL, transcription: String, title: String, summary: String,
+                               place: ImportPlace = .file) async {
         let meta = RecordingMetadata(
             recordingURL: fileURL,
             transcription: transcription,
@@ -271,6 +295,16 @@ extension AppState {
             print("[QuickImport] Failed to save metadata for \(fileURL.lastPathComponent): \(error)")
         }
         NoteOrigin.stamp(fileURL)
+        NoteAddedDate.stamp(fileURL)
+        // Before the upload below, so the first sync usually carries it.
+        switch place {
+        case .device:
+            if let location = await DeviceLocation.shared.current() { NoteLocation.stamp(location, for: fileURL) }
+        case .known(let location):
+            if let location { NoteLocation.stamp(location, for: fileURL) }
+        case .file:
+            if let location = await MediaLocation.read(fileAt: fileURL) { NoteLocation.stamp(location, for: fileURL) }
+        }
 
         let card = NoteCard(
             note_file: fileURL.lastPathComponent,
@@ -285,10 +319,13 @@ extension AppState {
         Task { await self.enqueueSync(for: fileURL) }
     }
 
+    /// `createdAt` is the note's date: when an imported photo or video was
+    /// shot, else now.
     private static func uniqueImportURL(
-        fileExtension: String
+        fileExtension: String,
+        createdAt: Date? = nil
     ) -> (url: URL, identity: RecordingIdentity) {
-        let identity = RecordingIdentity()
+        let identity = RecordingIdentity(createdAt: createdAt ?? Date())
         return (
             FileStore.newRecordingURL(identity: identity, extension: fileExtension),
             identity
@@ -336,10 +373,32 @@ extension AppState {
         else {
             return nil
         }
-        let options: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: quality]
+        // `cgImage` holds the sensor pixels; the rotation lives only in
+        // `imageOrientation`, so it must be written as the file's orientation
+        // tag or the photo shows up sideways.
+        let options: [CFString: Any] = [
+            kCGImageDestinationLossyCompressionQuality: quality,
+            kCGImagePropertyOrientation: CGImagePropertyOrientation(image.imageOrientation).rawValue
+        ]
         CGImageDestinationAddImage(destination, cgImage, options as CFDictionary)
         guard CGImageDestinationFinalize(destination) else { return nil }
         return data as Data
+    }
+}
+
+extension CGImagePropertyOrientation {
+    init(_ orientation: UIImage.Orientation) {
+        switch orientation {
+        case .up: self = .up
+        case .upMirrored: self = .upMirrored
+        case .down: self = .down
+        case .downMirrored: self = .downMirrored
+        case .left: self = .left
+        case .leftMirrored: self = .leftMirrored
+        case .right: self = .right
+        case .rightMirrored: self = .rightMirrored
+        @unknown default: self = .up
+        }
     }
 }
 #endif

@@ -5,6 +5,7 @@ import PhotosUI
 import UIKit
 #endif
 import WimmDomain
+import WimmInfrastructure
 import UniformTypeIdentifiers
 import VisionKit
 
@@ -132,14 +133,16 @@ struct SketchCaptureView: View {
         .onChange(of: selectedItems) { newItems in
             Task {
                 var loadedImages: [UIImage] = []
+                var originals: [MediaOrigin] = []
                 for item in newItems {
                     if let data = try? await item.loadTransferable(type: Data.self),
                        let uiImage = UIImage(data: data) {
                         loadedImages.append(uiImage)
+                        originals.append(MediaOrigin.read(imageData: data))
                     }
                 }
                 selectedItems.removeAll()
-                await persistImages(loadedImages, quality: photoQuality)
+                await persistImages(loadedImages, quality: photoQuality, originals: originals)
             }
         }
         .onChange(of: appState.splitRequest) { _ in

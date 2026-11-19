@@ -38,5 +38,7 @@
          (2026-10-20: iPhone on Production, Mac on Development). -->
     <key>com.apple.developer.icloud-container-environment</key>
     <string>Production</string>
+    <key>com.apple.security.personal-information.location</key>
+    <true/>
 </dict>
 </plist>

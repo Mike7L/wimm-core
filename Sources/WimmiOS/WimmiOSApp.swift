@@ -184,6 +184,7 @@ class AppState: ObservableObject, ProcessingPerformer {
         guard startServices else { return }
         setupRemoteCommands()
         setupInterruptionHandling()
+        QuickRecord.register { [weak self] in await self?.startRecordingFromShortcut() }
         
         Task {
             // Local notes must be visible even while CloudKit is offline or
@@ -300,6 +301,18 @@ class AppState: ObservableObject, ProcessingPerformer {
         }
     }
     
+    /// Action button, Control Center, Siri or a Shortcut: start a note, never
+    /// stop one. A running recording just brings the capture screen forward.
+    func startRecordingFromShortcut() async {
+        restartAfterInterruption = false
+        guard !isFinishingRecording else { return }
+        log("[IOSRecorder] start from shortcut, recording: \(audioRecorder.isRecording)")
+        showCapture = true
+        guard !audioRecorder.isRecording else { return }
+        try? await Task.sleep(nanoseconds: 100_000_000) // let the capture screen appear
+        await audioRecorder.startRecording()
+    }
+
     /// Only local finalization belongs on the capture screen. Cloud uploads can
     /// take minutes (or fail offline) and must never hold the recorder or cover open.
     func finishRecording() async {

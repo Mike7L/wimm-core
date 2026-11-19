@@ -455,14 +455,16 @@
                 guard !newItems.isEmpty else { return }
                 Task {
                     var loadedImages: [UIImage] = []
+                    var originals: [MediaOrigin] = []
                     for item in newItems {
                         if let data = try? await item.loadTransferable(type: Data.self),
                            let uiImage = UIImage(data: data) {
                             loadedImages.append(uiImage)
+                            originals.append(MediaOrigin.read(imageData: data))
                         }
                     }
                     selectedItems.removeAll()
-                    await appState.importImages(loadedImages)
+                    await appState.importImages(loadedImages, originals: originals)
                 }
             }
             .sheet(isPresented: $showCamera) {

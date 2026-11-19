@@ -168,6 +168,7 @@ class IOSAudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
             identity.persist(for: url)
             NoteOrigin.stamp(url)
             RecordingInputDeviceInspector.current()?.stamp(url)
+            DeviceLocation.stampCurrent(for: url)
             inputName = AVAudioSession.sharedInstance().currentRoute.inputs.first?.portName
             inputChanges = []
             recordingStartedAt = Date()

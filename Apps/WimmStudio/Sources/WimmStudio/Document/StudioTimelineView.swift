@@ -14,6 +14,7 @@ struct StudioTimelineView: View {
     @AppStorage("WimmStudio.timelineCitedOnly") private var citedOnly = false
     @State private var timeline: StudioTimeline?
     @State private var openGroupID: String?
+    @State private var hoveredKey: String?
 
     private var zoom: StudioTimeline.Zoom { .init(rawValue: zoomRaw) ?? .week }
     private var citedNames: Set<String> { document.map(StudioTimeline.citedMetadataNames) ?? [] }
@@ -180,32 +181,39 @@ struct StudioTimelineView: View {
                     // existing groups and their lazy note picker instead of clipped thousands of views.
                     if individual {
                         ForEach(bucket.segments) { seg in
+                            let segKey = "seg-\(seg.id.uuidString)"
                             Button { activate(seg) } label: {
                                 RoundedRectangle(cornerRadius: 2)
-                                    .fill(color(for: seg.kind).opacity(seg.isCited ? 1.0 : 0.24))
+                                    .fill(color(for: seg.kind).opacity(barOpacity(cited: seg.isCited, hovered: hoveredKey == segKey)))
                                     .overlay {
                                         if revealNoteID == seg.id {
                                             RoundedRectangle(cornerRadius: 2).stroke(Color.accentColor, lineWidth: 2)
+                                        } else if hoveredKey == segKey {
+                                            RoundedRectangle(cornerRadius: 2).stroke(Color.primary.opacity(0.85), lineWidth: 1.5)
                                         }
                                     }
                                     .frame(width: floor + seg.minutes * unit)
                                     .contentShape(Rectangle())
                             }
                                 .buttonStyle(.plain)
+                                .onHover { trackHover(segKey, $0) }
                                 .help("\(seg.note.studioTitle) (\(String(format: "%.1f", seg.minutes))m)")
                         }
                     } else {
                         ForEach(bucket.groups) { group in
                             let groupKey = "\(bucket.id.timeIntervalSince1970)-\(group.id)"
                             RoundedRectangle(cornerRadius: 3)
-                                .fill(color(for: group.kind).opacity(group.isCited ? 1.0 : 0.24))
+                                .fill(color(for: group.kind).opacity(barOpacity(cited: group.isCited, hovered: hoveredKey == groupKey)))
                                 .frame(width: floor + group.minutes * unit)
                                 .overlay {
                                     if group.segments.contains(where: { revealNoteID == $0.id }) {
                                         RoundedRectangle(cornerRadius: 3).stroke(Color.accentColor, lineWidth: 2)
+                                    } else if hoveredKey == groupKey {
+                                        RoundedRectangle(cornerRadius: 3).stroke(Color.primary.opacity(0.85), lineWidth: 1.5)
                                     }
                                 }
                                 .contentShape(Rectangle())
+                                .onHover { trackHover(groupKey, $0) }
                                 .onTapGesture {
                                     if group.segments.count == 1 {
                                         activate(group.segments[0])
@@ -269,6 +277,25 @@ struct StudioTimelineView: View {
             .frame(maxHeight: 280)
         }
         .frame(width: 280)
+    }
+
+    /// Hovered bars brighten (uncited ones most) and get an outline so the
+    /// pointer's target is visible before the click, even on 3pt slivers.
+    private func barOpacity(cited: Bool, hovered: Bool) -> Double {
+        switch (cited, hovered) {
+        case (true, false): 1.0
+        case (true, true): 0.8
+        case (false, false): 0.24
+        case (false, true): 0.6
+        }
+    }
+
+    private func trackHover(_ key: String, _ inside: Bool) {
+        if inside {
+            hoveredKey = key
+        } else if hoveredKey == key {
+            hoveredKey = nil
+        }
     }
 
     private func activate(_ segment: StudioTimeline.Segment) {

@@ -205,6 +205,12 @@ public struct RecallSidecar {
         }
     }
 
+    /// Where the note was captured, or where an imported photo/video was shot.
+    var location: NoteLocation? { NoteLocation(sidecarValue: dict[NoteLocation.metadataKey]) }
+
+    /// When the note was added to the library, where that is recorded.
+    var addedAt: Date? { NoteAddedDate.read(metadata: dict) }
+
     /// "iPhone" / "macOS".
     var platform: String? { Self.text(origin?["platform"]) }
     /// Hardware model, e.g. "iPhone15,2".

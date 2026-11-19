@@ -61,6 +61,7 @@ enum EveningJournalStore {
             ]
             return true
         }
+        DeviceLocation.stampCurrent(for: file)
         return Entry(file: file, body: document.markdown, generatedDigest: nil, prompts: prompts, closedAt: nil)
     }
 
@@ -152,6 +153,7 @@ enum EveningJournalStore {
             }
             return true
         }
+        DeviceLocation.stampCurrent(for: audio)
     }
 
     /// The answer audio shown as inline players: answer notes the evening

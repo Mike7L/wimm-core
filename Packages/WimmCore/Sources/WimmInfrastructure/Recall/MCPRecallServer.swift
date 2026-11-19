@@ -648,6 +648,10 @@ public struct MCPRecallServer: Sendable {
         let typed = content.fileText
 
         var out = ["date: \(Self.iso(note.date)) (captured)", "kind: \(note.kind)"]
+        // An imported photo or video is dated by when it was shot; say when it arrived.
+        if let added = meta.addedAt, abs(added.timeIntervalSince(note.date)) > 60 {
+            out.append("added: \(Self.iso(added)) (added to the library)")
+        }
         if format == .standard {
             out.insert("id: \(note.id)", at: 0)
         }
@@ -692,6 +696,7 @@ public struct MCPRecallServer: Sendable {
         case let (nil, model?): out.append("device: \(model)")
         case (nil, nil): if let device = note.device { out.append("device: \(device)") }
         }
+        if let location = meta.location { out.append("location: \(location.displayString)") }
         // Compact reads carry no title/summary: a fallback one repeats the text's first words and a
         // model one is a derivative; the evidence blocks below are the source.
         if !compact, let title = note.title { out.append("title: \(title)") }

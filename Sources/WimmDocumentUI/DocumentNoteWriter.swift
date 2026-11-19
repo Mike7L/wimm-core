@@ -40,6 +40,7 @@ public enum DocumentNoteWriter {
             via: "note:\(sidecarRel)"
         )
         try await comments.append(record)
+        DeviceLocation.stampCurrent(for: noteURL)
         return noteURL
     }
 

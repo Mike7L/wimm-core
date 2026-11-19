@@ -52,6 +52,7 @@ enum QuickNotes {
             throw Failure.screenshotFailed
         }
         FileStore.upsertMetadata(for: url, updates: ["title": "Screenshot", "origin": ["source": "studio-screenshot"]])
+        DeviceLocation.stampCurrent(for: url)
         CaptureSoundFeedback.finish()
         return url
     }
@@ -78,12 +79,17 @@ enum QuickNotes {
             .filter { FileStore.isSupportedRecordingFile($0) }
         if !files.isEmpty {
             urls = try files.map { source in
-                let url = try newNoteURL(extension: source.pathExtension.lowercased())
+                // A copied photo is dated by when it was shot; `addedAt` keeps today.
+                let url = try newNoteURL(extension: source.pathExtension.lowercased(),
+                                         createdAt: MediaOrigin.shotAt(imageAt: source))
                 try FileManager.default.copyItem(at: source, to: url)
                 FileStore.upsertMetadata(for: url, updates: [
                     "title": source.deletingPathExtension().lastPathComponent,
                     "origin": ["source": "studio-clipboard", "file": source.lastPathComponent],
+                    NoteAddedDate.metadataKey: ISO8601.string(from: Date()),
                 ])
+                // A copied file carries its own place (photo EXIF) or none.
+                MediaLocation.stampFromFile(for: url)
                 return url
             }
         } else if let image = NSImage(pasteboard: board), let tiff = image.tiffRepresentation,
@@ -91,6 +97,7 @@ enum QuickNotes {
             let url = try newNoteURL(extension: "png")
             try png.write(to: url, options: .atomic)
             FileStore.upsertMetadata(for: url, updates: ["title": "Pasted image", "origin": ["source": "studio-clipboard"]])
+            DeviceLocation.stampCurrent(for: url)
             urls = [url]
         } else {
             let text = (board.string(forType: .string) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -99,6 +106,7 @@ enum QuickNotes {
             try Data(text.utf8).write(to: url, options: .atomic)
             let firstLine = String(text.split(whereSeparator: \.isNewline).first ?? Substring(text)).prefix(80)
             FileStore.upsertMetadata(for: url, updates: ["title": String(firstLine), "origin": ["source": "studio-clipboard"]])
+            DeviceLocation.stampCurrent(for: url)
             urls = [url]
         }
         return urls
@@ -109,13 +117,14 @@ enum QuickNotes {
         let url = try newNoteURL(extension: "txt")
         try Data(text.utf8).write(to: url, options: .atomic)
         FileStore.upsertMetadata(for: url, updates: ["title": title, "origin": ["source": source]])
+        DeviceLocation.stampCurrent(for: url)
         return url
     }
 
-    private static func newNoteURL(extension ext: String) throws -> URL {
+    private static func newNoteURL(extension ext: String, createdAt: Date? = nil) throws -> URL {
         try FileStore.ensureDirectoryExists()
         try FileManager.default.createDirectory(at: FileStore.recordingsDirectory(), withIntermediateDirectories: true)
-        let identity = RecordingIdentity()
+        let identity = RecordingIdentity(createdAt: createdAt ?? Date())
         let url = FileStore.newRecordingURL(identity: identity, extension: ext)
         identity.persist(for: url)
         return url

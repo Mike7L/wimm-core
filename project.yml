@@ -22,6 +22,7 @@ targets:
           - "Resources/**"
       - path: Sources/WimmiOSShared/Resources
         buildPhase: resources
+      - path: Sources/WimmQuickRecord
     settings:
       INFOPLIST_FILE: Sources/WimmiOS/Info.plist
       CODE_SIGN_ENTITLEMENTS: Sources/WimmiOS/WimmiOSApp.entitlements
@@ -40,6 +41,8 @@ targets:
       - package: WimmCore
         product: WimmInfrastructure
       - target: WimmShareExtension
+        embed: true
+      - target: WimmWidgets
         embed: true
   WimmiOSTests:
     type: bundle.unit-test
@@ -63,6 +66,25 @@ targets:
       INFOPLIST_FILE: Sources/WimmShareExtension/Info.plist
       CODE_SIGN_ENTITLEMENTS: Sources/WimmShareExtension/WimmShareExtension.entitlements
       PRODUCT_BUNDLE_IDENTIFIER: com.micha.wimm.ShareExtension
+      MARKETING_VERSION: 1.8.1
+      CURRENT_PROJECT_VERSION: 1
+      TARGETED_DEVICE_FAMILY: 1,2
+      DEVELOPMENT_TEAM: 32KX9D23R9
+      CODE_SIGN_STYLE: Automatic
+      SKIP_INSTALL: true
+  WimmWidgets:
+    # Control Center / Lock Screen / Action button control (iOS 18+).
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: Sources/WimmWidgets
+        excludes:
+          - Info.plist
+      - path: Sources/WimmQuickRecord
+    settings:
+      INFOPLIST_FILE: Sources/WimmWidgets/Info.plist
+      PRODUCT_BUNDLE_IDENTIFIER: com.micha.wimm.Widgets
       MARKETING_VERSION: 1.8.1
       CURRENT_PROJECT_VERSION: 1
       TARGETED_DEVICE_FAMILY: 1,2

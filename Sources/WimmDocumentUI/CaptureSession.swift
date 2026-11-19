@@ -183,6 +183,7 @@ public final class CaptureSession {
             startedAt = Date()
             phase = .recording
             stampInputDevice()
+            stampLocation()
             startLive()
             startLevel()
             startGateLoop(gate)
@@ -395,6 +396,7 @@ public final class CaptureSession {
         sendCount &+= 1
         recordingURL = newURL
         stampInputDevice()
+        stampLocation()
         let oldLoop = loop
         oldLoop?.cancel()
         loop = nil
@@ -653,6 +655,11 @@ public final class CaptureSession {
     private func stampInputDevice() {
         guard let url = recordingURL, let device = (source as? MicrophoneAudioSource)?.inputDevice else { return }
         device.stamp(url)
+    }
+
+    private func stampLocation() {
+        guard let url = recordingURL else { return }
+        DeviceLocation.stampCurrent(for: url)
     }
 
     private static func storeLiveText(_ text: String, for url: URL) {

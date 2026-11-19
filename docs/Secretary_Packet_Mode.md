@@ -884,8 +884,9 @@ rewrites incl. a dropped link, dispatcher request and its failure path).
      count, device/origin, geolocation/timezone when present in `.meta.json`,
      and all distinct transcripts/OCR texts.
    - Currently `MCPRecallServer.readNote` (`format: .secretaryPacket`) omits
-     `file:` and `updated:`, and `RecallSidecar` does not project location or
-     page count.
+     `file:` and `updated:`, and `RecallSidecar` does not project page count.
+     Since 2026-11-19 it prints `location:` and `added:`
+     (`Note_Place_And_Dates_Decision_2026-11-19.md`).
 
 3. **Targeted retry after a rejected edit group (without clogging the queue):**
    - Source-group rejection (`resolveEdits`) already commits valid edits and
