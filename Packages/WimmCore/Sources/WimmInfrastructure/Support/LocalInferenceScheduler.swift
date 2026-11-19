@@ -1,8 +1,11 @@
 import Foundation
 
 /// One heavyweight on-device inference at a time. A live session reserves the gaps between
-/// preview refreshes too, so a speaker backlog cannot start a long split in that gap.
-/// Running work is never interrupted: a completed split must still reach its guarded store.
+/// preview refreshes from background work, so a speaker backlog cannot start a long split in
+/// that gap. A file run (a just-closed note's local transcript) may take a gap: with silence
+/// split the live session lasts the whole capture, and the next refresh waits only for that run.
+/// A waiting live refresh always goes first. Running work is never interrupted: a completed
+/// split must still reach its guarded store.
 actor LocalInferenceScheduler {
     static let shared = LocalInferenceScheduler()
 
@@ -68,8 +71,8 @@ actor LocalInferenceScheduler {
 
     private func startNext() {
         guard active == nil else { return }
-        // FIFO within each priority. File runs also wait during live recording.
-        let eligible = waiting.indices.filter { liveSessions.isEmpty || waiting[$0].priority == .live }
+        // FIFO within each priority. Background work waits out live recording; file runs do not.
+        let eligible = waiting.indices.filter { liveSessions.isEmpty || waiting[$0].priority != .background }
         guard let index = eligible.max(by: { waiting[$0].priority.rawValue < waiting[$1].priority.rawValue }) else { return }
         let next = waiting.remove(at: index)
         active = next.id

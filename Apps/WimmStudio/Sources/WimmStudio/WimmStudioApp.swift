@@ -218,6 +218,7 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
     /// service well after launch too. Nil in a document-profile run.
     private(set) var cloudSync: StudioCloudSync?
     @ObservationIgnored private let transcriptCatchUp = StudioTranscriptCatchUp()
+    @ObservationIgnored private let imageTextCatchUp = StudioImageTextCatchUp()
     @ObservationIgnored private var sessionImportTask: Task<Void, Never>?
     var importsAgentSessions = UserDefaults.standard.object(forKey: "studioImportsAgentSessions") as? Bool ?? true {
         didSet {
@@ -324,6 +325,7 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
                 let files = try await make()
                 capture.errorMessage = nil
                 noteChanged(files)
+                imageTextCatchUp.recognize(files)
                 if !files.isEmpty { saveConfirmation.show(count: files.count) }
             } catch {
                 capture.errorMessage = error.localizedDescription
@@ -379,6 +381,9 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
             self?.transcriptCatchUp.transcriptMissing(file)
         }
         transcriptCatchUp.onNoteTranscribed = { [weak self] file in
+            self?.noteChanged([file])
+        }
+        imageTextCatchUp.onNoteRecognized = { [weak self] file in
             self?.noteChanged([file])
         }
         documentModel.onNoteCreated = { [weak self] file in
@@ -443,12 +448,15 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
         // Requests left over from a quit mid-run, then recordings that never got text.
         transcriptCatchUp.drain()
         transcriptCatchUp.sweep(excluding: capture.recordingURL)
+        imageTextCatchUp.sweep()
         // One run-loop turn later, so launch has fully finished before CloudKit is touched.
         DispatchQueue.main.async { [weak self] in self?.startCloudSync() }
     }
 
     private func startCloudSync() {
-        let sync = StudioCloudSync(onRemoteChanges: { [weak self] in self?.recentNotes.reload() })
+        let sync = StudioCloudSync(
+            onRemoteChanges: { [weak self] in self?.recentNotes.reload() },
+            onDownloaded: { [weak self] files in self?.transcriptCatchUp.synced(files) })
         cloudSync = sync
         if sync.isAvailable {
             sync.start()

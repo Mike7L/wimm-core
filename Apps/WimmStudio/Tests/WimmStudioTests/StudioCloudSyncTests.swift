@@ -29,7 +29,9 @@ private actor FakeSyncService: StudioSyncService {
         return SyncRecordingID()
     }
     func uploadPending() async throws { uploads += 1 }
-    func drainFreshlyDownloaded() async -> [URL] { [] }
+    var downloaded: [URL] = []
+    func setDownloaded(_ files: [URL]) { downloaded = files }
+    func drainFreshlyDownloaded() async -> [URL] { defer { downloaded = [] }; return downloaded }
 }
 
 private struct Boom: LocalizedError { var errorDescription: String? { "boom" } }
@@ -125,5 +127,16 @@ final class StudioCloudSyncTests: XCTestCase {
         let uploads = await service.uploads
         XCTAssertTrue(enqueued.isEmpty)
         XCTAssertEqual(uploads, 1)
+    }
+
+    @MainActor func testDownloadedNotesAreHandedOnOnce() async {
+        let service = FakeSyncService()
+        let note = URL(fileURLWithPath: "/tmp/Wimm_2026-11-19_10-23-44_4ED0C306.m4a")
+        await service.setDownloaded([note])
+        var handed: [[URL]] = []
+        let sync = StudioCloudSync(service: service, onRemoteChanges: {}, onDownloaded: { handed.append($0) })
+        await sync.sync(fullScan: false)
+        await sync.sync(fullScan: false)
+        XCTAssertEqual(handed, [[note]])
     }
 }

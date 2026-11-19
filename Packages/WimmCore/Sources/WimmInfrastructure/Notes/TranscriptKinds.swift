@@ -181,6 +181,18 @@ public enum TranscriptRuns {
                 && json["transcriptionFailure"] == nil)
     }
 
+    /// Audio with no file run and no verdict yet — one rule for every device.
+    /// Live text alone (a dictionary from `FileStore.storeLiveText` or an old
+    /// iPhone's plain string) is not a run. A no-speech result and a
+    /// sub-second tap count as done; derived audio and non-audio never qualify.
+    public static func needsFileRun(file: URL, sidecar meta: [String: Any]) -> Bool {
+        guard FileStore.isAudioFile(file), !FileStore.isDerivedAudioFile(file) else { return false }
+        if let duration = meta["duration"] as? Double, duration < 1 { return false }
+        guard let transcription = transcription(fromSidecar: meta) else { return true }
+        if transcription["speechStatus"] as? String == TranscriptionSpeechStatus.noSpeech.rawValue { return false }
+        return runs(in: transcription).isEmpty
+    }
+
     /// A `transcript` that is only the promoted live string (no file run has
     /// replaced it yet) is the realtime text, not a run of its own.
     static func isRealtimeCopy(_ transcription: [String: Any]) -> Bool {

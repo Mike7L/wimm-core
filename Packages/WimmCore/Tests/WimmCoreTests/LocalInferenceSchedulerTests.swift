@@ -50,6 +50,39 @@ final class LocalInferenceSchedulerTests: XCTestCase {
         XCTAssertEqual(after.last, "background")
     }
 
+    func testFileRunTakesARefreshGapButLiveGoesFirst() async throws {
+        let scheduler = LocalInferenceScheduler()
+        let session = await scheduler.beginLiveSession()
+        let events = InferenceEvents()
+        let barrier = InferenceBarrier()
+        let refresh = Task {
+            try await scheduler.withPermit(priority: .live) {
+                await barrier.started()
+                await barrier.wait()
+                await events.add("live")
+            }
+        }
+        while !(await barrier.didStart) { await Task.yield() }
+        let split = Task { try await scheduler.withPermit(priority: .background) { await events.add("split") } }
+        try await pending(1, scheduler)
+        let file = Task { try await scheduler.withPermit(priority: .file) { await events.add("file") } }
+        try await pending(2, scheduler)
+        let nextRefresh = Task { try await scheduler.withPermit(priority: .live) { await events.add("live") } }
+        try await pending(3, scheduler)
+        await barrier.open()
+        try await refresh.value
+        try await nextRefresh.value
+        try await file.value
+        let during = await events.values
+        XCTAssertEqual(during, ["live", "live", "file"])
+        let count = await scheduler.pendingCount
+        XCTAssertEqual(count, 1)
+        await scheduler.endLiveSession(session)
+        try await split.value
+        let after = await events.values
+        XCTAssertEqual(after.last, "split")
+    }
+
     func testCancellationRemovesWaitingWork() async throws {
         let scheduler = LocalInferenceScheduler()
         let session = await scheduler.beginLiveSession()
@@ -152,7 +185,7 @@ final class LocalInferenceSchedulerTests: XCTestCase {
         let first = await scheduler.beginLiveSession()
         let second = await scheduler.beginLiveSession()
         let events = InferenceEvents()
-        let waiting = Task { try await scheduler.withPermit(priority: .file) { await events.add("file") } }
+        let waiting = Task { try await scheduler.withPermit(priority: .background) { await events.add("split") } }
         try await pending(1, scheduler)
         await scheduler.endLiveSession(first)
         let count = await scheduler.pendingCount

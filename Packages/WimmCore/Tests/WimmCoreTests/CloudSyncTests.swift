@@ -282,6 +282,22 @@ final class CloudSyncTests: XCTestCase {
         XCTAssertEqual(silent["transcript"] as? String, "mac run")
     }
 
+    /// A phone's live-text record (no file run yet) never replaces a file run
+    /// this Mac already has; it only refreshes the live text.
+    func testRemoteLiveTextKeepsLocalFileRun() {
+        let local: [String: Any] = ["transcript": "mac run", "localTranscript": "live", "provider": "parakeet"]
+        let remote: [String: Any] = ["transcript": "live, longer", "localTranscript": "live, longer", "speechStatus": "speech"]
+        let merged = CloudRecordingSyncService.mergedTranscription(local, remote: remote)
+        XCTAssertEqual(merged["transcript"] as? String, "mac run")
+        XCTAssertEqual(merged["provider"] as? String, "parakeet")
+        XCTAssertEqual(merged["localTranscript"] as? String, "live, longer")
+        XCTAssertNil(merged["previousRuns"])
+
+        // Without a local run the phone's live record lands as is.
+        let fresh = CloudRecordingSyncService.mergedTranscription(["transcript": "live"], remote: remote)
+        XCTAssertEqual(fresh["transcript"] as? String, "live, longer")
+    }
+
     /// The phone's plain string is its live text or the user's edit. An echo
     /// of text the Mac already has must not replace the cloud run; a real edit
     /// wins and the cloud run goes to previousRuns. An unparseable remote

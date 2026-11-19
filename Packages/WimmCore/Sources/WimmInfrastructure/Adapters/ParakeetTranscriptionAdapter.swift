@@ -230,6 +230,12 @@ public struct ParakeetTranscriptionAdapter: FileTranscriptionPort, Sendable {
         return await ParakeetManagerCache.shared.isLoaded(version)
     }
 
+    /// True when the model files are on this device, so a run downloads nothing.
+    public static func isInstalled(modelIdentifier: String = ParakeetModel.ultra) -> Bool {
+        guard let version = version(for: ParakeetModel.variant(from: modelIdentifier) ?? "ultra") else { return false }
+        return AsrModels.modelsExist(at: AsrModels.defaultCacheDirectory(for: version), version: version)
+    }
+
     /// Downloads (~600 MB once) and compiles the model so the first note does not pay for it.
     public static func preload(
         modelIdentifier: String = ParakeetModel.ultra,
@@ -331,6 +337,7 @@ public struct ParakeetTranscriptionAdapter: FileTranscriptionPort, Sendable {
         onlyIfInstalled: Bool = false
     ) async throws {}
     public static func isLoaded(modelIdentifier: String = ParakeetModel.ultra) async -> Bool { false }
+    public static func isInstalled(modelIdentifier: String = ParakeetModel.ultra) -> Bool { false }
 }
 
 #endif

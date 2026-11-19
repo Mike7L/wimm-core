@@ -656,14 +656,7 @@ public final class CaptureSession {
     }
 
     private static func storeLiveText(_ text: String, for url: URL) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        FileStore.mutateTranscription(for: url) { transcription in
-            guard !trimmed.isEmpty else { return false }
-            transcription["transcript"] = trimmed
-            transcription["localTranscript"] = trimmed
-            transcription["speechStatus"] = TranscriptionSpeechStatus.speech.rawValue
-            return true
-        }
+        FileStore.storeLiveText(text, for: url)
     }
 }
 

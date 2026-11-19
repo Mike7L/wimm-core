@@ -559,6 +559,23 @@ extension FileStore {
         }
     }
 
+    /// Stores the text heard while recording, in the one shape every device
+    /// writes: `localTranscript` is the live text, and `transcript` carries a
+    /// copy of it until a file run replaces it. A file run already there keeps
+    /// its transcript. Empty text writes nothing.
+    public static func storeLiveText(_ text: String, for recordingURL: URL) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        mutateTranscription(for: recordingURL) { transcription in
+            transcription["localTranscript"] = trimmed
+            if transcription["provider"] == nil {
+                transcription["transcript"] = trimmed
+                transcription["speechStatus"] = TranscriptionSpeechStatus.speech.rawValue
+            }
+            return true
+        }
+    }
+
     /// The single in-process mutation door for the nested `transcription`
     /// dictionary. Optional top-level removals happen in the same sidecar
     /// read-modify-write, which lets a successful run clear failure markers
@@ -579,8 +596,8 @@ extension FileStore {
         }
     }
 
-    /// The sidecar's `transcription` value as a dictionary. The iPhone recorder
-    /// (`RecordingMetadata`) writes it as a plain string — the live on-device
+    /// The sidecar's `transcription` value as a dictionary. iPhone builds
+    /// before `storeLiveText` wrote it as a plain string — the live on-device
     /// text. Read as a dictionary, that string is both the transcript and the
     /// realtime text (`localTranscript`), so the first file run that replaces
     /// the transcript no longer throws the live text away.

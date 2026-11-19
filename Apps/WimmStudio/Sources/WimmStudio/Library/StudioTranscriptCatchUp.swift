@@ -33,42 +33,44 @@ final class StudioTranscriptCatchUp {
     func sweep(excluding active: URL?) {
         let queue = self.queue
         Task.detached(priority: .utility) {
-            let cutoff = Date().addingTimeInterval(-Double(Self.sweepDays) * 86_400)
-            let now = Date()
             let listed = (try? FileManager.default.contentsOfDirectory(
                 at: FileStore.recordingsDirectory(), includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
-            let files = listed.filter { file in
-                guard file.standardizedFileURL != active?.standardizedFileURL,
-                      let date = FileStore.recordingDateFromFileName(file),
-                      date >= cutoff, now.timeIntervalSince(date) >= Self.minimumAge,
-                      queue.latest(forFile: file.path) == nil else { return false }
-                return Self.needsTranscript(file: file, meta: Self.sidecar(of: file))
-            }
+            let files = Self.needingRun(listed.filter { $0.standardizedFileURL != active?.standardizedFileURL },
+                                        queue: queue, minimumAge: Self.minimumAge)
             await MainActor.run { [weak self] in
                 self?.enqueue(files, reason: "studio: recording without a transcript at launch")
             }
         }
     }
 
-    /// Audio with no text and no verdict yet. A no-speech result, a
-    /// sub-second tap and any text (an iPhone's plain-string one included)
-    /// count as done.
-    nonisolated static func needsTranscript(file: URL, meta: [String: Any]) -> Bool {
-        guard FileStore.isAudioFile(file), !FileStore.isDerivedAudioFile(file) else { return false }
-        if let duration = meta["duration"] as? Double, duration < 1 { return false }
-        switch meta[MetadataKey.transcription.rawValue] {
-        case let text as String:
-            return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        case let run as [String: Any]:
-            if run["speechStatus"] as? String == TranscriptionSpeechStatus.noSpeech.rawValue { return false }
-            let transcript = (run["transcript"] as? String) ?? ""
-            return transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        default:
-            return true
+    /// Notes another device just sent through iCloud. They arrive finished,
+    /// so no minimum age; a recording the iPhone already ran is skipped by
+    /// `needsFileRun`.
+    func synced(_ files: [URL]) {
+        guard !files.isEmpty else { return }
+        let queue = self.queue
+        Task.detached(priority: .utility) {
+            let files = Self.needingRun(files, queue: queue, minimumAge: 0)
+            await MainActor.run { [weak self] in
+                self?.enqueue(files, reason: "studio: recording synced in without a transcript")
+            }
         }
     }
 
-    private nonisolated static func sidecar(of file: URL) -> [String: Any] {
+    /// Recordings from the last `sweepDays` days, at least `minimumAge` old,
+    /// that the queue has never seen and that still need a file run.
+    nonisolated static func needingRun(_ files: [URL], queue: RetranscriptionQueue,
+                                       minimumAge: TimeInterval, now: Date = Date()) -> [URL] {
+        let cutoff = now.addingTimeInterval(-Double(sweepDays) * 86_400)
+        return files.filter { file in
+            guard let date = FileStore.recordingDateFromFileName(file),
+                  date >= cutoff, now.timeIntervalSince(date) >= minimumAge,
+                  queue.latest(forFile: file.path) == nil else { return false }
+            return TranscriptRuns.needsFileRun(file: file, sidecar: sidecar(of: file))
+        }
+    }
+
+    nonisolated static func sidecar(of file: URL) -> [String: Any] {
         (try? Data(contentsOf: FileStore.metadataURL(forRecordingURL: file)))
             .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
     }

@@ -210,6 +210,33 @@ final class TranscriptionLogTests: XCTestCase {
         XCTAssertNil(t["previousRuns"], "the live copy is not a run to archive")
     }
 
+    func testStoreLiveTextWritesOneShapeAndKeepsAFileRun() throws {
+        // An iPhone recorder snapshot (plain string) becomes the shape Studio writes.
+        let file = tempDir.appendingPathComponent("phone.m4a")
+        try Data(repeating: 1, count: 16).write(to: file)
+        try RecordingMetadata(recordingURL: file, transcription: "hello").save()
+        FileStore.storeLiveText(" hello there ", for: file)
+        var t = storedTranscription(for: file)
+        XCTAssertEqual(t["transcript"] as? String, "hello there")
+        XCTAssertEqual(t["localTranscript"] as? String, "hello there")
+        XCTAssertEqual(t["speechStatus"] as? String, TranscriptionSpeechStatus.speech.rawValue)
+
+        // A later snapshot does not turn the dictionary back into a string.
+        try RecordingMetadata(recordingURL: file, transcription: "hello there again").save()
+        FileStore.storeLiveText("", for: file)
+        XCTAssertEqual(storedTranscription(for: file)["localTranscript"] as? String, "hello there")
+
+        recordRunSuccess(
+            file: file, provider: "parakeet", model: "parakeet:ultra",
+            audioDuration: 5, startedAt: Date(), elapsedSeconds: 1,
+            transcript: "Hello, there.", speechStatus: .speech, rawResponse: nil
+        )
+        FileStore.storeLiveText("hello there, late", for: file)
+        t = storedTranscription(for: file)
+        XCTAssertEqual(t["transcript"] as? String, "Hello, there.")
+        XCTAssertEqual(t["localTranscript"] as? String, "hello there, late")
+    }
+
     func testNoSpeechKeepsLiveTextThatAFileRunConfirmed() throws {
         // Once a file run wrote text (provider set), a later no-speech run is ignored
         // even when that text equals the live text.

@@ -21,9 +21,8 @@ extension CloudRecordingSyncService: StudioSyncService {}
 /// at launch, on a timer, when the app comes to the front, and shortly after a
 /// note is saved here.
 ///
-/// Studio runs no post-download processing yet (OCR, cards, transcription of
-/// recordings that arrived without text): downloaded notes appear in the
-/// library as the iPhone sent them.
+/// Downloaded notes go to `onDownloaded` (Studio queues a local file run for
+/// recordings that arrived without one); no other post-download processing.
 @MainActor @Observable
 final class StudioCloudSync {
     /// Pushes are low priority and Apple may delay or drop them, so a cheap
@@ -41,6 +40,7 @@ final class StudioCloudSync {
     @ObservationIgnored private let service: (any StudioSyncService)?
     @ObservationIgnored private let uploadDelay: Duration
     @ObservationIgnored private let onRemoteChanges: @MainActor () -> Void
+    @ObservationIgnored private let onDownloaded: @MainActor ([URL]) -> Void
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var uploadTask: Task<Void, Never>?
     @ObservationIgnored private var pendingUploads: Set<URL> = []
@@ -54,10 +54,12 @@ final class StudioCloudSync {
     /// off and every call is a no-op.
     init(service: (any StudioSyncService)? = CloudRecordingSyncService.live(),
          uploadDelay: Duration = .seconds(2),
-         onRemoteChanges: @escaping @MainActor () -> Void) {
+         onRemoteChanges: @escaping @MainActor () -> Void,
+         onDownloaded: @escaping @MainActor ([URL]) -> Void = { _ in }) {
         self.service = service
         self.uploadDelay = uploadDelay
         self.onRemoteChanges = onRemoteChanges
+        self.onDownloaded = onDownloaded
     }
 
     func start() {
@@ -145,8 +147,9 @@ final class StudioCloudSync {
             lastError = error.localizedDescription
             log("[CloudSync] sync failed: \(error)")
         }
-        // Nothing consumes the hand-off list here; drain it so it cannot grow.
-        _ = await service.drainFreshlyDownloaded()
+        // Drained every pass, failed ones too, so the hand-off list cannot grow.
+        let downloaded = await service.drainFreshlyDownloaded()
+        if !downloaded.isEmpty { onDownloaded(downloaded) }
         if applied {
             log("[CloudSync] remote changes applied")
             onRemoteChanges()

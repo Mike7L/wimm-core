@@ -126,7 +126,10 @@ reasons behind the rules are in `docs/` (index: `docs/README.md`).
   Parakeet file run over the original (`provider: parakeet`, in
   `transcription.transcript`/`previousRuns`); *cloud* = Gemini file run, only
   on request. Never say "local" for the live text. Studio asks for a local run
-  after every recording (`onTranscriptMissing`, kept name).
+  after every recording (`onTranscriptMissing`, kept name); the iPhone does
+  too (`transcribeAfterRecording`) when Parakeet is already installed there.
+  Every device stores live text via `FileStore.storeLiveText`; live text alone
+  is never a run: whether a recording needs one is `TranscriptRuns.needsFileRun`.
 - `parakeet:ultra` is on-device. **`ModelRouter` must keep `parakeet:` under
   the Gemini fallback** and model checks go by prefix
   (`TranscriptKind.ofModel`), or a note silently goes to the cloud. Parakeet

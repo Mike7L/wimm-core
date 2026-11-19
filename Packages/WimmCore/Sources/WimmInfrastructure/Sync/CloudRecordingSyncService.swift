@@ -722,6 +722,13 @@ public actor CloudRecordingSyncService {
         }
         let remoteText = text(remote["transcript"])
         guard !remoteText.isEmpty else { return text(local["transcript"]).isEmpty ? remote : local }
+        // Live text only (a phone still recording or not yet run) never
+        // replaces a file run here; it updates this note's live text.
+        if TranscriptRuns.isRealtimeCopy(remote), local["provider"] is String {
+            var merged = local
+            merged["localTranscript"] = remoteText
+            return merged
+        }
         var archive = local
         archivePreviousRun(in: &archive, replacingWith: remoteText)
         var runs = remote[transcriptionPreviousRunsKey] as? [[String: Any]] ?? []
