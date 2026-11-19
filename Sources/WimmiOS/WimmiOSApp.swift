@@ -76,6 +76,18 @@ struct WimmiOSApp: App {
                 }
             case .background:
                 BackgroundSync.schedule()
+                // Logs of the session just ended reach the Mac without waiting
+                // for the next sync; at most every 30 min, never in private mode.
+                if let logSync = CloudRecordingSyncService.live()?.logSync {
+                    let work = Task { await logSync.syncNow() }
+                    let task = UIApplication.shared.beginBackgroundTask(withName: "wimm.logs") {
+                        work.cancel()
+                    }
+                    Task {
+                        await work.value
+                        UIApplication.shared.endBackgroundTask(task)
+                    }
+                }
             default:
                 break
             }

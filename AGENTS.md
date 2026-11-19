@@ -302,7 +302,11 @@ For “update Studio”, follow this order:
   `npm test` in `Apps/WimmStudioWeb`.
 - Logs: events `~/Library/Application Support/Wimm/logs/events/`, recordings
   and sidecars `~/Library/Application Support/Wimm/Recordings/`, plain `log()`
-  → stderr + unified logging `app.wimm`/`core`.
+  → stderr + unified logging `app.wimm`/`core`. iPhone event logs reach the
+  Mac through iCloud (`DeviceLogSync`: phone uploads the last 3 days, zlib,
+  never in private mode; Studio's sync copies them to
+  `logs/devices/<model>-<id>/`). Its records reuse `RecordingBundle` under
+  fixed `wimm-logs-*` names without `updatedAt`, so note sync never sees them.
 
 ## Skills
 

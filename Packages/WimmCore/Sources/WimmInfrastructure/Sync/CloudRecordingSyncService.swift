@@ -41,17 +41,21 @@ public actor CloudRecordingSyncService {
     /// The personal document's snapshot, carried along by every sync; only
     /// the live service has one, so tests never reach a real document.
     public nonisolated let documentSync: PersonalDocumentSync?
+    /// The iPhone's event logs on their way to the Mac; live service only.
+    public nonisolated let logSync: DeviceLogSync?
 
     public init(
         builder: RecordingBundleBuilder = RecordingBundleBuilder(),
         stateStore: SyncStateStore = SyncStateStore(),
         transport: any CloudRecordingSyncTransport,
-        documentSync: PersonalDocumentSync? = nil
+        documentSync: PersonalDocumentSync? = nil,
+        logSync: DeviceLogSync? = nil
     ) {
         self.builder = builder
         self.stateStore = stateStore
         self.transport = transport
         self.documentSync = documentSync
+        self.logSync = logSync
     }
 
     /// The app's one sync engine. Every caller must share it: each instance
@@ -78,7 +82,8 @@ public actor CloudRecordingSyncService {
         #endif
         return CloudRecordingSyncService(
             transport: CloudKitRecordingSyncTransport(containerIdentifier: containerIdentifier),
-            documentSync: PersonalDocumentSync.makeLive(containerIdentifier: containerIdentifier)
+            documentSync: PersonalDocumentSync.makeLive(containerIdentifier: containerIdentifier),
+            logSync: DeviceLogSync.makeLive(containerIdentifier: containerIdentifier)
         )
         #else
         return nil
@@ -142,6 +147,8 @@ public actor CloudRecordingSyncService {
     /// `quickLookback`, for frequent polls that only need fresh uploads.
     @discardableResult
     public func syncNow(fullScan: Bool = false, recentOnly: Bool = false) async throws -> Bool {
+        // Logs go first and on their own: they matter most when note sync fails.
+        await logSync?.syncNow()
         try await stateStore.validatePersistence()
         if fullScan { await enqueueUntracked() }
         _ = try await enqueueLocalChangesPersisted(limit: 200)
