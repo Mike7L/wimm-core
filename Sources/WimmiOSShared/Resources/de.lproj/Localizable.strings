@@ -840,6 +840,9 @@
 "ios.capture.done" = "Fertig";
 "ios.capture.live_transcription" = "Live-Transkription";
 "ios.capture.input_fmt" = "Mikrofon: %@";
+"ios.capture.switch_microphone" = "Mikrofon wechseln";
+"ios.capture.microphone_headset" = "Kopfhörer";
+"ios.capture.microphone_iphone" = "iPhone-Mikrofon";
 "ios.capture.photo_quality" = "Fotoqualität";
 "ios.capture.paste" = "Einfügen";
 "ios.capture.photos" = "Fotos";
@@ -1016,7 +1019,13 @@
 "ios.settings.microphone" = "Aufnehmen über";
 "ios.settings.microphone_bluetooth" = "AirPods / Bluetooth, wenn verbunden";
 "ios.settings.microphone_builtin" = "Nur iPhone-Mikrofon";
-"ios.settings.microphone_footer" = "Ein Bluetooth-Headset-Mikrofon klingt schlechter als das iPhone-Mikrofon. Wähle „Nur iPhone-Mikrofon“, wenn dir der Klang nicht gefällt. Gilt ab der nächsten Aufnahme.";
+"ios.settings.microphone_footer" = "Ein Bluetooth-Headset-Mikrofon klingt schlechter als das iPhone-Mikrofon. Wähle „Nur iPhone-Mikrofon“, wenn dir der Klang nicht gefällt. Während einer Aufnahme kannst du das Mikrofon im Aufnahmebildschirm wechseln.";
+"ios.settings.voice_isolation" = "Sprachisolierung (Test)";
+"ios.settings.voice_isolation_footer" = "Die Aufnahme läuft über die Sprachverarbeitung von iOS; dadurch stehen die Mikrofonmodi zur Verfügung, darunter „Sprachisolierung“. Den Modus wählst du im Mikrofonmenü des Aufnahmebildschirms. Das Original wird bereits bearbeitet gespeichert (Rauschunterdrückung, automatische Verstärkung); unbearbeiteter Ton bleibt nicht erhalten. Gilt ab der nächsten Aufnahme.";
+"ios.capture.microphone_modes" = "Mikrofonmodus …";
+"ios.settings.heart_rate" = "Puls aufzeichnen";
+"ios.settings.heart_rate_footer" = "Von AirPods Pro 3 oder Apple Watch. Während einer Aufnahme startet das iPhone ein Training in Health (es wird nicht gesichert); sonst messen die Ohrhörer nicht. Erfordert iOS 26. Die Werte werden in der Notiz gespeichert und mit ihr in iCloud übertragen.";
+"ios.capture.heart_rate_fmt" = "Puls %d";
 "ios.settings.no_keys_for_models" = "Speichere einen Gemini- oder OpenRouter-Schlüssel, um dessen Modelle zu sehen. Du kannst auch eine Modell-ID eingeben.";
 "ios.settings.on_device_models" = "Auf diesem iPhone";
 "ios.settings.parakeet_footer" = "Läuft auf dem Telefon: Es wird kein Audio hochgeladen und kein Schlüssel benötigt. Beim ersten Mal wird das Modell einmal geladen (~600 MB, am besten per WLAN) und kompiliert, das dauert etwas.";

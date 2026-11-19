@@ -45,6 +45,8 @@ struct ModelSettingsView: View {
     @State private var hasOpenRouterKey = false
     @State private var transcribeModel = Config.transcribeModel
     @State private var microphone = RecordingMicrophonePreference.load()
+    @State private var heartRate = RecordingHeartRateSetting.isEnabled()
+    @State private var voiceIsolation = RecordingVoiceIsolationSetting.isEnabled()
 
     private static let geminiKeyName = "GEMINI_API_KEY"
     private static let openRouterKeyName = "OPENROUTER_API_KEY"
@@ -82,6 +84,18 @@ struct ModelSettingsView: View {
                     Text(L10n.iOS.Settings.microphoneFooter)
                 }
 
+                Section {
+                    Toggle(L10n.iOS.Settings.voiceIsolation, isOn: $voiceIsolation)
+                } footer: {
+                    Text(L10n.iOS.Settings.voiceIsolationFooter)
+                }
+
+                Section {
+                    Toggle(L10n.iOS.Settings.heartRate, isOn: $heartRate)
+                } footer: {
+                    Text(L10n.iOS.Settings.heartRateFooter)
+                }
+
                 keySection(
                     title: "Gemini",
                     key: $geminiKey,
@@ -109,6 +123,8 @@ struct ModelSettingsView: View {
             .onAppear(perform: refreshSavedState)
             .onChange(of: transcribeModel) { _, value in ModelSelection.setModel(value, for: .hear) }
             .onChange(of: microphone) { _, value in value.save() }
+            .onChange(of: heartRate) { _, value in RecordingHeartRateSetting.set(value) }
+            .onChange(of: voiceIsolation) { _, value in RecordingVoiceIsolationSetting.set(value) }
         }
     }
 

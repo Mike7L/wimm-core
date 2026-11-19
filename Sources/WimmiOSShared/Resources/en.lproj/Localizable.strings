@@ -841,6 +841,9 @@
 "ios.capture.done" = "Done";
 "ios.capture.live_transcription" = "Live transcription";
 "ios.capture.input_fmt" = "Mic: %@";
+"ios.capture.switch_microphone" = "Switch microphone";
+"ios.capture.microphone_headset" = "Headphones";
+"ios.capture.microphone_iphone" = "iPhone microphone";
 "ios.capture.photo_quality" = "Photo quality";
 "ios.capture.paste" = "Paste";
 "ios.capture.photos" = "Photos";
@@ -1017,7 +1020,13 @@
 "ios.settings.microphone" = "Record from";
 "ios.settings.microphone_bluetooth" = "AirPods / Bluetooth when connected";
 "ios.settings.microphone_builtin" = "iPhone microphone only";
-"ios.settings.microphone_footer" = "A Bluetooth headset mic sounds worse than the iPhone mic. Choose \"iPhone microphone only\" if you prefer the iPhone sound. Applies to the next recording.";
+"ios.settings.microphone_footer" = "A Bluetooth headset mic sounds worse than the iPhone mic. Choose \"iPhone microphone only\" if you prefer the iPhone sound. During a recording you can switch the mic on the recording screen.";
+"ios.settings.voice_isolation" = "Voice Isolation (trial)";
+"ios.settings.voice_isolation_footer" = "Recording goes through iOS voice processing, which makes the microphone modes available, including Voice Isolation. Pick a mode in the microphone menu on the recording screen. The original is saved already processed (noise suppression, automatic gain); no unprocessed sound is kept. Applies from the next recording.";
+"ios.capture.microphone_modes" = "Mic Mode…";
+"ios.settings.heart_rate" = "Record heart rate";
+"ios.settings.heart_rate_footer" = "From AirPods Pro 3 or Apple Watch. During a recording the iPhone runs a workout in Health (it is not saved); the earbuds do not measure otherwise. Needs iOS 26. The readings are stored in the note and go to iCloud with it.";
+"ios.capture.heart_rate_fmt" = "Heart rate %d";
 "ios.settings.no_keys_for_models" = "Save a Gemini or OpenRouter key to see its models. You can also type a model ID.";
 "ios.settings.on_device_models" = "On this iPhone";
 "ios.settings.parakeet_footer" = "Runs on the phone: no audio is uploaded and no key is needed. The first run downloads the model once (~600 MB, Wi-Fi recommended) and compiles it, which takes a while.";

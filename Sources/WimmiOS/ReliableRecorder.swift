@@ -32,9 +32,25 @@ class ReliableRecorder: ObservableObject {
     
     /// Input the recording uses now (e.g. "AirPods Pro"), nil when idle
     @Published var inputName: String?
+
+    /// Microphone setting of the running recording (headset or iPhone mic)
+    @Published var microphonePreference = RecordingMicrophonePreference.load()
+
+    /// Whether the recording screen offers the headset ↔ iPhone switch
+    @Published var canSwitchMicrophone = false
+
+    /// Latest pulse of the running recording (trial setting), nil without one
+    @Published var heartRateBPM: Int?
+
+    /// The recording goes through iOS voice processing (trial setting)
+    @Published var voiceProcessingActive = false
     
     /// Transcription progress (0.0 to 1.0)
     @Published var transcriptionProgress: Double = 0.0
+
+    /// Bumped each time a recording could not start or stopped on its own;
+    /// the capture screen tells the user instead of showing a running timer.
+    @Published private(set) var failureCount = 0
     
     /// Current recording URL (nil when not recording)
     var recordingURL: URL? {
@@ -47,10 +63,14 @@ class ReliableRecorder: ObservableObject {
     private var metadataTimer: Timer?
     private let repository = IOSRecordingRepository.shared
     private var cancellables = Set<AnyCancellable>()
+    private var bindings = Set<AnyCancellable>()
     private var currentRecordingURL: URL?
     private var recordingStartTime: Date?
     private var accumulatedDuration: TimeInterval = 0
     private var lastResumeTime: Date?
+    /// Set while this wrapper itself stops or splits, so the base recorder
+    /// going idle then is not taken for a recorder that died.
+    private var isTransitioning = false
     /// Battery-measurement switches for this recording session (all off by default).
     private var diagnostics = BatteryDiagnosticsSettings()
     
@@ -78,6 +98,28 @@ class ReliableRecorder: ObservableObject {
 
         baseRecorder.$inputName
             .assign(to: &$inputName)
+
+        baseRecorder.$microphonePreference
+            .assign(to: &$microphonePreference)
+
+        baseRecorder.$canSwitchMicrophone
+            .assign(to: &$canSwitchMicrophone)
+
+        baseRecorder.$heartRateBPM
+            .assign(to: &$heartRateBPM)
+
+        baseRecorder.$voiceProcessingActive
+            .assign(to: &$voiceProcessingActive)
+
+        // The file recorder can end on its own (encode error, a failed
+        // finish); the note must end with it rather than keep a clock running.
+        baseRecorder.$isRecording
+            .removeDuplicates()
+            .filter { !$0 }
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in await self?.baseRecorderStopped() }
+            }
+            .store(in: &bindings)
     }
     
     // MARK: - Public API
@@ -90,7 +132,11 @@ class ReliableRecorder: ObservableObject {
         BatteryProbe.shared.recordingStarted(settings: diagnostics)
 
         // Start the underlying recorder
-        await baseRecorder.startRecording()
+        guard await baseRecorder.startRecording() else {
+            BatteryProbe.shared.recordingStopped()
+            failureCount += 1
+            return
+        }
         
         // Update state
         isRecording = true
@@ -106,6 +152,11 @@ class ReliableRecorder: ObservableObject {
         await saveMetadataSnapshot()
     }
     
+    /// Switch between headset and iPhone mic without stopping the recording
+    func switchMicrophone(to preference: RecordingMicrophonePreference) {
+        baseRecorder.switchMicrophone(to: preference)
+    }
+
     /// Pauses the active recording
     func pauseRecording() {
         guard isRecording && !isPaused else { return }
@@ -141,8 +192,11 @@ class ReliableRecorder: ObservableObject {
         
         // 3. Stop the underlying baseRecorder (saves file and finishes transcriber).
         // Capture the transcription only after the stop: stopping flushes the
-        // transcriber's final utterance into transcribedText.
-        await baseRecorder.stopRecording()
+        // transcriber's final utterance into transcribedText. The session
+        // stays on: the next note starts right away.
+        isTransitioning = true
+        defer { isTransitioning = false }
+        await baseRecorder.stopRecording(keepingSessionActive: true)
         let finalTranscription = baseRecorder.transcribedText
         
         // 4. Save final metadata for this segment with isComplete=true
@@ -158,14 +212,22 @@ class ReliableRecorder: ObservableObject {
             )
             do {
                 try await repository.saveMetadata(for: url, metadata: metadata)
+                FileStore.storeLiveText(finalTranscription, for: url)
                 print("ReliableRecorder: Split completed segment metadata saved for \(url.lastPathComponent)")
             } catch {
                 print("ReliableRecorder: Failed to save split segment metadata: \(error)")
             }
         }
         
-        // 5. Start new recording segment
-        await baseRecorder.startRecording()
+        // 5. Start new recording segment; if it cannot start, the session
+        // ends here (the finished note above is kept) and the user is told.
+        guard await baseRecorder.startRecording() else {
+            baseRecorder.releaseSession()
+            BatteryProbe.shared.recordingStopped()
+            endSession()
+            failureCount += 1
+            return finalizedURL
+        }
         
         // 6. Update local state
         accumulatedDuration = 0
@@ -194,7 +256,13 @@ class ReliableRecorder: ObservableObject {
         lastResumeTime = nil
         
         // Stop the underlying recorder
-        await baseRecorder.stopRecording()
+        isTransitioning = true
+        defer { isTransitioning = false }
+        if baseRecorder.isRecording {
+            await baseRecorder.stopRecording()
+        } else {
+            baseRecorder.releaseSession()   // it ended on its own and kept the session
+        }
         BatteryProbe.shared.recordingStopped()
 
         // Save final metadata with isComplete=true, stating what the file holds
@@ -204,12 +272,28 @@ class ReliableRecorder: ObservableObject {
         }
         await saveMetadataSnapshot(isComplete: true, duration: finalDuration)
         
-        // Update state
+        endSession()
+    }
+
+    private func endSession() {
+        stopAutoSave()
         isRecording = false
         currentRecordingURL = nil
         recordingStartTime = nil
+        lastResumeTime = nil
         lastSaveTime = nil
         accumulatedDuration = 0
+    }
+
+    /// The base recorder went idle without this wrapper asking: finish the
+    /// note with what the file holds and report it.
+    private func baseRecorderStopped() async {
+        // Checked when the hop runs, not when the change was published: by
+        // then a split may already have started the next file.
+        guard isRecording, !isTransitioning, !baseRecorder.isRecording else { return }
+        log("[IOSRecording] recorder stopped on its own; ending the note")
+        await stopRecording()
+        failureCount += 1
     }
     
     // MARK: - Auto-Save Logic
@@ -250,10 +334,14 @@ class ReliableRecorder: ObservableObject {
             duration = accumulatedDuration
         }
         
+        // Live text straight from the transcriber: the screen poll that feeds
+        // `transcribedText` stops in the background, the autosave must not.
+        let liveText = baseRecorder.currentLiveText
+
         // Create metadata object
         let metadata = RecordingMetadata(
             recordingURL: recordingURL,
-            transcription: transcribedText,
+            transcription: liveText,
             duration: duration,
             timestamp: recordingStartTime ?? Date(),
             isComplete: isComplete,
@@ -263,6 +351,9 @@ class ReliableRecorder: ObservableObject {
         // Save to disk
         do {
             try await repository.saveMetadata(for: recordingURL, metadata: metadata)
+            // Live text in the shape Studio writes (`localTranscript` plus a
+            // copy in `transcript`), so every device reads it as live text.
+            FileStore.storeLiveText(liveText, for: recordingURL)
             lastSaveTime = Date()
             print("ReliableRecorder: Saved metadata snapshot (isComplete: \(isComplete)) at \(lastSaveTime!)")
         } catch {

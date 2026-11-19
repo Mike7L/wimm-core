@@ -147,6 +147,9 @@ struct SketchCaptureView: View {
             if audioRecorder.isPaused { togglePause() }
             else { Task { await performSplit() } }
         }
+        .onChange(of: audioRecorder.failureCount) { _ in
+            showAlert(message: L10n.HUD.Error.recordingFailed)
+        }
         .onChange(of: audioRecorder.isRecording) { isRecording in
             if isRecording {
                 startTimer()
@@ -223,6 +226,50 @@ struct SketchCaptureView: View {
     }
 
     // MARK: - Listening Phase UI
+
+    /// Current input; while recording with a headset around it is a menu that
+    /// switches headset ↔ iPhone mic without stopping the recording.
+    @ViewBuilder
+    private var microphoneControl: some View {
+        let label = audioRecorder.inputName.map { name in
+            Label(L10n.iOS.Capture.input(name),
+                  systemImage: name.localizedCaseInsensitiveContains("airpods") ? "airpods" : "mic.fill")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .lineLimit(1)
+        }
+        if audioRecorder.canSwitchMicrophone || audioRecorder.voiceProcessingActive {
+            Menu {
+                if audioRecorder.canSwitchMicrophone {
+                    Picker(L10n.iOS.Capture.switchMicrophone, selection: Binding(
+                        get: { audioRecorder.microphonePreference },
+                        set: { audioRecorder.switchMicrophone(to: $0) })) {
+                        Label(L10n.iOS.Capture.microphoneHeadset, systemImage: "headphones")
+                            .tag(RecordingMicrophonePreference.bluetoothWhenConnected)
+                        Label(L10n.iOS.Capture.microphoneIPhone, systemImage: "iphone")
+                            .tag(RecordingMicrophonePreference.builtInOnly)
+                    }
+                }
+                if audioRecorder.voiceProcessingActive {
+                    Button {
+                        RecordingAudioSession.showMicrophoneModes()
+                    } label: {
+                        Label(L10n.iOS.Capture.microphoneModes, systemImage: "waveform.badge.mic")
+                    }
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    label
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 9, weight: .semibold))
+                }
+                .foregroundColor(.accentColor)
+            }
+            .accessibilityLabel(L10n.iOS.Capture.switchMicrophone)
+        } else if let label {
+            label.foregroundColor(.secondary)
+        }
+    }
+
     var listeningBody: some View {
         VStack(spacing: 16) {
             Spacer(minLength: 8)
@@ -246,13 +293,13 @@ struct SketchCaptureView: View {
                         .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundColor(.secondary)
                     Spacer()
-                    if let inputName = audioRecorder.inputName {
-                        Label(L10n.iOS.Capture.input(inputName),
-                              systemImage: inputName.localizedCaseInsensitiveContains("airpods") ? "airpods" : "mic.fill")
+                    if let bpm = audioRecorder.heartRateBPM {
+                        Label("\(bpm)", systemImage: "heart.fill")
                             .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
+                            .foregroundColor(.red)
+                            .accessibilityLabel(L10n.iOS.Capture.heartRate(bpm))
                     }
+                    microphoneControl
                 }
                 .padding(.horizontal, 20)
                 

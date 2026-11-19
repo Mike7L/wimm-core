@@ -83,6 +83,28 @@ extension AppState {
         await finishReprocessing(url)
     }
 
+    /// Like Studio, every finished recording gets an on-device file run
+    /// (Parakeet over the original; the live text stays as `localTranscript`).
+    /// Only when the model is already on the phone: the ~600 MB download
+    /// stays a user decision (Settings or a manual on-device run); without
+    /// it Studio's launch sweep runs the note on the Mac. While a recording
+    /// goes on the job waits in the queue and starts once capture stops.
+    func transcribeAfterRecording(_ url: URL) {
+        guard FileStore.isAudioFile(url), !FileStore.isDerivedAudioFile(url) else { return }
+        guard ParakeetTranscriptionAdapter.isInstalled() else {
+            print("[Transcribe] \(url.lastPathComponent): Parakeet not on this iPhone, left for Studio")
+            return
+        }
+        processingQueue.enqueue(url, kind: .transcribeLocal)
+        startQueueAfterCapture()
+    }
+
+    /// Starts queued work unless a recording is running or the user paused the queue.
+    func startQueueAfterCapture() {
+        guard !audioRecorder.isRecording, !processingQueue.isPaused else { return }
+        processingQueue.start()
+    }
+
     // MARK: - Queue
 
     func perform(_ kind: ProcessingJobKind, url: URL) async throws -> ProcessingOutcome {

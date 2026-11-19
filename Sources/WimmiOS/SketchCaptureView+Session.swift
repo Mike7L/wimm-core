@@ -68,6 +68,7 @@ extension SketchCaptureView {
             }
             await appState.publishRecording(at: finalizedURL)
             appState.scheduleRecordingSync(for: finalizedURL)
+            appState.transcribeAfterRecording(finalizedURL)
         }
     }
 
@@ -117,6 +118,7 @@ extension SketchCaptureView {
         }
 
         await appState.loadRecordings()
+        appState.startQueueAfterCapture()
         dismiss()
     }
 

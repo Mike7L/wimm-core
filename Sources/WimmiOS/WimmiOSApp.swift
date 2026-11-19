@@ -300,6 +300,7 @@ class AppState: ObservableObject, ProcessingPerformer {
         await publishRecording(at: url)
         showCapture = false
         scheduleRecordingSync(for: url)
+        transcribeAfterRecording(url)
     }
 
     /// Publish one durable note without rescanning the library or its duration assets.

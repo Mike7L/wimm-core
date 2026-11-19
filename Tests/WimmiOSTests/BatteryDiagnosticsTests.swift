@@ -34,6 +34,15 @@ final class BatteryDiagnosticsTests: XCTestCase {
         XCTAssertEqual(s.variant, "noLive+slowSave")
     }
 
+    func testScreenOnlyWorkStopsInBackground() {
+        XCTAssertTrue(RecordingScreenWork.runsLevelMeter(inBackground: false, disabledForDiagnostics: false))
+        XCTAssertFalse(RecordingScreenWork.runsLevelMeter(inBackground: true, disabledForDiagnostics: false))
+        XCTAssertFalse(RecordingScreenWork.runsLevelMeter(inBackground: false, disabledForDiagnostics: true))
+        XCTAssertTrue(RecordingScreenWork.pollsLiveText(inBackground: false))
+        XCTAssertFalse(RecordingScreenWork.pollsLiveText(inBackground: true))
+        XCTAssertEqual(RecordingScreenWork.liveTextPollNanoseconds, 1_000_000_000)
+    }
+
     func testCPUPercent() {
         XCTAssertEqual(BatterySample.cpuPercent(previousCPU: 10, currentCPU: 16, wallSeconds: 60)!, 10, accuracy: 0.001)
         XCTAssertNil(BatterySample.cpuPercent(previousCPU: 10, currentCPU: 16, wallSeconds: 0))

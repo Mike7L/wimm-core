@@ -30,6 +30,10 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>WIMM needs camera access to capture documents and images for your notes</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>WIMM reads your heart rate during a recording to store it with the note</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>WIMM runs a workout session during a recording so that AirPods or Apple Watch measure your heart rate. The workout is not saved.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>WIMM needs microphone access to record voice notes</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

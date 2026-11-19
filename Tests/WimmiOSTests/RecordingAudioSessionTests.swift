@@ -28,6 +28,54 @@ final class RecordingAudioSessionTests: XCTestCase {
         XCTAssertEqual(bt.options.subtracting(.allowBluetoothHFP), builtIn.options)
     }
 
+    func testPreferredPortPinsBuiltInOrPicksHeadset() {
+        let bt = RecordingAudioSession.plan(for: .bluetoothWhenConnected)
+        let builtIn = RecordingAudioSession.plan(for: .builtInOnly)
+        let withAirPods: [AVAudioSession.Port] = [.builtInMic, .bluetoothHFP]
+        XCTAssertEqual(RecordingAudioSession.preferredPort(for: builtIn, among: withAirPods), .builtInMic)
+        XCTAssertEqual(RecordingAudioSession.preferredPort(for: bt, among: withAirPods), .bluetoothHFP)
+        // Bluetooth wins over a wired headset; with only the iPhone mic iOS routes.
+        XCTAssertEqual(RecordingAudioSession.preferredPort(for: bt, among: [.headsetMic, .builtInMic, .bluetoothHFP]), .bluetoothHFP)
+        XCTAssertEqual(RecordingAudioSession.preferredPort(for: bt, among: [.builtInMic, .headsetMic]), .headsetMic)
+        XCTAssertNil(RecordingAudioSession.preferredPort(for: bt, among: [.builtInMic]))
+        XCTAssertNil(RecordingAudioSession.preferredPort(for: builtIn, among: []))
+    }
+
+    func testMicrophoneSwitchOfferedOnlyWhenItCanChangeSomething() {
+        // Headset mode without any headset: nothing to switch.
+        XCTAssertFalse(RecordingAudioSession.canSwitchMicrophone(
+            preference: .bluetoothWhenConnected, availablePorts: [.builtInMic]))
+        XCTAssertTrue(RecordingAudioSession.canSwitchMicrophone(
+            preference: .bluetoothWhenConnected, availablePorts: [.builtInMic, .bluetoothHFP]))
+        XCTAssertTrue(RecordingAudioSession.canSwitchMicrophone(
+            preference: .bluetoothWhenConnected, availablePorts: [.builtInMic, .headsetMic]))
+        // iPhone-only mode hides AirPods from the inputs, so the way back stays open.
+        XCTAssertTrue(RecordingAudioSession.canSwitchMicrophone(
+            preference: .builtInOnly, availablePorts: [.builtInMic]))
+    }
+
+    func testVoiceProcessingPlanKeepsMicChoice() {
+        for preference in RecordingMicrophonePreference.allCases {
+            let plain = RecordingAudioSession.plan(for: preference)
+            let processed = RecordingAudioSession.plan(for: preference, voiceProcessing: true)
+            // .measurement turns voice processing off; the trial needs a voice mode.
+            XCTAssertEqual(plain.mode, .measurement)
+            XCTAssertEqual(processed.mode, .videoChat)
+            XCTAssertEqual(processed.category, .playAndRecord)
+            XCTAssertEqual(processed.options, plain.options)
+            XCTAssertEqual(processed.pinBuiltInMic, plain.pinBuiltInMic)
+        }
+    }
+
+    func testVoiceIsolationIsOffByDefaultAndRoundTrips() throws {
+        let suite = "wimm.tests.voice-isolation.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertFalse(RecordingVoiceIsolationSetting.isEnabled(defaults: defaults))
+        RecordingVoiceIsolationSetting.set(true, defaults: defaults)
+        XCTAssertTrue(RecordingVoiceIsolationSetting.isEnabled(defaults: defaults))
+    }
+
     func testPreferenceDefaultsToBluetoothAndRoundTrips() throws {
         let suite = "wimm.tests.mic-preference.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

@@ -841,6 +841,9 @@
 "ios.capture.done" = "Готово";
 "ios.capture.live_transcription" = "Живая транскрипция";
 "ios.capture.input_fmt" = "Микрофон: %@";
+"ios.capture.switch_microphone" = "Сменить микрофон";
+"ios.capture.microphone_headset" = "Наушники";
+"ios.capture.microphone_iphone" = "Микрофон iPhone";
 "ios.capture.photo_quality" = "Качество фото";
 "ios.capture.paste" = "Вставить";
 "ios.capture.photos" = "Фото";
@@ -1015,7 +1018,13 @@
 "ios.settings.microphone" = "Записывать с";
 "ios.settings.microphone_bluetooth" = "AirPods / Bluetooth, когда подключены";
 "ios.settings.microphone_builtin" = "Только микрофон iPhone";
-"ios.settings.microphone_footer" = "Микрофон Bluetooth-гарнитуры звучит хуже микрофона iPhone. Выберите «Только микрофон iPhone», если звук не нравится. Действует со следующей записи.";
+"ios.settings.microphone_footer" = "Микрофон Bluetooth-гарнитуры звучит хуже микрофона iPhone. Выберите «Только микрофон iPhone», если звук не нравится. Во время записи микрофон можно сменить на экране записи.";
+"ios.settings.voice_isolation" = "Изоляция голоса (проба)";
+"ios.settings.voice_isolation_footer" = "Запись идёт через голосовую обработку iOS, и становятся доступны режимы микрофона, в том числе «Изоляция голоса». Выбрать режим можно в меню микрофона на экране записи. Оригинал сохраняется уже обработанным (шумоподавление, автоусиление), необработанного звука не останется. Действует со следующей записи.";
+"ios.capture.microphone_modes" = "Режим микрофона…";
+"ios.settings.heart_rate" = "Записывать пульс";
+"ios.settings.heart_rate_footer" = "С AirPods Pro 3 или Apple Watch. На время записи iPhone запускает тренировку в «Здоровье» (она не сохраняется), иначе наушники пульс не меряют. Нужен iOS 26. Пульс хранится в заметке и уходит в iCloud вместе с ней.";
+"ios.capture.heart_rate_fmt" = "Пульс %d";
 "ios.settings.no_keys_for_models" = "Сохраните ключ Gemini или OpenRouter, чтобы увидеть модели. Можно и ввести ID модели вручную.";
 "ios.settings.on_device_models" = "На этом iPhone";
 "ios.settings.parakeet_footer" = "Работает на телефоне: звук никуда не загружается, ключ не нужен. При первом запуске модель один раз скачивается (~600 МБ, лучше по Wi-Fi) и компилируется — это займёт время.";

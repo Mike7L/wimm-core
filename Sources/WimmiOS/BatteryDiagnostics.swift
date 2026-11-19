@@ -58,6 +58,22 @@ struct BatteryDiagnosticsSettings: Equatable {
     }
 }
 
+/// Recording work that exists only for the screen: the waveform level meter
+/// and the copy of the live text shown there. In the background (screen locked
+/// or Wimm minimized) neither runs; on return the text is shown at once. The
+/// autosave reads live text from the transcriber itself, so it does not depend
+/// on this poll.
+enum RecordingScreenWork {
+    /// Once a second while Wimm is on screen.
+    static let liveTextPollNanoseconds: UInt64 = 1_000_000_000
+
+    static func pollsLiveText(inBackground: Bool) -> Bool { !inBackground }
+
+    static func runsLevelMeter(inBackground: Bool, disabledForDiagnostics: Bool) -> Bool {
+        !inBackground && !disabledForDiagnostics
+    }
+}
+
 /// One minute-ish sample of the app's cost.
 struct BatterySample: Equatable {
     static let csvHeader = "time,phase,variant,elapsed_s,battery_pct,battery_state,low_power,thermal,app_state,brightness,input,cpu_s,cpu_pct,live_partials,live_restarts"

@@ -6,7 +6,7 @@ import WimmDomain
 enum ProcessingJobKind: String, Codable {
     /// Transcription with the hear model from Settings, then analysis.
     case transcribe
-    /// On-device (Parakeet) transcription, then analysis.
+    /// On-device (Parakeet) transcription.
     case transcribeLocal
     /// Cloud transcription (`TranscriptKind.cloud.retranscriptionModel()`), then analysis.
     case transcribeCloud
@@ -47,8 +47,9 @@ protocol ProcessingPerformer: AnyObject {
 /// The phone's visible queue for cloud transcription and analysis.
 ///
 /// One job at a time, owned by the app rather than a screen, persisted so a
-/// queue cut short by iOS resumes on the next launch. Nothing is enqueued
-/// without the user asking: each job costs a model call. When the app goes to
+/// queue cut short by iOS resumes on the next launch. Cloud jobs are enqueued
+/// only when the user asks: each costs a model call. The one automatic job is
+/// the on-device run after a recording (`transcribeAfterRecording`). When the app goes to
 /// the background mid-queue it asks iOS for the usual extra half minute; if
 /// that runs out the current job goes back to "queued", not "failed".
 @MainActor

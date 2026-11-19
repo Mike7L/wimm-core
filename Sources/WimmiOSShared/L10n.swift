@@ -1663,6 +1663,10 @@ internal enum L10n {
             internal static let microphoneBluetooth = NSLocalizedString("ios.settings.microphone_bluetooth", comment: "iOS recording microphone")
             internal static let microphoneBuiltIn = NSLocalizedString("ios.settings.microphone_builtin", comment: "iOS recording microphone")
             internal static let microphoneFooter = NSLocalizedString("ios.settings.microphone_footer", comment: "iOS recording microphone")
+            internal static let voiceIsolation = NSLocalizedString("ios.settings.voice_isolation", comment: "iOS recording voice processing (trial)")
+            internal static let voiceIsolationFooter = NSLocalizedString("ios.settings.voice_isolation_footer", comment: "iOS recording voice processing (trial)")
+            internal static let heartRate = NSLocalizedString("ios.settings.heart_rate", comment: "iOS recording pulse (trial)")
+            internal static let heartRateFooter = NSLocalizedString("ios.settings.heart_rate_footer", comment: "iOS recording pulse (trial)")
             internal static let noKeysForModels = NSLocalizedString("ios.settings.no_keys_for_models", comment: "iOS models and re-run")
             internal static let onDeviceModels = NSLocalizedString("ios.settings.on_device_models", comment: "iOS model picker section header")
             internal static let parakeetFooter = NSLocalizedString("ios.settings.parakeet_footer", comment: "iOS model picker: on-device Parakeet")
@@ -1756,10 +1760,18 @@ internal enum L10n {
             internal static let listening = NSLocalizedString("ios.capture.listening", comment: "Active segment placeholder")
             internal static let noInput = NSLocalizedString("ios.capture.no_input", comment: "Empty segment placeholder")
             internal static let liveTranscription = NSLocalizedString("ios.capture.live_transcription", comment: "Label")
+            internal static let switchMicrophone = NSLocalizedString("ios.capture.switch_microphone", comment: "Recording mic menu")
+            internal static let microphoneHeadset = NSLocalizedString("ios.capture.microphone_headset", comment: "Recording mic menu item")
+            internal static let microphoneIPhone = NSLocalizedString("ios.capture.microphone_iphone", comment: "Recording mic menu item")
+            internal static let microphoneModes = NSLocalizedString("ios.capture.microphone_modes", comment: "Recording mic menu item: system mic modes")
 
             internal static func input(_ name: String) -> String {
                 let format = NSLocalizedString("ios.capture.input_fmt", comment: "Current recording input")
                 return String(format: format, locale: Locale.current, name)
+            }
+            internal static func heartRate(_ bpm: Int) -> String {
+                let format = NSLocalizedString("ios.capture.heart_rate_fmt", comment: "Pulse on the recording screen")
+                return String(format: format, locale: Locale.current, bpm)
             }
 
             internal static func attachmentsCount(_ count: Int) -> String {
