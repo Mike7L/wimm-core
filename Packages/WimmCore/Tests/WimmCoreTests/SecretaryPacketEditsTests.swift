@@ -181,6 +181,41 @@ final class SecretaryPacketEditsTests: XCTestCase {
         XCTAssertThrowsError(try packet.prompt(sections: [familyText], validationPrompt: narrow), "only headings are sections")
     }
 
+    func testOversizeSectionIsSuppliedInPartFromItsEnd() throws {
+        try text.replacingOccurrences(of: "Семейный маяк.", with: "Семейный маяк.\n\nВторой абзац.\n\nТретий абзац.")
+            .write(to: document, atomically: true, encoding: .utf8)
+        let packet = try prepare()
+        var input = try JSONSerialization.jsonObject(with: Data(packet.prompt().utf8)) as! [String: Any]
+        let family = try section(packet, "### Маяк", under: "## Семья")
+        let range = try XCTUnwrap(packet.sectionRange(family))
+        let own = range.map { packet.blocks[$0] }
+        XCTAssertEqual(own.count, 4)
+        let ids = Set(own.map(\.id))
+        input["document_blocks"] = (input["document_blocks"] as! [[String: String]]).filter { !ids.contains($0["id"] ?? "") }
+        let narrow = String(decoding: try JSONSerialization.data(withJSONObject: input), as: UTF8.self)
+        // Room for the heading and the last two paragraphs, not the first one.
+        let budget = [0, 2, 3].reduce(0) { $0 + own[$1].text.utf8.count }
+        let widened = try packet.prompt(sections: [family], validationPrompt: narrow, byteBudget: budget)
+        let object = try JSONSerialization.jsonObject(with: Data(widened.utf8)) as! [String: Any]
+        let supplied = Set((object["document_blocks"] as! [[String: String]]).compactMap { $0["id"] })
+        XCTAssertTrue(supplied.isSuperset(of: [own[0].id, own[2].id, own[3].id]))
+        XCTAssertFalse(supplied.contains(own[1].id), "the earliest paragraph is left out")
+        let partial = try XCTUnwrap(object["read_sections_partial"] as? [[String: Any]])
+        XCTAssertEqual(partial.first?["section"] as? String, family)
+        XCTAssertEqual(partial.first?["omitted_blocks"] as? Int, 1)
+        XCTAssertTrue((object["host_note"] as? String)?.contains(family) == true)
+
+        let after = try packet.resolveEdits(reply(["edits": [edit("insert_after", block: own[3].id, text: "Эпизод [S2].\n\n", sources: ["S2"])]]),
+                                            prompt: widened, marks: store)
+        XCTAssertNil(after.report.rejection, "a supplied tail block is a valid target")
+        let under = try packet.resolveEdits(reply(["edits": [edit("insert_under_heading", section: family, text: "Эпизод [S2].", sources: ["S2"])]]),
+                                            prompt: widened, marks: store)
+        XCTAssertTrue(under.report.rejection?.contains("not supplied in full") == true
+                      || under.report.rejectedEdits?.first?.reason.contains("not supplied in full") == true)
+
+        XCTAssertThrowsError(try packet.prompt(sections: [family], validationPrompt: narrow, byteBudget: 1), "nothing fits at all")
+    }
+
     func testInvalidEditDropsOnlyItsSourceGroup() throws {
         let packet = try prepare(), prompt = try packet.prompt()
         let fact = try block(packet, "Старый факт"), summary = try block(packet, "Сводка")

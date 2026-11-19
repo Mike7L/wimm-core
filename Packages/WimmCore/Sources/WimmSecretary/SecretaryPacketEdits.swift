@@ -545,25 +545,56 @@ extension SecretaryPacket {
     }
 
     /// Adds the requested sections (heading and own text) to the model input, once, within budget.
-    func prompt(sections: [String], validationPrompt: String, note: String? = nil) throws -> String {
+    /// A section that does not fit whole is supplied in part: its heading and its last blocks (where
+    /// new entries go), named in `read_sections_partial`. Its earlier blocks stay unsupplied, so they
+    /// remain invalid targets and insert_under_heading on it is still refused. Two passes
+    /// (2026-11-19) failed outright when the model asked for one oversize section.
+    func prompt(sections: [String], validationPrompt: String, note: String? = nil,
+                byteBudget: Int = Self.readSectionBytes) throws -> String {
         guard !sections.isEmpty, sections.count <= Self.readSectionLimit else { throw Failure("Ask for one to \(Self.readSectionLimit) sections.") }
         guard var input = try JSONSerialization.jsonObject(with: Data(validationPrompt.utf8)) as? [String: Any] else {
             throw Failure("Packet input is not a JSON object.")
         }
         var current = input["document_blocks"] as? [[String: String]] ?? []
         var ids = Set(current.compactMap { $0["id"] }), added: [Block] = [], bytes = 0
+        var supplied: [String] = [], partial: [[String: Any]] = [], skipped: [String] = []
         for section in sections {
             guard let range = sectionRange(section) else { throw Failure("\(section) is not a section heading in the outline.") }
-            for block in range.map({ blocks[$0] }) where !ids.contains(block.id) {
-                bytes += block.text.utf8.count
-                guard bytes <= Self.readSectionBytes else { throw Failure("Requested sections exceed \(Self.readSectionBytes) bytes.") }
-                added.append(block); ids.insert(block.id)
+            let needed = range.map({ blocks[$0] }).filter { !ids.contains($0.id) }
+            let size = needed.reduce(0) { $0 + $1.text.utf8.count }
+            if bytes + size <= byteBudget {
+                added += needed; bytes += size; needed.forEach { ids.insert($0.id) }; supplied.append(section)
+                continue
             }
+            // Heading first (it locates the part), then the newest blocks backwards while they fit.
+            let head = needed.first { $0.id == section }
+            var room = byteBudget - bytes - (head?.text.utf8.count ?? 0), tail: [Block] = []
+            for block in needed.reversed() where block.id != section {
+                guard block.text.utf8.count <= room else { break }
+                room -= block.text.utf8.count; tail.insert(block, at: 0)
+            }
+            guard !tail.isEmpty, room >= 0 else { skipped.append(section); continue }
+            let part = (head.map { [$0] } ?? []) + tail
+            added += part; bytes = byteBudget - room; part.forEach { ids.insert($0.id) }; supplied.append(section)
+            partial.append(["section": section, "supplied_blocks": tail.count, "omitted_blocks": needed.count - part.count])
+        }
+        guard !added.isEmpty || skipped.isEmpty else {
+            throw Failure("Requested sections exceed \(byteBudget) bytes even in part.")
         }
         current += Self.objects(added)
         input["document_blocks"] = current
-        input["read_sections_supplied"] = sections
-        if let note { input["host_note"] = note }
+        input["read_sections_supplied"] = supplied
+        if !partial.isEmpty { input["read_sections_partial"] = partial }
+        if !skipped.isEmpty { input["read_sections_not_supplied"] = skipped }
+        var notes = note.map { [$0] } ?? []
+        if !partial.isEmpty {
+            notes.append("Too long to supply whole: \(partial.compactMap { $0["section"] as? String }.joined(separator: ", ")). "
+                + "Only the heading and the last blocks are included; earlier blocks were omitted and may already hold "
+                + "related facts. Place new text with insert_after on a supplied block; insert_under_heading is refused "
+                + "for these sections.")
+        }
+        if !skipped.isEmpty { notes.append("Not supplied (over the read budget): \(skipped.joined(separator: ", ")).") }
+        if !notes.isEmpty { input["host_note"] = notes.joined(separator: " ") }
         return String(decoding: try JSONSerialization.data(withJSONObject: input, options: [.sortedKeys, .withoutEscapingSlashes]), as: UTF8.self)
     }
 
