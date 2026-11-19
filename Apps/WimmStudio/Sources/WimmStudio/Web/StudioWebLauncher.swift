@@ -30,7 +30,7 @@ final class StudioWebLauncher {
             return URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
         }
         return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Projects/Memario/Apps/WimmStudioWeb")
+            .appendingPathComponent("Projects/wimm-core/Apps/WimmStudioWeb")
     }
 
     private var logURL: URL {

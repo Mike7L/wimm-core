@@ -10,11 +10,23 @@ import WimmDomain
 /// here: the mute flag is cleared right after, so the next press arrives as a press again.
 ///
 /// A handler alone is not enough: the audio server passes a press on only to an app that
-/// has also set its mute state itself (its log says `isOptedIn: 0, hasHandler: 1`
-/// otherwise). So Wimm states "unmuted" at install and again when a recording starts.
+/// has opted in (its log says `isOptedIn: 0, hasHandler: 1` and the AirPods show the
+/// banner otherwise). Stating "unmuted" does not opt in; observing
+/// `inputMuteStateChangeNotification` does, so the observer is added before the handler
+/// and kept for the life of the process. Wimm still states "unmuted" at install and when a
+/// recording starts, so the next press arrives as a change to muted.
 @MainActor
 enum AirPodsCaptureGesture {
+    private static var optInObserver: NSObjectProtocol?
+
     static func install(onPress: @escaping @MainActor () -> Void) {
+        if optInObserver == nil {
+            optInObserver = NotificationCenter.default.addObserver(
+                forName: AVAudioApplication.inputMuteStateChangeNotification,
+                object: nil,
+                queue: nil
+            ) { _ in }
+        }
         do {
             // Called off the main thread: the closure must be @Sendable (see the Swift 6
             // callback trap), so it only hops to the main actor.

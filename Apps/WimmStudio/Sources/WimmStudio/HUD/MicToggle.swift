@@ -149,7 +149,7 @@ struct MicToggle: View {
 
     private static let red = Color(red: 0.43, green: 0.07, blue: 0.09)
     private static let redFill = Color(red: 0.85, green: 0.22, blue: 0.23)
-    private static let turquoise = Color(red: 0.06, green: 0.56, blue: 0.53)
+    private static let amber = Color(red: 0.82, green: 0.52, blue: 0.05)
     private static let violet = Color(red: 0.24, green: 0.20, blue: 0.54)
     private static let violetLight = Color(red: 0.50, green: 0.47, blue: 0.87)
     private static let gray = Color(white: 0.53)
@@ -209,7 +209,7 @@ struct MicToggle: View {
 
         switch mode {
         case .speech, .sound:
-            if motion.heat > 0.01 { context.fill(Path(whole), with: .color(Self.turquoise.opacity(motion.heat))) }
+            if motion.heat > 0.01 { context.fill(Path(whole), with: .color(Self.amber.opacity(motion.heat))) }
         case .vikThinking:
             context.fill(Path(whole), with: .color(Self.violetLight.opacity(0.18 + 0.14 * sin(t * 2.4))))
         case .busy:

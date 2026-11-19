@@ -304,12 +304,12 @@ struct ResponsiveHUDView: View {
                         noteRow(note)
                             .id(note.id)
                         if let vik, placement == .afterNote(note.id) {
-                            vikReply(vik).id(Self.vikReplyID)
+                            ObservedRow { vikReply(vik) }.id(Self.vikReplyID)
                         }
                     }
 
                     if let vik, placement == .afterNotes {
-                        vikReply(vik).id(Self.vikReplyID)
+                        ObservedRow { vikReply(vik) }.id(Self.vikReplyID)
                     }
 
                     ForEach(capture.anchors) { anchor in
@@ -322,7 +322,7 @@ struct ResponsiveHUDView: View {
                     }
 
                     if let vik, placement == .afterLive {
-                        vikReply(vik).id(Self.vikReplyID)
+                        ObservedRow { vikReply(vik) }.id(Self.vikReplyID)
                     }
 
                     if let error = capture.errorMessage, !capture.isRecording {
@@ -800,6 +800,14 @@ struct ResponsiveHUDView: View {
 
 /// Isolated row view so row-hover and 1 Hz recording clock updates never invalidate
 /// sibling rows or the outer HUD hierarchy.
+/// Runs its content inside its own `body`, so the `@Observable` reads there are
+/// tracked for this row. Built inline in a `LazyVStack`'s `ForEach`, Alyona's row
+/// kept showing «завершаю live-текст…» after the reply had been spoken (2026-11-17).
+private struct ObservedRow<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    var body: some View { content() }
+}
+
 private struct HUDNoteRow: View {
     let note: Note
     let showsTooltip: Bool

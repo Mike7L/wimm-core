@@ -10,6 +10,12 @@ protocol VikVoicePlaying: AnyObject {
     func prepare()
     func enqueue(_ text: String)
     func stop()
+    /// Wakes a model the system may have unloaded after a long quiet; no-op when warm.
+    func warmUp()
+}
+
+extension VikVoicePlaying {
+    func warmUp() {}
 }
 
 /// Reuses Studio's local Supertonic player. A cold turn stays on the installed
@@ -44,6 +50,8 @@ final class VikVoice: NSObject, VikVoicePlaying, AVSpeechSynthesizerDelegate {
     }
 
     func prepare() { neural.prepare() }
+
+    func warmUp() { neural.warmUp() }
 
     func enqueue(_ text: String) {
         if useNeural == nil { useNeural = neural.isReady }

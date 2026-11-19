@@ -48,6 +48,23 @@ final class VikRequestTests: XCTestCase {
         XCTAssertEqual(buffer.append("", final: true), ["Ещё"])
         XCTAssertEqual(buffer.append("", final: true), [])
     }
+
+    func testFirstLongSentenceStartsAtItsFirstPause() {
+        var buffer = VikSentences()
+        XCTAssertEqual(buffer.append("В заметке за последний час ты говорил, что встреча"),
+                       ["В заметке за последний час ты говорил,"])
+        XCTAssertEqual(buffer.append(" переносится на пятницу, после обеда. Второе, длинное"),
+                       ["что встреча переносится на пятницу, после обеда."])
+        XCTAssertEqual(buffer.append("", final: true), ["Второе, длинное"])
+    }
+
+    func testShortClausesAndShortTailsKeepTheFirstSentenceWhole() {
+        var short = VikSentences()
+        XCTAssertEqual(short.append("Да, это так. "), ["Да, это так."])
+        var tail = VikSentences()
+        XCTAssertEqual(tail.append("Встреча переносится на следующую пятницу, вот. "),
+                       ["Встреча переносится на следующую пятницу, вот."])
+    }
 }
 
 @MainActor
@@ -73,6 +90,21 @@ final class VikAssistantTests: XCTestCase {
         XCTAssertEqual(h.capture.stops, 0)
         XCTAssertEqual(h.voice.prepares, 0)
         XCTAssertEqual(h.calls.count, 0)
+    }
+
+    func testBannerFollowsTheSpokenSentence() async throws {
+        let h = VikHarness(document: "")
+        defer { h.assistant.shutdown() }
+        h.capture.liveText = "Эй Алёна что дальше"
+        XCTAssertTrue(h.assistant.silenceDetected())
+        h.capture.finish(.success("Эй Алёна что дальше?"))
+        await waitUntil { h.calls.count == 1 }
+        h.reply?.yield("Первое длинное предложение ответа. Второе предложение [D1]. ")
+        await waitUntil { h.voice.lines.count == 2 }
+        h.voice.onStarted?()
+        XCTAssertEqual(h.assistant.banner?.message, "Микрофон выключен · Алёна: Первое длинное предложение ответа.")
+        h.voice.onStarted?()
+        XCTAssertEqual(h.assistant.banner?.message, "Микрофон выключен · Алёна: Второе предложение.")
     }
 
     func testSilenceWaitsForFinalTextAndSendsFullCurrentThought() async throws {

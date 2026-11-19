@@ -32,6 +32,8 @@ final class VikAssistant {
     private(set) var phase: Phase = .idle
     private(set) var request = ""
     private(set) var answer = ""
+    /// The reply sentence the voice is reading now; the banner follows it.
+    private(set) var nowSpeaking = ""
     private(set) var errorMessage: String?
     private(set) var savedReply: URL?
     var enabled = true {
@@ -91,10 +93,16 @@ final class VikAssistant {
             let heard = Self.clipped(request, limit: 60, keepsEnd: true)
             return .init(message: heard.isEmpty ? status : "Алёна слушает: \(heard)", systemImage: "waveform")
         case .finishing, .thinking, .speaking:
-            let said = Self.clipped(answer.split(whereSeparator: \.isNewline).first.map(String.init) ?? "", limit: 80)
+            let current = nowSpeaking.isEmpty
+                ? answer.split(whereSeparator: \.isNewline).first.map(String.init) ?? "" : nowSpeaking
+            let said = Self.clipped(Self.withoutCitations(current), limit: 160)
             return .init(message: said.isEmpty ? status : "\(micNote)Алёна: \(said)",
                          systemImage: phase == .speaking ? "speaker.wave.2.fill" : "ellipsis.bubble")
         }
+    }
+
+    static func withoutCitations(_ text: String) -> String {
+        text.replacingOccurrences(of: #"\s*\[(?:D\d+|b\d+|N:[A-Za-z0-9-]+)\]"#, with: "", options: .regularExpression)
     }
 
     static func clipped(_ text: String, limit: Int, keepsEnd: Bool = false) -> String {
@@ -122,9 +130,12 @@ final class VikAssistant {
     @ObservationIgnored private var resumeAfterReply = false
     @ObservationIgnored private var streamFinished = false
     @ObservationIgnored private var voiceBusy = false
+    /// Lines handed to the voice and not yet started, in order (acknowledgements included).
+    @ObservationIgnored private var queuedLines: [String] = []
     @ObservationIgnored private var started = Date()
     @ObservationIgnored private var detectedAt: Date?
     @ObservationIgnored private var firstSound = false
+    @ObservationIgnored private var prefetch: Prefetch?
     /// Local spoken acknowledgement while the model is still silent; nil = off.
     /// No model call: a fixed phrase through the same local voice.
     @ObservationIgnored private let acknowledgeAfter: Duration?
@@ -207,11 +218,12 @@ final class VikAssistant {
         if draftFile != file {
             draftFile = file
             detectedAt = nil
+            dropPrefetch()
             if phase == .listening { phase = .idle; request = "" }
         }
         guard !handled.contains(file) else { return }
         guard let query = VikRequest.extract(from: capture.liveText) else {
-            if phase == .listening { phase = .idle; request = ""; detectedAt = nil }
+            if phase == .listening { phase = .idle; request = ""; detectedAt = nil; dropPrefetch() }
             return
         }
         if phase != .listening {
@@ -219,6 +231,8 @@ final class VikAssistant {
             detectedAt = Date()
             errorMessage = nil; answer = ""; savedReply = nil
             voice.prepare()
+            voice.warmUp()
+            startPrefetch(file: file)
         }
         request = query
         if !query.isEmpty, pauseSeconds > 0, let quiet = capture.quietAfterSpeech, quiet.seconds >= pauseSeconds {
@@ -340,6 +354,7 @@ final class VikAssistant {
     /// `reason` goes to the log only: a reply that ends without `playback_complete`
     /// must say why (stop phrase, new address, capture command, lost lease…).
     func cancel(reason: String = "user") {
+        dropPrefetch()
         if isResponding || phase == .listening {
             logEnd(reason)
             if let file = isResponding ? sourceFile : draftFile { handled.insert(file) }
@@ -363,6 +378,8 @@ final class VikAssistant {
         resumeAfterReply = false
         voiceBusy = false
         streamFinished = false
+        queuedLines = []
+        nowSpeaking = ""
     }
 
     private func fail(_ message: String) {
@@ -384,6 +401,9 @@ final class VikAssistant {
         started = Date()
         firstSound = false
         phase = .finishing
+        // Entering this phase was silent; a HUD stuck on «завершаю live-текст…» could not be told
+        // apart from a stale screen (2026-11-17).
+        log("[Vik] finishing source=\(file.lastPathComponent) keep_mic=\(keepMicOpen) resume=\(resume)")
         let timeout = finalizationTimeout
         deadline = Task { [weak self] in
             do { try await Task.sleep(for: timeout) } catch { return }
@@ -399,6 +419,7 @@ final class VikAssistant {
         voice.prepare()
         voice.onStarted = { [weak self] in
             guard let self, self.serial == token, self.ownsCapture, self.isResponding else { return }
+            let line = self.queuedLines.isEmpty ? "" : self.queuedLines.removeFirst()
             if self.acknowledgementLines > 0 {
                 // The fixed acknowledgement: Vik is still thinking, the reply has not started.
                 self.acknowledgementLines -= 1
@@ -406,6 +427,7 @@ final class VikAssistant {
                 return
             }
             self.phase = .speaking
+            if !line.isEmpty { self.nowSpeaking = line }
             if !self.firstSound {
                 self.firstSound = true
                 self.latency("first_audio")
@@ -446,7 +468,10 @@ final class VikAssistant {
             guard self.serial == token, self.ownsCapture, !Task.isCancelled else { return }
             guard !self.isPrivate() else { self.fail("Алёна недоступна в приватном режиме."); return }
             guard let source = self.sourceFile else { return }
-            let reader = VikContextTools(document: doc, source: source, isAllowed: { [weak self] in
+            // The reads started at the address are reused when they cover this note and document.
+            let early = self.prefetch.flatMap { $0.file == source && $0.document == doc ? $0 : nil }
+            if early == nil { self.dropPrefetch() }
+            let reader = early?.reader ?? VikContextTools(document: doc, source: source, isAllowed: { [weak self] in
                 await self?.allowsContext(token) ?? false
             })
             let tools = self.timed(reader.tools)
@@ -455,7 +480,11 @@ final class VikAssistant {
             else if let stream = self.stream { reply = stream(query, note, tools) }
             else {
                 let context: String
-                do { context = try await reader.preloaded() } catch {
+                do {
+                    if let early, let ready = try? await early.context.value { context = ready }
+                    else { context = try await reader.preloaded() }
+                    log("[Vik] context_early=\(early != nil)")
+                } catch {
                     guard self.serial == token, self.ownsCapture, !Task.isCancelled else { return }
                     self.fail(PrivateMode.isRefusal(error) ? "Алёна недоступна в приватном режиме." :
                                 "\(error.localizedDescription).\(self.hint)")
@@ -532,11 +561,46 @@ final class VikAssistant {
         serial == token && ownsCapture && !isPrivate()
     }
 
+    /// The document outline and the hour's notes, read while the user is still speaking:
+    /// after the final text they took 3–5 s of the 7–10 s to the first sound (2026-11-17).
+    /// Local reads only, no model call; dropped when the draft or the exchange ends.
+    private struct Prefetch {
+        let id: UUID
+        let file: URL
+        let document: String
+        let reader: VikContextTools
+        let context: Task<String, Error>
+    }
+
+    private func startPrefetch(file: URL) {
+        guard stream == nil, prefetch?.file != file, !isPrivate() else { return }
+        dropPrefetch()
+        let id = UUID(), doc = document()
+        let reader = VikContextTools(document: doc, source: file, isAllowed: { [weak self] in
+            await self?.allowsPrefetch(id) ?? false
+        })
+        prefetch = Prefetch(id: id, file: file, document: doc, reader: reader,
+                            context: Task { try await reader.preloaded() })
+    }
+
+    /// Same limits as a turn's reads: the draft that asked, or the exchange that owns it.
+    private func allowsPrefetch(_ id: UUID) -> Bool {
+        guard let prefetch, prefetch.id == id, !isPrivate() else { return false }
+        if phase == .listening { return draftFile == prefetch.file }
+        return isResponding && sourceFile == prefetch.file && ownsCapture
+    }
+
+    private func dropPrefetch() {
+        prefetch?.context.cancel()
+        prefetch = nil
+    }
+
     private func speak(_ sentence: String) {
         guard errorMessage == nil else { return }
         let spoken = sentence.replacingOccurrences(of: #"\[(?:D\d+|b\d+|N:[A-Za-z0-9-]+)\]"#, with: "", options: .regularExpression)
         guard !spoken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         voiceBusy = true
+        queuedLines.append(sentence.trimmingCharacters(in: .whitespacesAndNewlines))
         voice.enqueue(sentence)
     }
 
@@ -546,6 +610,7 @@ final class VikAssistant {
         latency("playback_complete")
         logEnd("complete")
         phase = .idle
+        dropPrefetch()
         let resume = resumeAfterReply
         resumeAfterReply = false
         let token = serial, revision = leaseRevision

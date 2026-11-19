@@ -58,9 +58,11 @@ actor VikContextTools {
 
     /// First pages of the two reads nearly every question starts with, sent with
     /// the first request so the model does not spend a round asking for each.
+    /// The two reads run side by side: the note list waits on the disk while the outline parses.
     func preloaded() async throws -> String {
+        async let listing = read("notes_last_hour", arguments: "{}")
         let outline = try await read("document_outline", arguments: "{}")
-        let recent = try await read("notes_last_hour", arguments: "{}")
+        let recent = try await listing
         return "document_outline:\n\(outline)\n\nnotes_last_hour:\n\(recent)"
     }
 
