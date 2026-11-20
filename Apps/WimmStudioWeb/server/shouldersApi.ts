@@ -1147,9 +1147,8 @@ export async function handleShouldersTurnSse(
   let thinkingForm = getInitialThinkingForm(thinking, model);
 
   const executeStream = async (form: InternalThinkingForm): Promise<void> => {
-    const generationConfig: Record<string, unknown> = {
-      temperature: 0.9,
-    };
+    // Studio ShouldersChat sends no temperature override at all.
+    const generationConfig: Record<string, unknown> = {};
     const thinkingCfg = getThinkingConfigObject(form);
     if (thinkingCfg) {
       generationConfig.thinkingConfig = thinkingCfg;

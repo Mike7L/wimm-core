@@ -23,6 +23,16 @@ import { cliReader, MAX_IDS_PER_CALL, webReader, type QuestionReader, type Reade
 const MAX_TOOL_ROUNDS = 3;
 const ORIGIN = 'StudioWebQuestion';
 
+/** Sampling overrides are omitted for Gemini 3.x models, mirroring ModelSampling.swift. */
+export function questionTemperature(model: string, requested = 0.7): number | undefined {
+  const parts = model.trim().toLowerCase().split('/');
+  const name = parts[parts.length - 1] || '';
+  if (name === 'gemini-3' || name.startsWith('gemini-3.') || name.startsWith('gemini-3-')) {
+    return undefined;
+  }
+  return requested;
+}
+
 const promptFor = (reader: QuestionReader) => `Ты Ангел — тёплый и умный собеседник, который сидит у человека на плече. Он задал тебе вопрос голосом.
 
 У тебя есть его личный документ: ниже его оглавление (id, заголовок, размер раздела). Если вопрос касается его жизни, людей, работы, проектов или планов — сначала прочитай нужное. ${reader.toolsPrompt} Всего не больше ${MAX_TOOL_ROUNDS} обращений. На общие вопросы отвечай сразу, без чтения.
@@ -176,6 +186,11 @@ export async function handleQuestion(
     const toolConfig = hasDocument && round < MAX_TOOL_ROUNDS ? undefined : { functionCallingConfig: { mode: 'NONE' } };
     for (let i = acceptedFormByModel.get(model) ?? 0; i < THINKING_FORMS.length; i++) {
       const thinkingConfig = THINKING_FORMS[i];
+      const temperature = questionTemperature(model);
+      const generationConfig: Record<string, unknown> = {
+        ...(temperature !== undefined ? { temperature } : {}),
+        ...(thinkingConfig ? { thinkingConfig } : {}),
+      };
       const callStarted = Date.now();
       const upstream = await fetch(endpoint, {
         method: 'POST',
@@ -185,7 +200,7 @@ export async function handleQuestion(
           contents,
           ...(hasDocument ? { tools: [{ functionDeclarations: reader!.functionDeclarations }] } : {}),
           ...(toolConfig ? { toolConfig } : {}),
-          generationConfig: { temperature: 0.7, ...(thinkingConfig ? { thinkingConfig } : {}) },
+          generationConfig,
         }),
         signal: abort.signal,
       });
