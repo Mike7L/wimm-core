@@ -7,6 +7,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { attachSourceDates, bulkImportDays } from './blockDates.ts';
 import { documentChanges } from './documentChanges.ts';
 import { handleInbox } from './inboxApi.ts';
+import { parseReferenceDefinition } from './markdownRefs.ts';
 import { handleQuestion, handleQuestionRating } from './questionApi.ts';
 import { apiRequestRejection, resolveAllowedMediaPath } from './requestGuard.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -109,7 +110,6 @@ function resolveCommentsLocation(docPath: string): { threadsPath: string; docRel
 
 export function parsePersonalDocument(text: string): ParsedDocument {
   const lineRegex = /[^\r\n]+(?:\r\n|\n|\r|$)|(?:\r\n|\n|\r)/g;
-  const refRegex = /^\[([^\]]+)\]:\s*(\S+)/;
   const anchorRegex = /^<a\s+id="([^"]+)"\s*><\/a>$/;
 
   const references: Record<string, string> = {};
@@ -206,10 +206,10 @@ export function parsePersonalDocument(text: string): ParsedDocument {
       continue;
     }
 
-    const refMatch = refRegex.exec(line);
+    const refMatch = parseReferenceDefinition(line);
     if (refMatch) {
       flush();
-      references[refMatch[1]] = refMatch[2];
+      references[refMatch.id] = refMatch.target;
       appendBlock(start, end, { type: 'hidden' });
       continue;
     }

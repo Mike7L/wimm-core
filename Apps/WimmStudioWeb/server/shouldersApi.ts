@@ -4,6 +4,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { parseReferenceDefinition } from './markdownRefs.ts';
 import type {
   ActiveRecordingInfo,
   LatestVoiceNote,
@@ -323,9 +324,31 @@ function documentHeadings(lines: string[]): DocumentHeading[] {
   return out;
 }
 
+/** Drop Markdown reference-definition lines outside code fences; leave HTML comments intact. */
+function stripReferenceDefinitions(md: string): string {
+  const out: string[] = [];
+  let fence: string | null = null;
+  for (const rawLine of md.split(/\r?\n/)) {
+    const trimmed = rawLine.trim();
+    if (fence !== null) {
+      out.push(rawLine);
+      if (trimmed.startsWith(fence)) fence = null;
+      continue;
+    }
+    if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+      fence = trimmed.slice(0, 3);
+      out.push(rawLine);
+      continue;
+    }
+    if (parseReferenceDefinition(trimmed)) continue;
+    out.push(rawLine);
+  }
+  return out.join('\n');
+}
+
 /** Text for the model's ear: no source marks, anchors or link targets. */
-function plainDossierText(md: string): string {
-  return md
+export function plainDossierText(md: string): string {
+  return stripReferenceDefinitions(md)
     .replace(/^<a\s+id="[^"]+"\s*><\/a>\s*$/gm, '')
     .replace(/\s*→\s*\[[^\]]+\]\(#[^)]+\)/g, '')
     .replace(/(?<!!)\[([A-Z]+\d+)\](?![(:])/g, '')
@@ -337,25 +360,44 @@ function plainDossierText(md: string): string {
     .trim();
 }
 
-let documentDossierCache: { mtimeMs: number; lines: string[]; headings: DocumentHeading[] } | null =
-  null;
+let documentDossierCache: {
+  path: string;
+  mtimeMs: number;
+  size: number;
+  lines: string[];
+  headings: DocumentHeading[];
+} | null = null;
 
 /**
  * The dossier read straight from the document: three standing sections plus
  * the section the user has open. Re-read whenever the document file changes,
  * so a conversation follows the secretary's edits without a rebuild.
  */
-export function loadDocumentDossier(openSection?: string): {
+export function loadDocumentDossier(
+  openSection?: string,
+  docPath: string = DOSSIER_DOC_PATH,
+): {
   dossier: string;
   updatedAt: string;
   wordCount: number;
   sections: string[];
 } | null {
   try {
-    const stat = fs.statSync(DOSSIER_DOC_PATH);
-    if (!documentDossierCache || documentDossierCache.mtimeMs !== stat.mtimeMs) {
-      const lines = fs.readFileSync(DOSSIER_DOC_PATH, 'utf8').split(/\r?\n/);
-      documentDossierCache = { mtimeMs: stat.mtimeMs, lines, headings: documentHeadings(lines) };
+    const stat = fs.statSync(docPath);
+    if (
+      !documentDossierCache ||
+      documentDossierCache.path !== docPath ||
+      documentDossierCache.mtimeMs !== stat.mtimeMs ||
+      documentDossierCache.size !== stat.size
+    ) {
+      const lines = fs.readFileSync(docPath, 'utf8').split(/\r?\n/);
+      documentDossierCache = {
+        path: docPath,
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+        lines,
+        headings: documentHeadings(lines),
+      };
     }
     const { lines, headings } = documentDossierCache;
 
@@ -395,11 +437,13 @@ export function loadDocumentDossier(openSection?: string): {
     if (wanted) {
       const index = headings.findIndex((h) => h.anchor === wanted || h.title === wanted);
       if (index >= 0 && !used.includes(headings[index].title)) {
-        const whole = sectionText(index, false);
-        const text = whole.length <= OPEN_SECTION_LIMIT ? whole : sectionText(index, true);
-        const plain = plainDossierText(text).replace(/^#{1,6}\s+.*\n?/, '').trim();
+        const stripHeading = (raw: string) =>
+          plainDossierText(raw).replace(/^#{1,6}\s+.*\n?/, '').trim();
+        const wholePlain = stripHeading(sectionText(index, false));
+        const truncated = wholePlain.length > OPEN_SECTION_LIMIT;
+        const plain = truncated ? stripHeading(sectionText(index, true)) : wholePlain;
         if (plain) {
-          const note = whole.length <= OPEN_SECTION_LIMIT ? '' : ' (только вводная часть)';
+          const note = truncated ? ' (только вводная часть)' : '';
           parts.push(`## Раздел, который у него сейчас открыт: ${headings[index].title}${note}\n\n${plain}`);
           used.push(headings[index].title);
         }
@@ -1317,6 +1361,7 @@ export async function handleShouldersTurnSse(
       status: turnError ?? 'answered',
       dossier: dossierSource,
       dossier_words: String(dossierInfo.wordCount),
+      dossier_chars: String(dossierInfo.dossier.length),
       system_chars: String(systemText.length),
       history_messages: String(messages.length),
       lines: String(lineCount),
