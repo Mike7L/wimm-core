@@ -101,7 +101,7 @@ public struct SecretaryDispatcher: Sendable {
 
     /// Read-only local estimate; no prompt, receipt, mark or model call is written.
     public func packetPreview(_ task: SecretaryTask) async throws -> String {
-        let library = await LibraryRecallSource(buildMode: .subprocess(executable: wimmCLI, arguments: ["mcp-build"]), includeFingerprints: true).load()
+        let library = await loadLibrary(marks: AgentMarkStore())
         let packet = try SecretaryPacket.prepare(task: task, library: library, sourceByteLimit: packetSourceBytes, optimizationLevel: optimizationLevel)
         let prompt = try packet.prompt()
         let solo = packet.payload["solo_large_source"] as? Bool == true ? " Solo packet for a complete long source." : ""
@@ -227,12 +227,19 @@ public struct SecretaryDispatcher: Sendable {
         return record
     }
 
+    /// The same disk cache as `secretary prepare` and Studio's warm-up, so a
+    /// Studio pass rebuilds only changed notes instead of the whole library.
+    private func loadLibrary(marks: AgentMarkStore) async -> RecallLibrary {
+        await LibraryRecallSource(buildMode: .subprocess(executable: wimmCLI, arguments: ["mcp-build"]), includeFingerprints: true,
+                                  cacheDirectory: marks.directory.appendingPathComponent("SecretaryRecallCache")).load()
+    }
+
     func runPacket(task: SecretaryTask, library: RecallLibrary? = nil, marks: AgentMarkStore = AgentMarkStore(),
                    clock: SecretaryStageClock = SecretaryStageClock(),
                    onEvent: @escaping @Sendable (SecretaryEvent) -> Void) async throws -> SecretaryExecution {
         let loaded: RecallLibrary
         if let library { loaded = library }
-        else { loaded = await LibraryRecallSource(buildMode: .subprocess(executable: wimmCLI, arguments: ["mcp-build"]), includeFingerprints: true).load() }
+        else { loaded = await loadLibrary(marks: marks) }
         clock.mark("library_load")
         defer { clock.mark("packet_apply") } // Whatever follows the last model reply: decode, validate, apply.
         var packet = try SecretaryPacket.prepare(task: task, library: loaded, marks: marks, sourceByteLimit: packetSourceBytes, optimizationLevel: optimizationLevel)
