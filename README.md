@@ -2,7 +2,7 @@
 
 Голосовые заметки с локальным распознаванием русской речи, снимками вкладок, импортом файлов, Алёной и секретарём Claude. Ветка `wimm-browser` содержит исходный код расширения Manifest V3.
 
-[Скачать Wimm 1.0.0](https://github.com/Mike7L/wimm-core/releases/download/wimm-browser-v1.0.0/Wimm-1.0.0.zip) · [Руководство пользователя](extension/README.md) · [Конфиденциальность](docs/privacy.md)
+[Скачать Wimm 1.0.0](https://github.com/Mike7L/wimm-core/raw/refs/tags/wimm-browser-v1.0.0/packages/Wimm-1.0.0.zip) · [Руководство пользователя](extension/README.md) · [Конфиденциальность](docs/privacy.md)
 
 ## Установка
 
