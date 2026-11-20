@@ -43,6 +43,7 @@ export interface ActiveShouldersContext {
 const APP_DEFAULTS_DOMAIN = process.env.WIMM_APP_DEFAULTS_DOMAIN || 'com.micha.wimm.macos';
 const SHARED_DEFAULTS_DOMAIN = process.env.WIMM_DEFAULTS_SUITE || 'group.com.wimm.app';
 const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash';
+const DEFAULT_CONVERSATION_GEMINI_MODEL = 'gemini-3.8-flash';
 
 export const OPENER_PROMPT =
   '(Пользователь только что открыл окно. Поздоровайтесь и сразу заговорите о самом свежем из досье.)';
@@ -223,6 +224,23 @@ export function resolveUnderstandGeminiModel(): string {
     }
   }
   return DEFAULT_GEMINI_MODEL;
+}
+
+/**
+ * Mirrors ModelSelection.conversationModel: read `conversationModel` from the shared
+ * suite first, then the app domain, strip `models/`, accept only `gemini-` ids
+ * (case-insensitive), and fall back to gemini-3.8-flash.
+ */
+export function resolveConversationGeminiModel(opts: ReadDefaultsOptions = {}): string {
+  for (const domain of [SHARED_DEFAULTS_DOMAIN, APP_DEFAULTS_DOMAIN]) {
+    const res = readDefaultsEntry(domain, 'conversationModel', opts);
+    if (res.status !== 'value') continue;
+    const trimmed = res.value.trim().replace(/^models\//, '');
+    if (trimmed.toLowerCase().startsWith('gemini-')) {
+      return trimmed;
+    }
+  }
+  return DEFAULT_CONVERSATION_GEMINI_MODEL;
 }
 
 function resolveDefaultStyle(): ShouldersStyleId {
@@ -815,7 +833,7 @@ export function getShouldersStatus(): ShouldersStatus {
   const apiKey = resolveGeminiApiKey();
   const dossierInfo = loadDossier();
   const documentDossier = loadDocumentDossier();
-  const model = resolveUnderstandGeminiModel();
+  const model = resolveConversationGeminiModel();
   const defaultStyle = resolveDefaultStyle();
   const defaultThinking = resolveDefaultThinking();
   const latestNote = getLatestVoiceNote();
@@ -1055,7 +1073,7 @@ export async function handleShouldersTurnSse(
           ? 'default'
           : 'none';
 
-  const model = resolveUnderstandGeminiModel();
+  const model = resolveConversationGeminiModel();
   const systemText = `${getStylePrompt(style)}\n\n# Досье\n\n${dossierInfo.dossier}`;
 
   // Build conversation messages (matching ShouldersChat.swift turn(answer:))
