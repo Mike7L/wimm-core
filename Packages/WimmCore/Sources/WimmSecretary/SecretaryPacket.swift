@@ -962,6 +962,17 @@ struct SecretaryPacket {
         }
     }
 
+    /// Packet sources whose sidecar, text or analysis no longer match their receipt, in packet order.
+    func changedSources() -> [String] {
+        zip(selected, receipts).compactMap { sourceID, receipt in
+            let media = URL(fileURLWithPath: receipt.file)
+            let fingerprint = NoteFingerprint.read(forRecordingURL: media)
+            guard let current = RecallSidecar.load(forRecordingURL: media), SecretaryBookkeeping.digest(current.data) == receipt.sha256,
+                  fingerprint.text == receipt.text, fingerprint.analysis == receipt.analysis else { return sourceID }
+            return nil
+        }
+    }
+
     func apply(_ plan: Plan, prompt: String, marks: AgentMarkStore = AgentMarkStore(), validateOnly: Bool = false,
                validationRows: [String: [String: Any]]? = nil, validationBlocks: Set<String>? = nil) throws -> SecretaryResult {
         guard !PrivateMode.isEnabled else { throw SecretaryError.privateMode }
@@ -991,11 +1002,8 @@ struct SecretaryPacket {
                   !edit.text.contains("\u{0000}") else { throw Failure("Citation definitions cannot be edited by packet output.") }
             doc.replaceCharacters(in: NSRange(location: block.start, length: block.length), with: edit.text)
         }
-        for (sourceID, receipt) in zip(selected, receipts) {
-            let media = URL(fileURLWithPath: receipt.file)
-            guard let current = RecallSidecar.load(forRecordingURL: media), SecretaryBookkeeping.digest(current.data) == receipt.sha256,
-                  NoteFingerprint.read(forRecordingURL: media).text == receipt.text,
-                  NoteFingerprint.read(forRecordingURL: media).analysis == receipt.analysis else { throw Failure("Packet source changed while model was working (\(sourceID)); nothing applied.") }
+        if let sourceID = changedSources().first {
+            throw Failure("Packet source changed while model was working (\(sourceID)); nothing applied.")
         }
         let queueURL = task.workspace.root.appendingPathComponent("secretary/review_queue.md")
         let registryURL = task.workspace.document.deletingPathExtension().appendingPathExtension("sources.json")

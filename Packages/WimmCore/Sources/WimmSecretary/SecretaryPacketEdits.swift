@@ -334,12 +334,19 @@ extension SecretaryPacket {
                 let ns = text as NSString
                 return Set(citation.matches(in: text, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range(at: 1)) })
             }
+            // A source rewritten while the model worked (a fresh recording's file run or speaker split)
+            // stays queued with every edit that names it; the rest of the reply still applies. One such
+            // note (2026-11-19) used to throw away a whole two-round pass.
+            let changed = Set(changedSources())
             // Pass 1: check every edit on its own. A failure does not stop the others yet.
             var checked: [(index: Int, op: EditOperation, edit: Edit, deleted: String?, named: Set<String>)] = []
             var failed: [(index: Int, op: EditOperation, reason: String, involved: Set<String>)] = []
             for (index, op) in reply.edits.enumerated() {
                 do {
                     let named = op.sources ?? []
+                    if let moved = Set(named).union(cited(op.text)).intersection(changed).sorted().first {
+                        throw Failure("\(moved) changed while the model was working; it stays queued")
+                    }
                     if let preview = Set(named).intersection(previewed).sorted().first {
                         throw Failure("\(preview) is a partial preview; it allows only not_a_note")
                     }
@@ -366,7 +373,7 @@ extension SecretaryPacket {
             // so a new sentence and its matching fix elsewhere still land together or not at all.
             // Those sources stay queued; edits about other sources apply (passes 12–13, 2026-10-31,
             // lost 69 sources to one bad edit each).
-            var rejectedSources = Set(failed.flatMap(\.involved))
+            var rejectedSources = Set(failed.flatMap(\.involved)).union(changed)
             var rejectedBy: [Int: String] = [:]
             for failure in failed { rejectedBy[failure.index] = failure.reason }
             var grew = true
@@ -380,7 +387,7 @@ extension SecretaryPacket {
             }
             let survivors = checked.filter { rejectedBy[$0.index] == nil }
             // Nothing left of a reply that tried to edit: refuse it as a whole, lists included.
-            if survivors.isEmpty, let first = failed.first { throw Failure(first.reason) }
+            if survivors.isEmpty, let first = failed.first(where: { $0.involved.isDisjoint(with: changed) }) { throw Failure(first.reason) }
             report.rejectedEdits = reply.edits.indices.compactMap { index in
                 guard let reason = rejectedBy[index] else { return nil }
                 let op = reply.edits[index]
@@ -432,6 +439,7 @@ extension SecretaryPacket {
                 if rejectedSources.contains(id) {
                     let reason = report.rejectedEdits?.first { $0.sources.contains(id) }?.reason
                         ?? failed.first { $0.involved.contains(id) }?.reason
+                        ?? (changed.contains(id) ? "\(id) changed while the model was working; it stays queued" : nil)
                     return ("rejected", reason.map { String($0.prefix(300)) })
                 }
                 if let entry = unfinished[id] { return ("unfinished", entry.obstacle.map { String($0.prefix(300)) }) }

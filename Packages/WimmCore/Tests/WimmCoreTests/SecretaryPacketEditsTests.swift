@@ -216,6 +216,31 @@ final class SecretaryPacketEditsTests: XCTestCase {
         XCTAssertThrowsError(try packet.prompt(sections: [family], validationPrompt: narrow, byteBudget: 1), "nothing fits at all")
     }
 
+    func testSourceChangedDuringModelRunStaysQueuedAndOthersApply() throws {
+        let packet = try prepare(), prompt = try packet.prompt()
+        let summary = try block(packet, "Сводка")
+        // A fresh recording's file run lands while the model is working.
+        try FileStore.mutateSidecar(at: FileStore.metadataURL(forRecordingURL: files[0])) { $0["late"] = "run"; return true }
+        XCTAssertEqual(packet.changedSources(), ["S1"])
+        let resolution = try packet.resolveEdits(reply(["edits": [
+            edit("insert_after", block: summary, text: "Новое о запуске [S1].\n\n", sources: ["S1"]),
+            edit("insert_after", block: summary, text: "Экспорт пока план [S2].\n\n", sources: ["S2"])]]), prompt: prompt, marks: store)
+        XCTAssertTrue(resolution.report.accepted, resolution.report.rejection ?? "")
+        XCTAssertEqual(outcomes(resolution.report), ["S1": "rejected", "S2": "used"])
+        XCTAssertTrue(resolution.report.rejectedEdits?.first?.reason.contains("changed while the model was working") == true)
+        XCTAssertEqual(statuses(resolution.plan), ["S2": "applied"])
+        // Only a changed source's edits and lists: nothing to apply, but no whole-reply rejection either.
+        let lists = try packet.resolveEdits(reply(["edits": [edit("insert_after", block: summary, text: "Ещё [S1].\n\n", sources: ["S1"])],
+            "done_no_additions": [["source": "S1", "reason": "x"]]]), prompt: prompt, marks: store)
+        XCTAssertNil(lists.report.rejection)
+        XCTAssertEqual(outcomes(lists.report)["S1"], "rejected", "a changed source is never marked from its old text")
+
+        _ = try resolution.packet.apply(resolution.plan, prompt: prompt, marks: store)
+        let written = try String(contentsOf: document, encoding: .utf8)
+        XCTAssertTrue(written.contains("Экспорт пока план [S2]."))
+        XCTAssertFalse(written.contains("Новое о запуске"))
+    }
+
     func testInvalidEditDropsOnlyItsSourceGroup() throws {
         let packet = try prepare(), prompt = try packet.prompt()
         let fact = try block(packet, "Старый факт"), summary = try block(packet, "Сводка")
