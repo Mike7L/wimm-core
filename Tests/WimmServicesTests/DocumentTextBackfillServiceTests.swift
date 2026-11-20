@@ -33,7 +33,7 @@ final class DocumentTextBackfillServiceTests: XCTestCase {
         XCTAssertEqual(report.written, 0)
     }
 
-    func testDryRunExtractsMarkdownDocuments() async {
+    func testDryRunSkipsMarkdownWithExistingText() async {
         let file = FileStore.recordingsDirectory().appendingPathComponent("note.md")
         try? "# Title\n\nRecognized markdown body".write(
             to: file,
@@ -46,8 +46,9 @@ final class DocumentTextBackfillServiceTests: XCTestCase {
         )
 
         XCTAssertEqual(report.scanned, 1)
-        XCTAssertEqual(report.extracted, 1)
-        XCTAssertEqual(report.providers[TextExtractionProvider.plainText], 1)
+        XCTAssertEqual(report.skippedHasTextAlready, 1)
+        XCTAssertEqual(report.extracted, 0)
+        XCTAssertTrue(report.providers.isEmpty)
         XCTAssertEqual(report.written, 0)
     }
 
