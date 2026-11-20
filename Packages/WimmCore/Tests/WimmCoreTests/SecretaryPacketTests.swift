@@ -675,6 +675,20 @@ final class SecretaryPacketTests: XCTestCase {
         XCTAssertNil(SecretaryPacketCostEstimate.estimate(inputBytes: 1, model: "haiku", executor: "claude-code", table: template),
                      "zero template rows are unfilled, not free")
     }
+    func testGeminiPacketCostComesFromUsageMetadata() {
+        let table = PriceTable(version: "test", models: ["gemini-9-flash": ModelPrice(input: 1, output: 4, cachedInput: 0.1)])
+        let usage: [String: Any] = ["promptTokenCount": 1_000_000, "cachedContentTokenCount": 400_000,
+                                    "candidatesTokenCount": 100_000, "thoughtsTokenCount": 50_000]
+        // 600k text × $1 + 400k cached × $0.10 + (100k + 50k thinking) × $4
+        XCTAssertEqual(GeminiPacketExecutor.cost(usage: usage, model: "gemini-9-flash-preview", table: table) ?? 0,
+                       0.6 + 0.04 + 0.6, accuracy: 1e-9)
+        XCTAssertNil(GeminiPacketExecutor.cost(usage: nil, model: "gemini-9-flash", table: table), "no counters: unknown")
+        XCTAssertNil(GeminiPacketExecutor.cost(usage: ["candidatesTokenCount": 5], model: "gemini-9-flash", table: table))
+        XCTAssertNil(GeminiPacketExecutor.cost(usage: usage, model: "gemini-8-pro", table: table), "unpriced model: unknown")
+        XCTAssertNil(GeminiPacketExecutor.cost(usage: usage, model: "gemini-9-flash", table: nil))
+        XCTAssertNil(GeminiPacketExecutor.cost(usage: usage, model: "gemini-9-flash",
+                                               table: ModelPricing.template(models: ["gemini-9-flash"])), "zero template rows are unfilled")
+    }
     func testPacketRequestOverTheEstimateIsRefusedBeforeItIsSent() async throws {
         let executor = PacketRepairExecutor(bodies: ["not JSON"])
         var dispatcher = SecretaryDispatcher(executor: executor, wimmCLI: URL(fileURLWithPath: "/usr/bin/true"), budgetUSD: 0.10, model: "haiku")

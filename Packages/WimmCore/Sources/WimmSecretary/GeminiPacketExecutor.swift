@@ -6,8 +6,22 @@ public struct GeminiPacketExecutor: SecretaryExecutor {
     public let name = "gemini"
     private let temperature: Double?
     private let maxOutputTokens: Int?
-    public init(temperature: Double? = nil, maxOutputTokens: Int? = 65536) {
-        self.temperature = temperature; self.maxOutputTokens = maxOutputTokens
+    private let priceTable: @Sendable () -> PriceTable?
+    public init(temperature: Double? = nil, maxOutputTokens: Int? = 65536,
+                priceTable: @escaping @Sendable () -> PriceTable? = { ModelPricing.loadTable() }) {
+        self.temperature = temperature; self.maxOutputTokens = maxOutputTokens; self.priceTable = priceTable
+    }
+
+    /// Dollar cost of one reply from its `usageMetadata`, priced by the library's table:
+    /// cached prompt tokens at the cached rate, thinking at the output rate. Nil when the
+    /// reply carries no counters or the model has no priced row; unknown is not zero.
+    static func cost(usage: [String: Any]?, model: String, table: PriceTable?) -> Double? {
+        guard let usage, let table, let prompt = usage["promptTokenCount"] as? Int,
+              let price = SecretaryPacketCostEstimate.price(for: model, in: table) else { return nil }
+        let tokens = TokenUsage(inputTokens: prompt, outputTokens: usage["candidatesTokenCount"] as? Int ?? 0,
+                                cachedInputTokens: usage["cachedContentTokenCount"] as? Int,
+                                thoughtsTokens: usage["thoughtsTokenCount"] as? Int ?? 0)
+        return ModelPricing.cost(usage: tokens, model: model, table: PriceTable(version: table.version, models: [model: price]))?.total
     }
 
     public func run(_ request: SecretaryExecutionRequest,
@@ -44,7 +58,7 @@ public struct GeminiPacketExecutor: SecretaryExecutor {
         let finish = candidate?["finishReason"] as? String
         let ok = (200..<300).contains(status) && finish == "STOP" && !text.isEmpty
         return SecretaryExecution(exitStatus: ok ? 0 : 1, isError: !ok,
-            finalText: text.isEmpty ? nil : text, costUSD: nil,
+            finalText: text.isEmpty ? nil : text, costUSD: Self.cost(usage: usage, model: model, table: priceTable()),
             tokensIn: usage?["promptTokenCount"] as? Int,
             tokensOut: usage?["candidatesTokenCount"] as? Int,
             turns: 1, model: model,
