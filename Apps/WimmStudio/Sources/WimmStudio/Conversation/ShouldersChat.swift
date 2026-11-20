@@ -14,6 +14,11 @@ final class ShouldersChat {
     private let document: URL
     private let chat: GeminiChatStream
     private var dossier: String?
+    /// What they remember from earlier conversations, read once at the opening
+    /// so the system prompt stays the same (and cached) for the whole conversation.
+    private var memory: String?
+    private var prepared = false
+    private let openedAt = Date()
     /// One paid read of the document, however many callers wait for it.
     private var preparing: Task<Void, Error>?
     private var history: [GeminiChatStream.Message] = []
@@ -36,14 +41,40 @@ final class ShouldersChat {
 
     var isPrepared: Bool { dossier != nil }
 
-    /// Reads the document into the dossier, from the cache when the document is unchanged.
+    /// Reads the document into the dossier, from the cache when the document is unchanged,
+    /// then brings the memory of earlier conversations up to date.
     func prepare() async throws {
-        guard dossier == nil else { return }
+        guard !prepared else { return }
         if let preparing { return try await preparing.value }
-        let task = Task { try await readDocument() }
+        let task = Task {
+            try await readDocument()
+            await rememberEarlierConversations()
+            prepared = true
+        }
         preparing = task
         defer { preparing = nil }
         try await task.value
+    }
+
+    /// One short call when finished conversations are not in the memory yet.
+    /// A failure leaves the old memory and the transcripts for the next opening.
+    private func rememberEarlierConversations() async {
+        let current = conversationId
+        let pending = await Task.detached { ShouldersMemory.pending(excluding: current) }.value
+        ShouldersMemory.markSeen(pending.skip)
+        let known = ShouldersMemory.text()
+        memory = known
+        guard !pending.take.isEmpty else { return }
+        do {
+            let request = ShouldersMemory.rewriteRequest(memory: known, transcripts: pending.take)
+            let rewritten = try await chat.complete(system: ShouldersMemory.rewritePrompt,
+                                                    messages: [.init(role: .user, text: request)], timeout: 30)
+            guard !rewritten.isEmpty else { return }
+            try ShouldersMemory.store(rewritten, covering: pending.take.map(\.id))
+            memory = rewritten
+        } catch {
+            log("[Shoulders] memory not updated: \(error.localizedDescription)")
+        }
     }
 
     private func readDocument() async throws {
@@ -68,14 +99,17 @@ final class ShouldersChat {
     func turn(answer: String?) -> AsyncThrowingStream<ShoulderLine, Error> {
         // A vague opener ("начните разговор") made the model think 0.2–1.3K tokens and
         // speak after 4–14 s despite thinkingBudget 0; naming the topic: 0 tokens, ~2 s (2026-11-03).
-        let said = answer ?? "(Пользователь только что открыл окно. Поздоровайтесь и сразу заговорите о самом свежем из досье.)"
+        let said = answer ?? (memory == nil
+            ? "(Пользователь только что открыл окно. Поздоровайтесь и сразу заговорите о самом свежем из досье.)"
+            : ShouldersMemory.opener)
         if history.last?.role == .user {
             // The previous turn was cut off before a word came back: keep both answers.
             history[history.count - 1].text += "\n" + said
         } else {
             history.append(.init(role: .user, text: said))
         }
-        let pieces = chat.stream(system: style.prompt + "\n\n# Досье\n\n" + (dossier ?? ""),
+        let remembered = memory.map { "\n\n" + ShouldersMemory.promptBlock(memory: $0, today: openedAt) } ?? ""
+        let pieces = chat.stream(system: style.prompt + "\n\n# Досье\n\n" + (dossier ?? "") + remembered,
                                  messages: history, timeout: 60,
                                  thinking: ShouldersThinking.current.config)
         return AsyncThrowingStream { continuation in

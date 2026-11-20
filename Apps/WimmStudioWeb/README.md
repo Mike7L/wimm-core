@@ -43,3 +43,11 @@ Paths the API reads can be pointed at test data with `WIMM_DOC_PATH`,
 ```bash
 npm test
 ```
+
+## ZONOS3-Mini on Apple Silicon
+
+Run `bash scripts/setup_zonos.sh` once with `uv` and the Hugging Face `hf`
+CLI on your PATH. The installer downloads the runtime and about 1.1 GB of
+model files and preset voices into the ignored `.cache/` directory. The web
+server starts MLX locally when the voice catalog is first requested and stops
+it on shutdown. An existing compatible server on `127.0.0.1:1919` also works.

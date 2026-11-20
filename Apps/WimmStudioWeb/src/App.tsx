@@ -15,6 +15,7 @@ import {
   Search,
   Send,
   SlidersHorizontal,
+  Square,
   Volume2,
   X,
 } from 'lucide-react';
@@ -34,6 +35,10 @@ import { FeedApp } from './feed/FeedApp';
 import { AppNav, VIEW_PATHS, viewFromPath, type View } from './AppNav';
 import { SourceImage } from './SourceImage';
 import { BlockSourceDates, SectionNewestSource } from './BlockSourceDates';
+import { useZonosVoices } from './zonosSpeech';
+import { useDocumentReadAloud } from './useDocumentReadAloud';
+
+const PROOFREADING_VOICE_KEY = 'WimmStudioWeb.proofreadingZonosVoice';
 
 interface SelectionTarget {
   block: DocumentBlock;
@@ -84,6 +89,17 @@ export function App() {
   const [scale, setScale] = useState(1);
   const [questionReader, setQuestionReader] = useState<QuestionReaderName>(loadQuestionReader);
   const [showChanges, setShowChanges] = useState(false);
+  const [proofreadingOpen, setProofreadingOpen] = useState(false);
+  const [voiceCatalogRequest, setVoiceCatalogRequest] = useState(0);
+  const { voices: proofreadingVoices, status: proofreadingVoiceStatus } = useZonosVoices(
+    voiceCatalogRequest > 0, voiceCatalogRequest
+  );
+  const [proofreadingVoiceId, setProofreadingVoiceId] = useState(
+    () => localStorage.getItem(PROOFREADING_VOICE_KEY) ?? ''
+  );
+  const proofreadingVoice = proofreadingVoices?.find((voice) => voice.id === proofreadingVoiceId)
+    ?? proofreadingVoices?.[0];
+  const { start: readDocument, stop: stopReading, blockId: readingBlockId, error: readingError } = useDocumentReadAloud();
 
   // Active thread & block editing
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -116,6 +132,19 @@ export function App() {
   // Which text is open: the main document or a read-only reading text.
   const [docId, setDocId] = useState(loadDocId);
   const docIdRef = useRef(docId);
+  const documentInView = view === 'doc' || (view === 'feed' && isWide);
+  useEffect(() => {
+    stopReading();
+    setProofreadingOpen(false);
+  }, [docId, documentInView, showChanges, stopReading]);
+  useEffect(() => {
+    stopReading();
+  }, [payload?.sha256, stopReading]);
+  useEffect(() => {
+    if (readingBlockId !== null) {
+      document.getElementById(`doc-block-${readingBlockId}`)?.scrollIntoView({ block: 'nearest' });
+    }
+  }, [readingBlockId]);
   const readOnly = payload?.readOnly ?? false;
   /** A jump from the feed that waits for the main document to load. */
   const pendingDocAction = useRef<(() => void) | null>(null);
@@ -225,6 +254,7 @@ export function App() {
         go(view === 'dialog' ? previousView.current : 'dialog');
       } else if (e.key === 'Escape') {
         setViewMenuOpen(false);
+        setProofreadingOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -338,6 +368,21 @@ export function App() {
     return out;
   }, [payload, collapsedHeadings, searchQuery]);
 
+  const openProofreading = () => {
+    setViewMenuOpen(false);
+    setProofreadingOpen(true);
+    setVoiceCatalogRequest((request) => request + 1);
+  };
+
+  const toggleReading = (fromId?: number) => {
+    if (readingBlockId !== null && (fromId === undefined || fromId === readingBlockId)) {
+      stopReading();
+    } else if (proofreadingVoice) {
+      void readDocument(visibleBlocks, proofreadingVoice.id, fromId);
+    } else {
+      openProofreading();
+    }
+  };
   const headings = useMemo(() => {
     if (!payload) return [];
     const q = searchQuery.trim().toLowerCase();
@@ -644,6 +689,7 @@ export function App() {
       onClick={() => {
         if (selectionTarget) setSelectionTarget(null);
         if (viewMenuOpen) setViewMenuOpen(false);
+        if (proofreadingOpen) setProofreadingOpen(false);
       }}
     >
       <AppNav view={view} onNavigate={go} attention={feedUnread.attention} unread={feedUnread.total} live={live} />
@@ -728,6 +774,50 @@ export function App() {
               >
                 <GitCompareArrows className="h-3.5 w-3.5" aria-hidden="true" />
               </ToolbarButton>}
+              {!showChanges && (
+                <div className="relative shrink-0" onClick={(e) => e.stopPropagation()}>
+                  <ToolbarButton
+                    pressed={proofreadingOpen || readingBlockId !== null}
+                    expanded={proofreadingOpen}
+                    onClick={() => proofreadingOpen ? setProofreadingOpen(false) : openProofreading()}
+                    label="Вычитка"
+                    title="Вычитка вслух и выбор голоса"
+                  >
+                    <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  </ToolbarButton>
+                  {proofreadingOpen && (
+                    <div className="absolute top-full right-0 z-40 mt-1.5 w-56 space-y-3 rounded-xl border border-zinc-700/90 bg-zinc-900 p-3 text-xs shadow-2xl">
+                      <label className="block space-y-1.5">
+                        <span className="font-medium text-zinc-100">Голос для вычитки · ZONOS3‑Mini</span>
+                        <select
+                          value={proofreadingVoice?.id ?? ''}
+                          disabled={!proofreadingVoice}
+                          onChange={(e) => {
+                            stopReading();
+                            setProofreadingVoiceId(e.target.value);
+                            localStorage.setItem(PROOFREADING_VOICE_KEY, e.target.value);
+                          }}
+                          className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-zinc-100"
+                        >
+                          {!proofreadingVoice && <option value="">Голос недоступен</option>}
+                          {proofreadingVoices?.map((voice) => (
+                            <option key={voice.id} value={voice.id}>{voice.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      {!proofreadingVoice && <p role="status" className="text-zinc-400">{proofreadingVoiceStatus}</p>}
+                      <button
+                        type="button"
+                        disabled={readingBlockId === null && (!proofreadingVoice || !visibleBlocks.length)}
+                        onClick={() => toggleReading()}
+                        className="w-full rounded-md border border-zinc-700 px-2 py-1.5 text-zinc-100 hover:bg-zinc-800 disabled:opacity-50"
+                      >
+                        {readingBlockId === null ? 'Читать с начала' : 'Остановить'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
               <ToolbarButton
                 pressed={outlineOpen}
                 onClick={() => setOutlineOpen((v) => !v)}
@@ -741,7 +831,10 @@ export function App() {
               <div className="relative shrink-0" onClick={(e) => e.stopPropagation()}>
                 <ToolbarButton
                   pressed={viewMenuOpen}
-                  onClick={() => setViewMenuOpen((v) => !v)}
+                  onClick={() => {
+                    setProofreadingOpen(false);
+                    setViewMenuOpen((v) => !v);
+                  }}
                   label="Вид"
                   title="Вид документа: оговорки, размер текста, разделы"
                   expanded={viewMenuOpen}
@@ -904,6 +997,7 @@ export function App() {
               )}
 
 
+            {readingError && <p role="status" className="px-3 py-1 text-xs text-amber-300">{readingError}</p>}
             <div className="relative flex min-h-0 flex-1">
               {/* Document Scroll View */}
               <main className="min-w-0 flex-1 overflow-y-auto px-4 py-6 md:px-6 md:py-8">
@@ -936,7 +1030,8 @@ export function App() {
 
                     {visibleBlocks.map((block) => {
                       const blockThreads = threadsByBlock.get(block.id) || [];
-                      const isHighlighted = highlightedBlockId === block.id;
+                      const isReading = readingBlockId === block.id;
+                      const isHighlighted = highlightedBlockId === block.id || isReading;
 
                       // Editorial metadata block (**Редакция: ...)
                       if (block.kind.type === 'body' && block.markdown.startsWith('**Редакция:')) {
@@ -1108,9 +1203,24 @@ export function App() {
                               </div>
 
                               {/* Quick hover action buttons on paragraph right margin */}
-                              <div className={`${readOnly ? 'hidden' : 'flex'} shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100`}>
+                              <div className={`flex shrink-0 items-center gap-1 transition ${isReading ? '' : 'md:opacity-0 md:group-hover:opacity-100 md:focus-within:opacity-100'}`}>
                                 <button
                                   type="button"
+                                  title={isReading ? 'Остановить вычитку' : 'Читать отсюда'}
+                                  aria-label={isReading ? 'Остановить вычитку' : 'Читать отсюда'}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleReading(block.id);
+                                  }}
+                                  className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-amber-300"
+                                >
+                                  {isReading
+                                    ? <Square className="h-3.5 w-3.5" aria-hidden="true" />
+                                    : <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />}
+                                </button>
+                                <button
+                                  type="button"
+                                  hidden={readOnly}
                                   aria-label="Реакция или комментарий к абзацу"
                                   onClick={(e) => openBlockCommentBar(block, e)}
                                   className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-amber-300"
@@ -1119,6 +1229,7 @@ export function App() {
                                 </button>
                                 <button
                                   type="button"
+                                  hidden={readOnly}
                                   aria-label="Редактировать Markdown абзаца"
                                   onClick={() => {
                                     editBaseSha256.current = payload?.sha256 ?? null;

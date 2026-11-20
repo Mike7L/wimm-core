@@ -33,7 +33,7 @@ import {
   resolveWimmCliBinary,
 } from './shouldersApi.ts';
 import { sendStudioVoiceCommand, startStudioVoiceEvents } from './studioVoice.ts';
-import { listZonosVoices, synthesizeZonosWav } from './zonosVoice.ts';
+import { createZonosVoice } from './zonosVoice.ts';
 
 const HOME = os.homedir();
 const DEFAULT_DOC_PATH =
@@ -1044,6 +1044,7 @@ export async function replaceDocumentBlock(opts: {
  */
 export function createStudioApi(): StudioApi {
       const middlewares: StudioMiddleware[] = [];
+      const zonos = createZonosVoice();
       const sseClients = new Set<ServerResponse>();
       const voiceSseClients = new Set<ServerResponse>();
       const { threadsPath } = resolveCommentsLocation(DEFAULT_DOC_PATH);
@@ -1145,6 +1146,7 @@ export function createStudioApi(): StudioApi {
         // ignore
       }
       const close = () => {
+        zonos.close();
         readingWatcher?.close();
         recordingsWatcher?.close();
         clearInterval(recPollTimer);
@@ -1555,7 +1557,7 @@ export function createStudioApi(): StudioApi {
             res.setHeader('Content-Type', 'application/json; charset=utf-8');
             res.setHeader('Cache-Control', 'no-store');
             try {
-              res.end(JSON.stringify({ voices: await listZonosVoices() }));
+              res.end(JSON.stringify({ voices: await zonos.listVoices() }));
             } catch {
               res.statusCode = 503;
               res.end(JSON.stringify({ error: 'ZONOS3-Mini voice catalog unavailable' }));
@@ -1576,7 +1578,7 @@ export function createStudioApi(): StudioApi {
             const abort = new AbortController();
             res.once('close', () => abort.abort());
             try {
-              const wav = await synthesizeZonosWav(text, voice, abort.signal);
+              const wav = await zonos.synthesize(text, voice, abort.signal);
               if (res.destroyed) return;
               res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': wav.length });
               res.end(wav);

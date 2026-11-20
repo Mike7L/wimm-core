@@ -35,6 +35,7 @@ import type {
   ShouldersThinkingId,
 } from './types';
 import { parseQuestionCommand } from './questionCommand';
+import { requestZonosSpeech, useZonosVoices } from './zonosSpeech';
 
 export interface ActiveDocumentContext {
   sectionId?: string;
@@ -86,8 +87,6 @@ export interface VoicePresetOption {
   label: string;
   kind: 'neural' | 'system';
 }
-
-type ZonosVoice = { id: string; label: string };
 
 const ANGEL_VOICE_OPTIONS: VoicePresetOption[] = [
   { id: 'F4', label: 'Supertonic F4 — Светлый женский (по умолч.)', kind: 'neural' },
@@ -221,14 +220,14 @@ export function ShouldersPanel({
   const [useZonos, setUseZonos] = useState(
     () => localStorage.getItem('WimmStudioWeb.shouldersUseZonos') === 'true'
   );
-  const [zonosVoices, setZonosVoices] = useState<ZonosVoice[] | null>(null);
+  const [zonosCatalogRequest, setZonosCatalogRequest] = useState(0);
+  const { voices: zonosVoices, status: zonosCatalogStatus } = useZonosVoices(useZonos, zonosCatalogRequest);
   const [zonosAngelId, setZonosAngelId] = useState(
     () => localStorage.getItem('WimmStudioWeb.shouldersZonosAngel') ?? ''
   );
   const [zonosDemonId, setZonosDemonId] = useState(
     () => localStorage.getItem('WimmStudioWeb.shouldersZonosDemon') ?? ''
   );
-  const [zonosCatalogError, setZonosCatalogError] = useState(false);
   const [zonosSpeechError, setZonosSpeechError] = useState(false);
   const effectiveZonosAngel = zonosVoices?.find((voice) => voice.id === zonosAngelId)?.id
     ?? zonosVoices?.[0]?.id ?? '';
@@ -374,21 +373,6 @@ export function ShouldersPanel({
 
   useEffect(() => {
     localStorage.setItem('WimmStudioWeb.shouldersUseZonos', String(useZonos));
-    if (!useZonos) return;
-
-    const abort = new AbortController();
-    setZonosVoices(null);
-    setZonosCatalogError(false);
-    fetch('/api/shoulders/zonos/voices', { signal: abort.signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error();
-        const { voices } = await response.json() as { voices: ZonosVoice[] };
-        if (!abort.signal.aborted) setZonosVoices(voices);
-      })
-      .catch(() => {
-        if (!abort.signal.aborted) setZonosCatalogError(true);
-      });
-    return () => abort.abort();
   }, [useZonos]);
 
   useEffect(() => {
@@ -558,26 +542,20 @@ export function ShouldersPanel({
         : Promise.resolve(false);
 
     // Studio's fallback uses the CLI. Zonos requests run in playback order.
-    const makeWav = async (signal?: AbortSignal): Promise<Blob | null> => {
-      if (!zonosVoice && zonos.enabled) return null;
-      if (!zonos.enabled && !useStudioVoice) return null;
-      const endpoint = zonos.enabled ? '/api/shoulders/zonos/speech' : '/api/shoulders/tts';
-      return fetch(endpoint, {
+    const wavPromise = useStudioVoice ? studioPromise.then((viaStudio) => {
+      if (viaStudio) return null;
+      return fetch('/api/shoulders/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        signal,
         body: JSON.stringify({
           text: cleanText,
-          voice: zonos.enabled ? zonosVoice : chosenVoice,
+          voice: chosenVoice,
           speed: targetSpeed,
         }),
       })
         .then((r) => r.ok ? r.blob() : null)
         .catch(() => null);
-    };
-    const wavPromise = zonos.enabled ? null : studioPromise.then((viaStudio) =>
-      viaStudio ? null : makeWav()
-    );
+    }) : null;
 
     const prevChain = speechChainRef.current;
     speechChainRef.current = prevChain.then(async () => {
@@ -608,7 +586,9 @@ export function ShouldersPanel({
       if (zonos.enabled) {
         const abort = new AbortController();
         zonosAbortRef.current = abort;
-        blob = await makeWav(abort.signal);
+        blob = zonosVoice
+          ? await requestZonosSpeech(cleanText, zonosVoice, abort.signal).catch(() => null)
+          : null;
         if (zonosAbortRef.current === abort) zonosAbortRef.current = null;
       } else {
         blob = await wavPromise;
@@ -1451,7 +1431,10 @@ export function ShouldersPanel({
           <button
             type="button"
             {...({ popovertarget: settingsPopoverId } as any)}
-            title="Настройки стиля, мышления и досье"
+            onClick={() => {
+              if (useZonos && !zonosVoices?.length) setZonosCatalogRequest((request) => request + 1);
+            }}
+            title="Настройки Ангела и Демона"
             aria-label="Настройки Ангела и Демона"
             className="rounded-md p-1.5 text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-100"
           >
@@ -1570,9 +1553,7 @@ export function ShouldersPanel({
             </label>
             {useZonos && !zonosVoices?.length && (
               <p role="status" className="text-[11px] text-zinc-400">
-                {zonosCatalogError
-                  ? 'Сервер ZONOS3‑Mini недоступен (127.0.0.1:1919).'
-                  : zonosVoices ? 'На сервере ZONOS3‑Mini нет голосов.' : 'Загружаем голоса ZONOS3‑Mini…'}
+                {zonosCatalogStatus}
               </p>
             )}
             <div>
@@ -1912,7 +1893,8 @@ export function ShouldersPanel({
 
       {useZonos && zonosSpeechError && (
         <p role="status" className="border-b border-amber-500/30 px-3.5 py-2 text-xs text-amber-200">
-          ZONOS3‑Mini не озвучил реплику. Используется голос браузера, если он доступен.
+          {zonosVoices?.length ? 'ZONOS3‑Mini не озвучил реплику.' : zonosCatalogStatus}{' '}
+          Используется голос браузера, если он доступен.
         </p>
       )}
 

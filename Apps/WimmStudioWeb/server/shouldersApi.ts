@@ -5,6 +5,16 @@ import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { parseReferenceDefinition } from './markdownRefs.ts';
+import {
+  MEMORY_OPENER_PROMPT,
+  MEMORY_REWRITE_PROMPT,
+  loadShouldersMemory,
+  markMemoryConversationsSeen,
+  memoryPromptBlock,
+  memoryRewriteRequest,
+  pendingShouldersMemory,
+  storeShouldersMemory,
+} from './shouldersMemory.ts';
 import type {
   ActiveRecordingInfo,
   LatestVoiceNote,
@@ -986,13 +996,114 @@ function logShouldersTurn(attributes: Record<string, string>): void {
       source: 'WimmStudioWeb.shouldersApi',
       kind: 'log',
       phase: 'info',
-      message: `[ShouldersWeb] turn: first line ${attributes.first_line_ms ?? '?'} ms, total ${attributes.total_ms} ms`,
+      message:
+        attributes.operation === 'shoulders_memory'
+          ? `[ShouldersWeb] memory: ${attributes.status}, ${attributes.conversations} conversations, ${attributes.total_ms} ms`
+          : `[ShouldersWeb] turn: first line ${attributes.first_line_ms ?? '?'} ms, total ${attributes.total_ms} ms`,
       attributes,
     });
     fs.appendFileSync(path.join(dir, `events_${ts.slice(0, 10)}.jsonl`), line + '\n');
   } catch (e) {
     console.warn('[shoulders] event log write failed:', (e as Error)?.message);
   }
+}
+
+/**
+ * One short call at the opening of a conversation when finished conversations
+ * are not in the memory yet. A failure leaves the old memory and the
+ * transcripts for the next opening; the conversation starts either way.
+ */
+async function rememberEarlierConversations(
+  apiKey: string,
+  model: string,
+  currentConversationId: string
+): Promise<void> {
+  const pending = pendingShouldersMemory(CONVERSATION_DIR, currentConversationId);
+  try {
+    markMemoryConversationsSeen(CONVERSATION_DIR, pending.skip);
+  } catch {
+    // The same transcripts are skipped again next time.
+  }
+  if (pending.take.length === 0) return;
+
+  const startedAt = Date.now();
+  let status = 'updated';
+  let usage: Record<string, unknown> | undefined;
+  let form = getInitialThinkingForm('none', model);
+  try {
+    const request = memoryRewriteRequest(loadShouldersMemory(CONVERSATION_DIR), pending.take);
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+      model
+    )}:generateContent`;
+    let parsed: Record<string, any> | undefined;
+    for (;;) {
+      const thinkingCfg = getThinkingConfigObject(form);
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: MEMORY_REWRITE_PROMPT }] },
+          contents: [{ role: 'user', parts: [{ text: request }] }],
+          generationConfig: thinkingCfg ? { thinkingConfig: thinkingCfg } : {},
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (res.ok) {
+        parsed = (await res.json()) as Record<string, any>;
+        break;
+      }
+      const errBody = await res.text().catch(() => '');
+      const fallback = getFallbackThinkingForm(form);
+      if (fallback && res.status === 400 && errBody.toLowerCase().includes('thinking')) {
+        if (form === 'minimalLevel' || form === 'zeroBudget') {
+          acceptedLeastThinkingByModel.set(model, fallback);
+        }
+        form = fallback;
+        continue;
+      }
+      throw new Error(`Gemini HTTP ${res.status}: ${errBody.slice(0, 200)}`);
+    }
+    usage = parsed?.usageMetadata;
+    const parts = parsed?.candidates?.[0]?.content?.parts;
+    const text = Array.isArray(parts)
+      ? parts
+          .filter((p: any) => !p?.thought && typeof p?.text === 'string')
+          .map((p: any) => p.text)
+          .join('')
+          .trim()
+      : '';
+    if (text) {
+      storeShouldersMemory(
+        CONVERSATION_DIR,
+        text,
+        pending.take.map((t) => t.id)
+      );
+    } else {
+      status = 'empty';
+    }
+  } catch (err: any) {
+    status = String(err?.message || 'error').slice(0, 200);
+    console.warn('[ShouldersWeb] memory not updated:', status);
+  }
+  const attributes: Record<string, string> = {
+    operation: 'shoulders_memory',
+    model,
+    thinking: form,
+    status,
+    conversations: String(pending.take.length),
+    total_ms: String(Date.now() - startedAt),
+  };
+  // Unknown usage stays unknown: only counters the API returned are written.
+  for (const [from, to] of [
+    ['promptTokenCount', 'tokens_in'],
+    ['candidatesTokenCount', 'tokens_out'],
+    ['cachedContentTokenCount', 'tokens_cached_in'],
+    ['thoughtsTokenCount', 'tokens_thoughts'],
+    ['totalTokenCount', 'tokens_total'],
+  ]) {
+    if (usage && typeof usage[from] === 'number') attributes[to] = String(usage[from]);
+  }
+  logShouldersTurn(attributes);
 }
 
 export async function handleShouldersTurnSse(
@@ -1074,7 +1185,16 @@ export async function handleShouldersTurnSse(
           : 'none';
 
   const model = resolveConversationGeminiModel();
-  const systemText = `${getStylePrompt(style)}\n\n# Досье\n\n${dossierInfo.dossier}`;
+  const conversationId = (body.conversationId || 'shoulders-web').replace(/[^a-zA-Z0-9_-]/g, '');
+  const opening = !Array.isArray(body.history) || body.history.length === 0;
+  // The memory changes only here, at an opening, so later turns of the
+  // conversation read the same text and the prompt prefix stays cached.
+  if (opening) await rememberEarlierConversations(apiKey, model, conversationId);
+  const memory = loadShouldersMemory(CONVERSATION_DIR);
+  const opener = memory ? MEMORY_OPENER_PROMPT : OPENER_PROMPT;
+  const systemText =
+    `${getStylePrompt(style)}\n\n# Досье\n\n${dossierInfo.dossier}` +
+    (memory ? `\n\n${memoryPromptBlock(memory, new Date())}` : '');
 
   // Build conversation messages (matching ShouldersChat.swift turn(answer:))
   const messages: Array<{
@@ -1094,7 +1214,7 @@ export async function handleShouldersTurnSse(
     : [];
 
   const rawAnswer = typeof body.answer === 'string' ? body.answer.trim() : '';
-  const said = rawAnswer.length > 0 ? rawAnswer : messages.length === 0 ? OPENER_PROMPT : '';
+  const said = rawAnswer.length > 0 ? rawAnswer : messages.length === 0 ? opener : '';
 
   if (said.length > 0) {
     const last = messages[messages.length - 1];
@@ -1107,10 +1227,9 @@ export async function handleShouldersTurnSse(
       messages.push({ role: 'user', text: said, noteFile: body.noteFile });
     }
   } else if (messages.length === 0) {
-    messages.push({ role: 'user', text: OPENER_PROMPT });
+    messages.push({ role: 'user', text: opener });
   }
 
-  const conversationId = (body.conversationId || 'shoulders-web').replace(/[^a-zA-Z0-9_-]/g, '');
   const conversationFile = persistShouldersConversationMarkdown({
     conversationId,
     style,
