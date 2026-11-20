@@ -206,7 +206,11 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
         capture: capture, voice: VikVoice(),
         document: { [weak self] in self?.documentModel.document?.text ?? "" },
         preferences: .standard,
-        runSecretary: { [weak self] in self?.startSecretaryPassFromVoice() ?? "Секретарь недоступен." }
+        // nil = started. Unwrap self first: `self?.f() ?? x` would turn that success into x.
+        runSecretary: { [weak self] in
+            guard let self else { return "Секретарь недоступен." }
+            return self.startSecretaryPassFromVoice()
+        }
     )
     @ObservationIgnored private var secretaryOfferTask: Task<Void, Never>?
     /// Backlog size at the last question, and the run that was latest then: a new run
