@@ -345,14 +345,7 @@ public struct GeminiTranscriptionAdapter: FileTranscriptionPort {
     /// of speech". Best-effort: an unreadable asset just means the cost record
     /// carries tokens without a rate.
     static func audioDurationSeconds(of fileURL: URL) async -> Double? {
-#if canImport(AVFoundation)
-        let asset = AVURLAsset(url: fileURL)
-        guard let duration = try? await asset.load(.duration) else { return nil }
-        let seconds = CMTimeGetSeconds(duration)
-        return seconds.isFinite && seconds > 0 ? seconds : nil
-#else
-        return nil
-#endif
+        await RecordedDuration.fileSeconds(of: fileURL)
     }
 
     private static func mimeType(for fileURL: URL) -> String {

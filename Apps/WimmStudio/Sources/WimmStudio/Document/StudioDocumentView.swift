@@ -68,6 +68,7 @@ struct StudioDocumentView: View {
     @Bindable var model: DocumentModel
     let capture: CaptureSession
     let recentNotes: RecentNotes
+    var cloudSync: StudioCloudSync? = nil
 
     @AppStorage("WimmStudio.showsTimeline") private var showsTimeline = true
     @AppStorage("WimmStudio.textScale") private var textScale = 1.0
@@ -311,6 +312,10 @@ struct StudioDocumentView: View {
 
             Spacer()
 
+            if let cloudSync, cloudSync.isAvailable {
+                syncButton(cloudSync)
+            }
+
             HStack(spacing: 4) {
                 Button { textScale = PersonalDocumentZoom.zoomedOut(textScale) } label: { Image(systemName: "minus") }
                     .keyboardShortcut("-", modifiers: .command)
@@ -368,6 +373,30 @@ struct StudioDocumentView: View {
         .font(.system(size: 12))
         .padding(.horizontal, 16)
         .frame(height: DocumentReadingLayout.toolbarHeight)
+    }
+
+    private func syncButton(_ sync: StudioCloudSync) -> some View {
+        Button {
+            Task { await sync.syncRequested() }
+        } label: {
+            if sync.isSyncing {
+                ProgressView().controlSize(.small).frame(width: 16, height: 16)
+            } else {
+                Image(systemName: sync.lastError == nil ? "arrow.triangle.2.circlepath" : "exclamationmark.icloud")
+            }
+        }
+        .buttonStyle(.borderless)
+        .help(Self.syncHelp(sync))
+    }
+
+    static func syncHelp(_ sync: StudioCloudSync) -> String {
+        var text = "Синхронизировать с iPhone: сначала свежие заметки, потом остальное"
+        if let error = sync.lastError {
+            text += "\nОшибка: \(error)"
+        } else if let at = sync.lastSyncAt {
+            text += "\nПоследняя: \(at.formatted(date: .omitted, time: .shortened))"
+        }
+        return text
     }
 
     private var commentsMenu: some View {

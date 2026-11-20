@@ -29,9 +29,12 @@ public enum RecordedDuration {
     }
 
     /// Length of a finalized audio file; nil when it cannot be read.
+    /// Uses precise timing so headerless VBR streams (such as raw ADTS `.aac`)
+    /// report their actual frame duration rather than a bitrate estimate from
+    /// the start of the file.
     public static func fileSeconds(of url: URL) async -> TimeInterval? {
 #if canImport(AVFoundation)
-        let asset = AVURLAsset(url: url)
+        let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
         guard let duration = try? await asset.load(.duration) else { return nil }
         let seconds = CMTimeGetSeconds(duration)
         return seconds.isFinite && seconds > 0 ? seconds : nil

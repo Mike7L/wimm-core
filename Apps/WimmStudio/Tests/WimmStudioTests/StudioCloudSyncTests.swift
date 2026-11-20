@@ -6,6 +6,7 @@ import WimmInfrastructure
 private actor FakeSyncService: StudioSyncService {
     func subscribeToChanges() async {}
     var syncs: [Bool] = []
+    var recentOnlyFlags: [Bool] = []
     var enqueued: [URL] = []
     var uploads = 0
     var applyRemoteChanges = false
@@ -19,7 +20,7 @@ private actor FakeSyncService: StudioSyncService {
     func release() { held.forEach { $0.resume() }; held.removeAll(); holdSync = false }
 
     func syncNow(fullScan: Bool, recentOnly: Bool) async throws -> Bool {
-        syncs.append(fullScan)
+        syncs.append(fullScan); recentOnlyFlags.append(recentOnly)
         if holdSync { await withCheckedContinuation { held.append($0) } }
         if let failure { throw failure }
         return applyRemoteChanges
@@ -93,6 +94,32 @@ final class StudioCloudSyncTests: XCTestCase {
         _ = await running.value
         let syncs = await service.syncs
         XCTAssertEqual(syncs.count, 1)
+        XCTAssertFalse(sync.isSyncing)
+    }
+
+    @MainActor func testSyncButtonPullsNewestFirstThenEverything() async {
+        let service = FakeSyncService()
+        let sync = StudioCloudSync(service: service, onRemoteChanges: {})
+        await sync.syncRequested()
+        let syncs = await service.syncs
+        let recent = await service.recentOnlyFlags
+        XCTAssertEqual(syncs, [false, true])
+        XCTAssertEqual(recent, [true, false])
+    }
+
+    @MainActor func testSyncButtonMidPassQueuesAQuickPull() async {
+        let service = FakeSyncService()
+        await service.configure(holdSync: true)
+        let sync = StudioCloudSync(service: service, onRemoteChanges: {})
+        let running = Task { await sync.sync(fullScan: true) }
+        while !sync.isSyncing { await Task.yield() }
+        await sync.syncRequested()
+        await service.release()
+        _ = await running.value
+        let syncs = await service.syncs
+        let recent = await service.recentOnlyFlags
+        XCTAssertEqual(syncs, [true, false])
+        XCTAssertEqual(recent, [false, true])
         XCTAssertFalse(sync.isSyncing)
     }
 

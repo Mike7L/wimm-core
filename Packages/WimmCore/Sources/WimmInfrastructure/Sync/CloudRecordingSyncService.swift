@@ -147,11 +147,15 @@ public actor CloudRecordingSyncService {
     /// `quickLookback`, for frequent polls that only need fresh uploads.
     @discardableResult
     public func syncNow(fullScan: Bool = false, recentOnly: Bool = false) async throws -> Bool {
-        // Logs go first and on their own: they matter most when note sync fails.
-        await logSync?.syncNow()
-        try await stateStore.validatePersistence()
-        if fullScan { await enqueueUntracked() }
-        _ = try await enqueueLocalChangesPersisted(limit: 200)
+        do {
+            try await stateStore.validatePersistence()
+            if fullScan { await enqueueUntracked() }
+            _ = try await enqueueLocalChangesPersisted(limit: 200)
+        } catch {
+            // Logs still go: they matter most when note sync fails.
+            await logSync?.syncNow()
+            throw error
+        }
         var downloadError: Error?
         var didApplyRemoteChanges = false
         do {
@@ -159,6 +163,8 @@ public actor CloudRecordingSyncService {
         } catch {
             downloadError = error
         }
+        // After the notes, not before: a fresh note must not wait for logs.
+        await logSync?.syncNow()
 
         try await uploadPending()
         await documentSync?.syncNow()
@@ -172,7 +178,7 @@ public actor CloudRecordingSyncService {
     public func uploadPending() async throws {
         try await stateStore.validatePersistence()
         _ = try await flushPendingDeletes()
-        let pending = await stateStore.entries(with: [.pendingUpload, .failed])
+        let pending = Self.uploadOrder(await stateStore.entries(with: [.pendingUpload, .failed]))
         let directorySnapshot = RecordingBundleDirectorySnapshot()
         for entry in pending {
             let localURL = FileStore.resolveRelativePath(entry.localRelativePath)
@@ -191,6 +197,22 @@ public actor CloudRecordingSyncService {
                 try? await stateStore.markFailed(entry.syncId, error: error)
             }
         }
+    }
+
+    /// The note just made goes first: fresh changes before retries of
+    /// failed ones, newest first within each, so a backlog never delays it.
+    static func uploadOrder(_ entries: [RecordingSyncEntry]) -> [RecordingSyncEntry] {
+        entries.sorted { lhs, rhs in
+            let lhsRetry = lhs.status == .failed, rhsRetry = rhs.status == .failed
+            if lhsRetry != rhsRetry { return !lhsRetry }
+            return lhs.updatedAt > rhs.updatedAt
+        }
+    }
+
+    /// Newest cloud changes are installed first, so a note just recorded on
+    /// another device arrives before a long catch-up of older ones.
+    static func downloadOrder(_ summaries: [RemoteRecordingSummary]) -> [RemoteRecordingSummary] {
+        summaries.sorted { $0.updatedAt > $1.updatedAt }
     }
 
     /// Newest of the primary file and its sidecar — where every local edit
@@ -288,7 +310,7 @@ public actor CloudRecordingSyncService {
         let lookback = recentOnly ? Self.quickLookback : Self.incrementalLookback
         let since = fullScan ? nil : state.lastSyncAt.map { $0.addingTimeInterval(-lookback) }
         let scanStartedAt = Date()
-        let summaries = try await transport.fetchChangeSummaries(since: since)
+        let summaries = Self.downloadOrder(try await transport.fetchChangeSummaries(since: since))
         var didApplyRemoteChanges = false
         var failures = 0
         var localSyncIDs: [String: URL]?

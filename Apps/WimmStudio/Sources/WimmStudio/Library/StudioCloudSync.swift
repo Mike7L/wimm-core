@@ -45,7 +45,9 @@ final class StudioCloudSync {
     @ObservationIgnored private var uploadTask: Task<Void, Never>?
     @ObservationIgnored private var pendingUploads: Set<URL> = []
     @ObservationIgnored private var lastPullAt: Date?
-    @ObservationIgnored private var pushWhileSyncing = false
+    /// A quick pull asked for while a pass ran (a push, the sync button);
+    /// it runs as soon as that pass ends.
+    @ObservationIgnored private var quickPullRequested = false
     @ObservationIgnored private var followUpTask: Task<Void, Never>?
     @ObservationIgnored private var activationObserver: NSObjectProtocol?
 
@@ -115,11 +117,18 @@ final class StudioCloudSync {
     }
 
     private func pullForPush() async {
-        if isSyncing { pushWhileSyncing = true; return }
-        repeat {
-            pushWhileSyncing = false
-            await sync(fullScan: false, recentOnly: true)
-        } while pushWhileSyncing
+        if isSyncing { quickPullRequested = true; return }
+        await sync(fullScan: false, recentOnly: true)
+    }
+
+    /// The sync button: what just arrived first (a quick pull of the newest
+    /// uploads, then the library refreshes), the full reconciliation after.
+    /// Pressed mid-pass, the quick pull runs right when that pass ends.
+    func syncRequested() async {
+        guard service != nil else { return }
+        if isSyncing { quickPullRequested = true; return }
+        await sync(fullScan: false, recentOnly: true)
+        await sync(fullScan: true)
     }
 
     func stop() {
@@ -134,9 +143,20 @@ final class StudioCloudSync {
     /// were applied to the library.
     @discardableResult
     func sync(fullScan: Bool, recentOnly: Bool = false) async -> Bool {
-        guard let service, !isSyncing else { return false }
+        guard service != nil, !isSyncing else { return false }
         isSyncing = true
         defer { isSyncing = false }
+        quickPullRequested = false
+        var applied = await runPass(fullScan: fullScan, recentOnly: recentOnly)
+        while quickPullRequested {
+            quickPullRequested = false
+            applied = await runPass(fullScan: false, recentOnly: true) || applied
+        }
+        return applied
+    }
+
+    private func runPass(fullScan: Bool, recentOnly: Bool) async -> Bool {
+        guard let service else { return false }
         lastPullAt = Date()
         var applied = false
         do {

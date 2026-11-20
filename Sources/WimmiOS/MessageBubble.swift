@@ -4,8 +4,7 @@ import AVFoundation
 
 struct MessageBubble: View {
     let message: ChatMessage
-    @StateObject private var player = AudioPlayerController()
-    @State private var isPlaying = false
+    @State private var player = AudioPlayerController()
     
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -112,7 +111,7 @@ struct MessageBubble: View {
             Button {
                 togglePlayback(url: url)
             } label: {
-                Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                     .font(.system(size: 32))
                     .foregroundColor(.white)
             }
@@ -140,7 +139,7 @@ struct MessageBubble: View {
                 
                 // Duration
                 HStack {
-                    if isPlaying {
+                    if player.isPlaying {
                         Text(formatDuration(player.currentTime))
                             .font(.system(.caption, design: .monospaced))
                             .foregroundColor(.white.opacity(0.9))
@@ -219,12 +218,10 @@ struct MessageBubble: View {
     }
     
     private func togglePlayback(url: URL) {
-        if isPlaying {
+        if player.isPlaying {
             player.pause()
-            isPlaying = false
         } else {
             player.play(url: url)
-            isPlaying = true
         }
     }
     

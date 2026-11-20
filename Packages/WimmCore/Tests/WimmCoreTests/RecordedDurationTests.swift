@@ -45,4 +45,37 @@ final class RecordedDurationTests: XCTestCase {
         let missing = await RecordedDuration.fileSeconds(of: root.appendingPathComponent("none.m4a"))
         XCTAssertNil(missing)
     }
+
+    /// Studio writes crash-safe raw ADTS `.aac` with no container duration header.
+    /// Leading silence produces tiny opening frames that cause bitrate-based estimators
+    /// (like `AVAudioPlayer.duration`) to inflate duration by 5-20x; precise timing must
+    /// still return the true length.
+    func testReadsRawADTSAACWithLeadingSilenceAccurately() async throws {
+        let root = StoragePaths.baseDirectory().appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("studio.aac")
+        let sr = 48_000.0
+        let pcm = AVAudioFormat(standardFormatWithSampleRate: sr, channels: 1)!
+        do {
+            let file = try AVAudioFile(forWriting: url, settings: [
+                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+                AVSampleRateKey: sr,
+                AVNumberOfChannelsKey: 1,
+                AVEncoderBitRateKey: 96_000,
+            ], commonFormat: pcm.commonFormat, interleaved: pcm.isInterleaved)
+            let silence = AVAudioPCMBuffer(pcmFormat: pcm, frameCapacity: AVAudioFrameCount(sr))!
+            silence.frameLength = AVAudioFrameCount(sr)
+            try file.write(from: silence)
+            let signal = AVAudioPCMBuffer(pcmFormat: pcm, frameCapacity: AVAudioFrameCount(sr))!
+            signal.frameLength = AVAudioFrameCount(sr)
+            let channel = signal.floatChannelData![0]
+            for i in 0..<Int(sr) { channel[i] = Float(sin(Double(i) * 0.08)) * 0.4 + Float.random(in: -0.2...0.2) }
+            for _ in 0..<10 { try file.write(from: signal) }
+        }
+
+        let measured = await RecordedDuration.fileSeconds(of: url)
+        let seconds = try XCTUnwrap(measured)
+        XCTAssertEqual(seconds, 11.0, accuracy: 0.15)
+    }
 }

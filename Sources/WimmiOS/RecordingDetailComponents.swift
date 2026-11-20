@@ -1,4 +1,5 @@
 #if os(iOS)
+import Observation
 import SwiftUI
 import WimmDomain
 import WimmInfrastructure
@@ -156,115 +157,61 @@ struct AttachmentThumb: View {
     }
 }
 
-/// Simple audio player controller for iOS
+/// Thin iOS wrapper around the shared `NoteAudioPlayer` that configures
+/// `AVAudioSession` for playback and persists the skip-silence toggle.
 @MainActor
-class AudioPlayerController: NSObject, ObservableObject, AVAudioPlayerDelegate {
-    @Published var currentTime: Double = 0
-    @Published var duration: Double = 0
-    @Published var isPlaying = false
-    @Published var skipSilence: Bool = UserDefaults.standard.bool(forKey: AudioPlayerController.skipSilenceDefaultsKey) {
-        didSet { UserDefaults.standard.set(skipSilence, forKey: AudioPlayerController.skipSilenceDefaultsKey) }
-    }
-
+@Observable
+final class AudioPlayerController {
     private static let skipSilenceDefaultsKey = "skipSilencePlayback"
 
-    private var player: AVAudioPlayer?
-    private var timer: Timer?
-    private var silenceMap: AudioSilenceMap?
-    private var silenceMapURL: URL?
+    private let engine: NoteAudioPlayer
+
+    var currentTime: Double { engine.position }
+    var duration: Double { engine.duration }
+    var isPlaying: Bool { engine.isPlaying }
+    var isReady: Bool { engine.isReady }
+
+    var skipSilence: Bool {
+        didSet {
+            UserDefaults.standard.set(skipSilence, forKey: Self.skipSilenceDefaultsKey)
+            engine.skipSilence = skipSilence
+        }
+    }
+
+    init() {
+        let savedSkipSilence = UserDefaults.standard.bool(forKey: Self.skipSilenceDefaultsKey)
+        self.skipSilence = savedSkipSilence
+        self.engine = NoteAudioPlayer(skipSilence: savedSkipSilence) {
+            // The recorder leaves the shared session in .record; switch to
+            // playback or the device stays silent (also respects the mute switch).
+            do {
+                let session = AVAudioSession.sharedInstance()
+                try session.setCategory(.playback, mode: .default)
+                try session.setActive(true)
+            } catch {
+                print("Failed to activate playback session: \(error)")
+            }
+        }
+    }
+
+    func load(url: URL) async {
+        await engine.load(url)
+    }
 
     func play(url: URL) {
-        loadSilenceMapIfNeeded(for: url)
-        // The recorder leaves the shared session in .record; switch to
-        // playback or the device stays silent (also respects the mute switch).
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .default)
-            try session.setActive(true)
-        } catch {
-            print("Failed to activate playback session: \(error)")
-        }
-        if let player, player.url == url {
-            player.play()
-            isPlaying = true
-            startTimer()
-            return
-        }
-        do {
-            player = try AVAudioPlayer(contentsOf: url)
-            player?.delegate = self
-            duration = player?.duration ?? 0
-            player?.play()
-            isPlaying = true
-
-            startTimer()
-        } catch {
-            print("Failed to play audio: \(error)")
-        }
+        engine.play(url: url)
     }
 
     func pause() {
-        player?.pause()
-        isPlaying = false
-        stopTimer()
+        engine.pause()
     }
 
     func stop() {
-        player?.stop()
-        player = nil
-        currentTime = 0
-        isPlaying = false
-        stopTimer()
+        engine.stop()
     }
 
     func seek(to time: Double) {
-        player?.currentTime = time
-        currentTime = time
-    }
-
-    private func startTimer() {
-        stopTimer()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            guard let self = self, let player = self.player else { return }
-            Task { @MainActor in
-                self.currentTime = player.currentTime
-                self.skipSilenceIfNeeded()
-            }
-        }
-    }
-
-    private func loadSilenceMapIfNeeded(for url: URL) {
-        guard silenceMapURL != url else { return }
-        silenceMapURL = url
-        silenceMap = nil
-        Task { [weak self] in
-            let map = await AudioSilenceAnalyzer.shared.silenceMap(for: url)
-            await MainActor.run {
-                guard let self, self.silenceMapURL == url else { return }
-                self.silenceMap = map
-            }
-        }
-    }
-
-    private func skipSilenceIfNeeded() {
-        guard skipSilence,
-              isPlaying,
-              let target = silenceMap?.skipTarget(at: currentTime)
-        else { return }
-        seek(to: target)
-    }
-
-    private func stopTimer() {
-        timer?.invalidate()
-        timer = nil
-    }
-
-    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        Task { @MainActor in
-            self.currentTime = 0
-            self.isPlaying = false
-            self.stopTimer()
-        }
+        engine.seek(to: time)
     }
 }
 /// The note's transcriptions side by side — Realtime, On-device, Cloud and

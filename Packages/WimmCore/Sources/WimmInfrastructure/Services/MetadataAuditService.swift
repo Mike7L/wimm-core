@@ -358,9 +358,7 @@ public actor MetadataAuditService {
     }
 
     private static func audioDuration(for file: URL) async -> Double {
-        let duration = try? await AVURLAsset(url: file).load(.duration)
-        let seconds = duration.map { CMTimeGetSeconds($0) } ?? 3600.0
-        return seconds.isFinite && seconds > 0 ? seconds : 3600.0
+        await RecordedDuration.fileSeconds(of: file) ?? 3600.0
     }
 
     /// The two repairs `validate(fix:)` makes, as one idempotent mutation.

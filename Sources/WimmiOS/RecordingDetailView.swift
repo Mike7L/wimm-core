@@ -10,7 +10,7 @@ import UIKit
 struct RecordingDetailView: View {
     let recording: Recording
     @EnvironmentObject private var appState: AppState
-    @StateObject private var player = AudioPlayerController()
+    @State private var player = AudioPlayerController()
     @State private var attachments: [NoteAttachment] = []
     @State private var transcription: String = ""
     @State private var detailImage: UIImage?
@@ -223,7 +223,9 @@ struct RecordingDetailView: View {
         }
         .task {
             await reloadNote()
-            if kind == .image {
+            if kind == .audio, fileExists {
+                await player.load(url: recording.fileURL)
+            } else if kind == .image {
                 let url = recording.fileURL
                 detailImage = await Task.detached(priority: .userInitiated) {
                     ImageDownsampler.image(at: url, maxPixel: 1400)

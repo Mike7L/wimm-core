@@ -1,5 +1,4 @@
 import AppKit
-import AVFoundation
 import ImageIO
 import PDFKit
 import Quartz
@@ -123,52 +122,11 @@ private struct StudioNoteQuickLook: NSViewRepresentable {
     static func dismantleNSView(_ view: QLPreviewView, coordinator: ()) { view.close() }
 }
 
-/// One recording's playback. The note window owns it so a transcript turn can seek the
-/// same player the controls show.
-@MainActor @Observable
-final class StudioNotePlayback {
-    private(set) var isPlaying = false
-    private(set) var position = 0.0
-    private(set) var duration = 0.0
-    private(set) var failed = false
-    private(set) var isReady = false
-    @ObservationIgnored private var player: AVAudioPlayer?
-
-    /// Loads the file, then follows the player until the task is cancelled.
-    func run(_ url: URL) async {
-        stop(); player = nil; isReady = false; position = 0; duration = 0; failed = false
-        let loaded = await Task.detached(priority: .userInitiated) { try? AVAudioPlayer(contentsOf: url) }.value
-        guard !Task.isCancelled else { return }
-        player = loaded; duration = loaded?.duration ?? 0; failed = loaded == nil; isReady = loaded != nil
-        while !Task.isCancelled {
-            do { try await Task.sleep(for: .milliseconds(250)) } catch { break }
-            position = player?.currentTime ?? 0
-            isPlaying = player?.isPlaying ?? false
-        }
-    }
-
-    func toggle() {
-        guard let player else { return }
-        if player.isPlaying { player.pause(); isPlaying = false; return }
-        if position >= duration { player.currentTime = 0; position = 0 }
-        isPlaying = player.play()
-    }
-
-    func seek(to seconds: Double, play: Bool = false) {
-        guard let player else { return }
-        let target = min(max(0, seconds), duration)
-        player.currentTime = target; position = target
-        if play, !player.isPlaying { isPlaying = player.play() }
-    }
-
-    func stop() { player?.stop(); isPlaying = false }
-}
-
 struct StudioNoteAudioPlayer: View {
     let url: URL
     /// The owner's playback, when something besides these controls drives it.
-    var playback: StudioNotePlayback? = nil
-    @State private var own = StudioNotePlayback()
+    var playback: NoteAudioPlayer? = nil
+    @State private var own = NoteAudioPlayer()
 
     var body: some View {
         let playback = playback ?? own
@@ -190,7 +148,7 @@ struct StudioNoteAudioPlayer: View {
                 Button("Открыть файл") { NSWorkspace.shared.open(url) }.controlSize(.small)
             }
         }
-        .task(id: url) { await playback.run(url) }
+        .task(id: url) { await playback.load(url) }
         .onDisappear { playback.stop() }
     }
 

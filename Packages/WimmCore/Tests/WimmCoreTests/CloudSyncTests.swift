@@ -17,6 +17,27 @@ final class CloudSyncTests: XCTestCase {
         try? FileManager.default.removeItem(at: base)
     }
 
+    func testUploadsFreshNotesFirstAndRetriesLast() {
+        func entry(_ name: String, _ status: RecordingSyncStatus, _ seconds: TimeInterval) -> RecordingSyncEntry {
+            RecordingSyncEntry(syncId: SyncRecordingID(rawValue: name), localRelativePath: name,
+                               status: status, updatedAt: Date(timeIntervalSince1970: seconds))
+        }
+        let ordered = CloudRecordingSyncService.uploadOrder([
+            entry("old-failed", .failed, 100), entry("old", .pendingUpload, 200),
+            entry("new-failed", .failed, 900), entry("new", .pendingUpload, 1000),
+        ])
+        XCTAssertEqual(ordered.map(\.syncId.rawValue), ["new", "old", "new-failed", "old-failed"])
+    }
+
+    func testDownloadsNewestChangesFirst() {
+        let summaries = [100, 300, 200].map {
+            RemoteRecordingSummary(syncId: SyncRecordingID(rawValue: "r\($0)"),
+                                   updatedAt: Date(timeIntervalSince1970: TimeInterval($0)), isDeleted: false)
+        }
+        let ordered = CloudRecordingSyncService.downloadOrder(summaries)
+        XCTAssertEqual(ordered.map(\.syncId.rawValue), ["r300", "r200", "r100"])
+    }
+
     func testRecordingBundleBuilderCollectsPrimaryMetadataAndAttachments() throws {
         let base = try makeEnvIsolatedBase()
         defer { tearDownBase(base) }

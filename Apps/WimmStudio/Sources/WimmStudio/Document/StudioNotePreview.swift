@@ -27,7 +27,7 @@ struct StudioNotePreview: View {
     @State private var isStale = false
     @State private var confirmsTrash = false
     @State private var isTrashing = false
-    @State private var playback = StudioNotePlayback()
+    @State private var playback = NoteAudioPlayer()
     private let history = NoteVersionStore()
 
     private var isBusy: Bool { isEditing || isSaving || isTrashing }

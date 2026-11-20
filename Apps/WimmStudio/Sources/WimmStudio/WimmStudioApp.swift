@@ -29,7 +29,8 @@ struct WimmStudioApp: App {
             Group { if !DocumentProfile.enabled { StudioDocumentView(
                 model: appDelegate.documentModel,
                 capture: appDelegate.capture,
-                recentNotes: appDelegate.recentNotes
+                recentNotes: appDelegate.recentNotes,
+                cloudSync: appDelegate.cloudSync
             )
             .frame(minWidth: 680, minHeight: 460) } }
         }
@@ -145,9 +146,9 @@ struct WimmStudioApp: App {
                 Divider()
 
                 Button(appDelegate.cloudSync?.isAvailable == false ? "Sync Unavailable (no CloudKit entitlement)" : "Sync Now") {
-                    Task { await appDelegate.cloudSync?.sync(fullScan: true) }
+                    Task { await appDelegate.cloudSync?.syncRequested() }
                 }
-                .disabled(appDelegate.cloudSync?.isAvailable != true || appDelegate.cloudSync?.isSyncing == true)
+                .disabled(appDelegate.cloudSync?.isAvailable != true)
 
                 Toggle("Import Codex and Claude Sessions", isOn: Binding(
                     get: { appDelegate.importsAgentSessions },
