@@ -65,3 +65,8 @@ of questions whose answer block is returned at a 3 / 6 / 12 KB budget went from
 34 / 35 / 36 to 34 / 36 / 38 of 40 on the tuning set and from 13 / 15 / 17 to
 15 / 18 / 19 of 20 on the held-out set. Shorter query stems for 4–5 letter words were
 tried and gave nothing on the held-out set, so they were not adopted.
+
+Three-letter query words ("CTO", "бар") are not terms, so they used to count for
+nothing; they now match as whole words (not as prefixes) and weigh like any other
+word. Tuning set 35 / 36 / 38 -> 36 / 38 / 39 of 40, held-out set unchanged
+(15 / 18 / 19 of 20).

@@ -761,6 +761,23 @@ struct SecretaryPacket {
         /// How much a query word tells: rare words more than common ones (IDF).
         func weight(matchingBlocks count: Int) -> Double { log(1 + Double(searchable) / Double(1 + count)) }
 
+        /// Blocks with `word` as a whole word. For three-letter query words ("CTO", "бар"),
+        /// which `terms` leaves out of the postings: matched literally, not as a stem.
+        func blocks(withWord word: String) -> Set<Int> {
+            func isWord(_ c: Character?) -> Bool { c.map { $0.isLetter || $0.isNumber } ?? false }
+            var out = Set<Int>()
+            for (i, text) in lowered.enumerated() where !definitions[i] {
+                var rest = text.startIndex..<text.endIndex
+                while let r = text.range(of: word, range: rest) {
+                    let before = r.lowerBound == text.startIndex ? nil : text[text.index(before: r.lowerBound)]
+                    let after = r.upperBound == text.endIndex ? nil : text[r.upperBound]
+                    if !isWord(before) && !isWord(after) { out.insert(i); break }
+                    rest = r.upperBound..<text.endIndex
+                }
+            }
+            return out
+        }
+
         /// Blocks with a word that starts with `stem`.
         func blocks(startingWith stem: String) -> Set<Int> {
             var out = Set<Int>()
@@ -810,7 +827,7 @@ struct SecretaryPacket {
         var stemBlocks: [String: Set<Int>] = [:]
         func matching(_ stem: String) -> Set<Int> {
             if let known = stemBlocks[stem] { return known }
-            let found = index.blocks(startingWith: stem)
+            let found = stem.count == 3 ? index.blocks(withWord: stem) : index.blocks(startingWith: stem)
             stemBlocks[stem] = found
             return found
         }
@@ -823,7 +840,8 @@ struct SecretaryPacket {
                 let lower = clause.lowercased()
                 let ids = contextIDs(clause)
                 // A word found in more than a tenth of the blocks names no topic.
-                let query = Set(terms(clause).map(queryStem)).filter { matching($0).count <= max(3, blocks.count / 10) }
+                let short = lower.split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count == 3 }
+                let query = Set(terms(clause).map(queryStem) + short).filter { matching($0).count <= max(3, blocks.count / 10) }
                 let prefix = clause.split(separator: ":", maxSplits: 1).first.map(String.init) ?? clause
                 let prefixWords = Set(terms(prefix).filter { $0.contains(where: \.isLetter) }.map(queryStem))
                 var sections = Set<Int>()

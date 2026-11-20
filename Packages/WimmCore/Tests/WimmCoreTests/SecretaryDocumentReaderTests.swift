@@ -129,6 +129,17 @@ final class SecretaryDocumentReaderTests: XCTestCase {
                        "both match one query word; the word in one entry tells more than the word in three")
     }
 
+    func testThreeLetterWordCountsAsWholeWord() {
+        let plain = "Киоск: открыт вечером."
+        let cto = "Киоск: был там CTO."
+        XCTAssertEqual(winner("## Остров\n\n\(plain)\n\n\(cto)\n\n", "киоск cto", among: [plain, cto]), cto,
+                       "a three-letter word is not a term, but it still tells the entries apart")
+        let longer = "Киоск: играл в баре."
+        let bar = "Киоск: зашёл в бар."
+        XCTAssertEqual(winner("## Остров\n\n\(longer)\n\n\(bar)\n\n", "киоск бар", among: [longer, bar]), bar,
+                       "«бар» matches as a whole word, not as the start of «баре»")
+    }
+
     func testHeadingWordsAboveEntryBreakTies() {
         let anton = "**Июль.** Остаток 50 €."
         let varvara = "**Август.** Остаток 300 €."
