@@ -19,6 +19,8 @@ public struct SecretaryDispatcher: Sendable {
     public var packetSourceKB: Int = SecretaryPacketSettings.preferredKB()
     public var optimizationLevel: SecretaryOptimizationLevel = SecretaryOptimizationLevel.preferred()
     private var packetSourceBytes: Int { SecretaryPacketSettings.normalize(packetSourceKB) * 1000 }
+    /// Prices for the estimate before each packet request (`SecretaryPacketCostEstimate`); tests replace it.
+    public var priceTable: @Sendable () -> PriceTable? = { ModelPricing.loadTable() }
     /// What the CLI lacks for a run of a kind (`SecretaryCLICheck`); tests replace it.
     public var cliCheck: @Sendable (URL, SecretaryRunKind) async -> [String]
 
@@ -252,6 +254,7 @@ public struct SecretaryDispatcher: Sendable {
         onEvent(.init(.info, "kept out of the packet: \(queues.waitingForText) waiting for text, \(queues.waitingForViewing) waiting for viewing, \(queues.skipped) skipped"))
         let maxRounds = 2
         var validationPrompt = prompt
+        var firstRound: (session: String, prompt: String, directory: URL, cost: Double?)?
         let directory = task.workspace.runDirectory(task.id)
         for round in 1...maxRounds {
             guard !Task.isCancelled else { throw CancellationError() }
@@ -270,20 +273,60 @@ public struct SecretaryDispatcher: Sendable {
                 aggregate.isError = true; aggregate.error = "Packet budget exhausted before context expansion."
                 return aggregate
             }
+            // Refused before anything is written: not a paid attempt.
+            if executor.name != "codex", let refusal = SecretaryPacketCostEstimate.refusal(
+                inputBytes: prompt.utf8.count + packet.system.utf8.count, model: model, executor: executor.name,
+                table: priceTable(), remainingUSD: budgetUSD - spent) {
+                onEvent(.init(.error, refusal))
+                aggregate.isError = true; aggregate.error = refusal
+                return aggregate
+            }
             let roundDirectory = directory.appendingPathComponent("packet-\(round)")
             try FileManager.default.createDirectory(at: roundDirectory, withIntermediateDirectories: true)
             try Data(prompt.utf8).write(to: roundDirectory.appendingPathComponent("input.json"), options: .atomic)
             onEvent(.init(.info, "packet \(round): \(packet.selected.count) sources, \(prompt.utf8.count) input bytes"))
-            var request = SecretaryExecutionRequest(workspaceRoot: roundDirectory, runDirectory: roundDirectory, prompt: prompt,
-                kind: .pass, wimmCLI: wimmCLI.path, budgetUSD: budgetUSD - spent, model: model,
-                timeout: timeout(for: .pass), maxTurns: 1, effort: packetEffort())
-            request.systemPrompt = packet.system
-            request.packetSession = false
-            request.resumeSessionID = nil
+            func request(_ text: String, resume: (session: String, directory: URL)?) -> SecretaryExecutionRequest {
+                // A continued Claude Code session is found by the directory it was started in.
+                var request = SecretaryExecutionRequest(workspaceRoot: resume?.directory ?? roundDirectory, runDirectory: roundDirectory,
+                    prompt: text, kind: .pass, wimmCLI: wimmCLI.path, budgetUSD: budgetUSD - spent, model: model,
+                    timeout: timeout(for: .pass), maxTurns: 1, effort: packetEffort())
+                request.systemPrompt = packet.system
+                request.packetSession = resume != nil
+                request.resumeSessionID = resume?.session
+                return request
+            }
+            // A read round continues the first round's session with only what it adds: the first
+            // request is then a cached prefix instead of a second full-price packet.
+            var continuation: String?
+            if round > 1, let first = firstRound { continuation = try? SecretaryPacket.continuation(previous: first.prompt, expanded: prompt) }
+            if let continuation {
+                try Data(continuation.utf8).write(to: roundDirectory.appendingPathComponent("continuation.json"), options: .atomic)
+            }
             try packetAudit(directory, stage: "packet_request",
-                detail: "round=\(round); input_bytes=\(prompt.utf8.count)")
+                detail: "round=\(round); input_bytes=\(prompt.utf8.count)" + (continuation.map { "; continued_bytes=\($0.utf8.count)" } ?? ""))
             clock.mark("packet_apply")
-            let execution = try await executor.run(request, onEvent: onEvent)
+            var execution: SecretaryExecution
+            if let continuation, let first = firstRound {
+                execution = try await executor.run(request(continuation, resume: (first.session, first.directory)), onEvent: onEvent)
+                // Claude Code reports a continued session's cost as the session total: this
+                // request is that total less the first round's. Totals that do not add up are unknown.
+                if let total = execution.costUSD, total != 0 {
+                    if let earlier = first.cost, total >= earlier { execution.costUSD = total - earlier } else { execution.costUSD = nil }
+                }
+                // A session that could not be continued and reports a zero cost: send the whole packet
+                // as before. Unknown cost is not zero, so that failure stands.
+                if execution.isError || execution.exitStatus != 0, execution.costUSD == 0 {
+                    try JSONEncoder().encode(execution).write(to: roundDirectory.appendingPathComponent("continuation-execution.json"), options: .atomic)
+                    try packetAudit(directory, stage: "continuation_failed", detail: execution.error ?? "exit \(execution.exitStatus)")
+                    onEvent(.init(.info, "could not continue the first round's session; sending the whole packet"))
+                    execution = try await executor.run(request(prompt, resume: nil), onEvent: onEvent)
+                }
+            } else {
+                execution = try await executor.run(request(prompt, resume: nil), onEvent: onEvent)
+            }
+            if round == 1, executor.name == "claude-code", let session = execution.sessionID, UUID(uuidString: session) != nil {
+                firstRound = (session, prompt, roundDirectory, execution.costUSD)
+            }
             clock.mark("model_round_\(round)")
             try JSONEncoder().encode(execution).write(to: roundDirectory.appendingPathComponent("execution.json"), options: .atomic)
             aggregate.exitStatus = execution.exitStatus; aggregate.isError = execution.isError
@@ -330,6 +373,11 @@ public struct SecretaryDispatcher: Sendable {
                             return (outcome.target, reply.edits[outcome.index].text)
                         }
                         let statusPrompt = try packet.statusPrompt(needed: needed, survivors: accepted)
+                        if executor.name != "codex", let refusal = SecretaryPacketCostEstimate.refusal(
+                            inputBytes: statusPrompt.utf8.count + SecretaryPacket.statusContract.utf8.count, model: model,
+                            executor: executor.name, table: priceTable(), remainingUSD: budgetUSD - spentNow) {
+                            throw SecretaryPacket.Failure(refusal)
+                        }
                         let statusDirectory = directory.appendingPathComponent("packet-status")
                         try FileManager.default.createDirectory(at: statusDirectory, withIntermediateDirectories: true)
                         try Data(statusPrompt.utf8).write(to: statusDirectory.appendingPathComponent("input.json"), options: .atomic)

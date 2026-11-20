@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { apiRequestRejection, checkExpectedSha256, isOwnOrigin, resolveAllowedMediaPath } from './requestGuard.ts';
+import { apiRequestRejection, isOwnOrigin, resolveAllowedMediaPath } from './requestGuard.ts';
 
 const PORT = 5179;
 const json = { 'content-type': 'application/json' };
@@ -51,17 +51,6 @@ test('POST from own origin needs JSON content type', () => {
 
 test('non-loopback Host (DNS rebinding) is refused', () => {
   assert.equal(apiRequestRejection({ method: 'GET', headers: { host: 'rebind.example:5179' } }, PORT)?.status, 403);
-});
-
-test('expectedSha256 is mandatory and must match', () => {
-  assert.deepEqual(checkExpectedSha256('abc', 'abc'), { ok: true });
-  const missing = checkExpectedSha256(undefined, 'abc');
-  assert.equal(missing.ok, false);
-  assert.equal(!missing.ok && missing.status, 400);
-  assert.equal(!checkExpectedSha256('', 'abc').ok, true);
-  assert.equal(!checkExpectedSha256(123, 'abc').ok, true);
-  const stale = checkExpectedSha256('old', 'abc');
-  assert.equal(!stale.ok && stale.status, 409);
 });
 
 test('media path: realpath before containment', () => {

@@ -258,8 +258,6 @@ still apply.
   shells. Don't `@_exported import WimmDomain`.
 - Legacy string status is `LegacyProcessingStatus`; never add a same-name type
   to a module that uses the imported one unqualified.
-- `SWIFTDATA_ENABLED` is release-only: run `swift build -c release` when
-  touching SwiftData-adjacent code.
 - Shared infrastructure compiles for iOS (no `Process`): CLI/agent runners are
   macOS-only and fail closed.
 - Cost metering: `tokens_*` attribute names are log format; counters survive
@@ -276,7 +274,7 @@ still apply.
 - iOS phone call: interruption start closes the note like stop (never a
   paused AAC through the call); after the call a new note starts only if iOS
   allows and the user had not paused (`AudioInterruptionPolicy`).
-- iOS-only shared files (`L10n.swift`, `WimmGateway.swift`, localized
+- iOS-only shared files (`L10n.swift`, localized
   resources) live in `Sources/WimmiOSShared`; `project.yml` lists them.
 
 ## Build, test, logs

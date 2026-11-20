@@ -5,13 +5,13 @@ import WimmSecretary
 
 /// Read-only access to a personal Markdown document for agents outside a secretary run
 /// (Studio's "У меня вопрос" command). Same section rules as the secretary's addressed
-/// reads. Prints JSON to stdout. Refuses in private mode: the caller sends the text to a
-/// cloud model.
-struct Doc: ParsableCommand {
+/// reads. Prints JSON to stdout. Read subcommands refuse in private mode: the caller
+/// sends the text to a cloud model. `replace-block` performs a local coordinated edit.
+struct Doc: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "doc",
-        abstract: "Read a personal document's outline, sections and search hits as JSON",
-        subcommands: [Outline.self, Section.self, Find.self]
+        abstract: "Read or edit a personal document as JSON",
+        subcommands: [Outline.self, Section.self, Find.self, ReplaceBlock.self]
     )
 
     struct Common: ParsableArguments {
@@ -33,6 +33,20 @@ struct Doc: ParsableCommand {
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         FileHandle.standardOutput.write(try encoder.encode(value))
         FileHandle.standardOutput.write(Data("\n".utf8))
+    }
+
+    private struct ErrorPayload: Encodable {
+        let code: String
+        let error: String
+    }
+
+    static func printErrorJSON(code: String, error: String) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        if let data = try? encoder.encode(ErrorPayload(code: code, error: error)) {
+            FileHandle.standardError.write(data)
+            FileHandle.standardError.write(Data("\n".utf8))
+        }
     }
 
     struct Outline: ParsableCommand {
@@ -64,6 +78,68 @@ struct Doc: ParsableCommand {
         @Option(name: .long, help: "Maximum UTF-8 bytes of returned blocks") var limitBytes = 24_000
         func run() throws {
             try Doc.printJSON(SecretaryDocumentReader.find(document: try common.text(), query: query, byteLimit: limitBytes))
+        }
+    }
+
+    struct ReplaceBlock: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "replace-block",
+            abstract: "Replace one block inside a coordinated write, verifying the file's SHA-256"
+        )
+
+        @Option(name: .long, help: "Path to the Markdown document")
+        var document: String
+
+        @Option(name: .long, help: "0-based PersonalDocument block ID to replace")
+        var blockId: Int
+
+        @Option(name: .long, help: "Expected SHA-256 hex digest of the current file")
+        var expectedSha256: String
+
+        @Option(name: .long, help: "Expected SHA-256 hex digest of the target block's current Markdown")
+        var expectedBlockSha256: String
+
+        private struct Result: Encodable {
+            let ok: Bool
+            let sha256: String
+        }
+
+        func run() async throws {
+            let expected = expectedSha256.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !expected.isEmpty else {
+                Doc.printErrorJSON(code: "invalid_input", error: "expected-sha256 must not be empty")
+                throw ExitCode(2)
+            }
+            let expectedBlock = expectedBlockSha256.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !expectedBlock.isEmpty else {
+                Doc.printErrorJSON(code: "invalid_input", error: "expected-block-sha256 must not be empty")
+                throw ExitCode(2)
+            }
+            let stdinData = FileHandle.standardInput.readDataToEndOfFile()
+            guard let markdown = String(data: stdinData, encoding: .utf8) else {
+                Doc.printErrorJSON(code: "invalid_input", error: "stdin must be valid UTF-8")
+                throw ExitCode(2)
+            }
+            let url = URL(fileURLWithPath: (document as NSString).expandingTildeInPath).standardizedFileURL
+            let store = PersonalDocumentStore(url: url)
+            do {
+                let newSHA256 = try await store.replaceBlock(
+                    id: blockId,
+                    with: markdown,
+                    expectingSHA256: expected,
+                    expectingBlockSHA256: expectedBlock
+                )
+                try Doc.printJSON(Result(ok: true, sha256: newSHA256))
+            } catch PersonalDocumentError.changedOnDisk {
+                Doc.printErrorJSON(code: "changed_on_disk", error: PersonalDocumentError.changedOnDisk.localizedDescription)
+                throw ExitCode(3)
+            } catch PersonalDocumentError.blockNotFound(let id) {
+                Doc.printErrorJSON(code: "block_not_found", error: "Block \(id) not found")
+                throw ExitCode(4)
+            } catch {
+                Doc.printErrorJSON(code: "io_error", error: error.localizedDescription)
+                throw ExitCode(1)
+            }
         }
     }
 }

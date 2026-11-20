@@ -142,7 +142,6 @@ var targetDefinitions: [Target] = [
         path: "Sources/WimmTestSupport",
         swiftSettings: [
             .swiftLanguageMode(.v6),
-            .define("SWIFTDATA_ENABLED", .when(configuration: .release)),
         ]
     ),
     .executableTarget(

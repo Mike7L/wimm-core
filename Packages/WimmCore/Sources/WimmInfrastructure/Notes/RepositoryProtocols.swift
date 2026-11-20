@@ -28,9 +28,6 @@ public extension FileRepositoryProtocol {
     func upsertMetadata(for file: URL, updates: [String: Any]) async
     func upsertNoteCard(for file: URL, card: NoteCard, lang: String?) async
     func naiveNoteCard(for file: URL, transcript: String) async -> NoteCard?
-    #if SWIFTDATA_ENABLED && canImport(SwiftData) && !SPM_TESTS
-    func updateNoteMetaEntity(noteId: String, update: @escaping @Sendable (NoteMetaEntity) -> Void) async
-    #endif
 }
 
 public extension MetadataRepositoryProtocol {

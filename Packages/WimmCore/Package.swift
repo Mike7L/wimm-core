@@ -2,13 +2,6 @@
 import Foundation
 import PackageDescription
 
-let enableLocalAI: Bool = {
-    guard let raw = ProcessInfo.processInfo.environment["ENABLE_LOCAL_AI"]?.lowercased() else {
-        return false
-    }
-    return raw == "1" || raw == "true" || raw == "yes"
-}()
-
 // Mirror the root manifest so the core package cannot pull Whisper back
 // into otherwise light app/CLI builds.
 let enableWhisperKit: Bool = {
@@ -32,8 +25,6 @@ if enableWhisperKit {
     infrastructureDependencies.append(.product(name: "WhisperKit", package: "WhisperKit", condition: .when(platforms: [.macOS])))
 }
 let whisperSettings: [SwiftSetting] = enableWhisperKit ? [] : [.define("WIMM_DISABLE_WHISPERKIT")]
-
-let localAISettings: [SwiftSetting] = enableLocalAI ? [.define("ENABLE_LOCAL_AI")] : []
 
 let package = Package(
     name: "WimmCore",
@@ -66,15 +57,7 @@ let package = Package(
             resources: [
                 .process("Resources")
             ],
-            // SWIFTDATA_ENABLED mirrors the root manifest (release-only),
-            // keep both in sync.
-            swiftSettings: [
-                .swiftLanguageMode(.v6),
-                .define("SWIFTDATA_ENABLED", .when(configuration: .release)),
-            ] + localAISettings + whisperSettings,
-            linkerSettings: [
-                .linkedFramework("SwiftData", .when(platforms: [.macOS])),
-            ]
+            swiftSettings: [.swiftLanguageMode(.v6)] + whisperSettings
         ),
 
         // Secretary edits must not rebuild transcription, sync, or import.

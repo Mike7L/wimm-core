@@ -30,9 +30,8 @@ public struct ModelRequest: @unchecked Sendable {
 
 /// A provider's answer plus whatever it reported about its own cost.
 ///
-/// `usage` is nil for providers that bill nothing (local, Apple on-device) or
-/// that did not return counters; a nil is "unknown", not "free" — the cost
-/// aggregator must keep the two apart.
+/// `usage` is nil for providers that did not return counters; a nil is "unknown",
+/// not "free" — the cost aggregator must keep the two apart.
 public struct ModelResponse: Sendable {
     public let text: String
     public let usage: TokenUsage?
@@ -45,7 +44,7 @@ public struct ModelResponse: Sendable {
 
 public protocol ModelProvider: Sendable {
     var capability: ModelCapability { get }
-    var identifier: String { get } // "gemini-3-flash" or "local/mlx-community/qwen2.5-1.5b"
+    var identifier: String { get } // "gemini-3-flash" or "openai/gpt-4o-mini"
     var provider: LLMCfg.Provider { get }
     var metadata: [String: String] { get }
 

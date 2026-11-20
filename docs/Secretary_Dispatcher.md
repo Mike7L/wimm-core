@@ -514,8 +514,16 @@ Claude full passes with no open threads can opt in through the workspace's
 `secretary/protocol/packet.md`. Wimm supplies full versioned sources, projected
 old decisions and selected document blocks; the editor returns decisions and
 block replacements in one response. It has no tools or MCP servers. One bounded
-context expansion is allowed within the original budget. Other agents and
-comment passes retain their existing workflow. CLI `--workflow agent` explicitly
+context expansion is allowed within the original budget. The one-turn packet
+request carries no `--max-budget-usd`: Claude Code checks it after the turn, so
+it stopped nothing and only marked a paid, complete reply
+`error_max_budget_usd`, which Wimm then discarded (Opus, 2026-11-19). Wimm
+keeps the budget instead: before each packet or status request it estimates
+the cost from the request bytes (2.5 bytes per token, input at 1.25× for the
+5-minute cache write Wimm forces, plus 64k output tokens) and the price table, and refuses up front, with
+the estimate and the remainder, when it does not fit; an unknown price never
+refuses. After each request the spent total decides whether another may follow.
+Other agents and comment passes retain their existing workflow. CLI `--workflow agent` explicitly
 selects the regular editor; `--workflow packet` explicitly selects packets.
 
 Private mode and stale-version guards still apply. Packet reads bypass MCP's

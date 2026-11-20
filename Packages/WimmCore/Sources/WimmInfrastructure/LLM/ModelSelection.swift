@@ -34,8 +34,6 @@ public enum ModelSelection {
     }
 
     public static func model(for capability: ModelCapability) -> String {
-        // If user explicitly selected "apple/on-device", honor that selection
-        // (checked inside resolve via UserDefaults).
         switch capability {
         case .think:
             return resolve(

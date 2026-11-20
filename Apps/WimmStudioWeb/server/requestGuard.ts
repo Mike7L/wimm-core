@@ -98,24 +98,3 @@ export function resolveAllowedMediaPath(requested: string, allowedDirs: string[]
   }
   return null;
 }
-
-export type BlockHashCheck = { ok: true } | { ok: false; status: number; message: string };
-
-/** `/api/block` writes only over the exact version the editor opened. */
-export function checkExpectedSha256(expected: unknown, currentHash: string): BlockHashCheck {
-  if (typeof expected !== 'string' || !expected) {
-    return {
-      ok: false,
-      status: 400,
-      message: 'Нет отпечатка версии документа (expectedSha256). Откройте абзац заново.',
-    };
-  }
-  if (expected !== currentHash) {
-    return {
-      ok: false,
-      status: 409,
-      message: 'Документ изменился после начала редактирования. Скопируйте черновик и откройте абзац заново.',
-    };
-  }
-  return { ok: true };
-}

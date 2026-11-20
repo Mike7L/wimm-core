@@ -116,7 +116,7 @@ recording; micro was derived from it; sync bundled it. Why it's gone:
   **both** `_mini` and `_micro` forever: legacy `_mini` files remain on disk
   until GC'd, live inside old cloud bundles, and sit in Trash next to their
   originals (`RecordingTrashSupport` moves them together).
-- Generators refuse derived input (`MicroAudio.ensureMicroSync` guard) — this is
+- Generators refuse derived input (`MicroAudio.makeUploadCopy` guard) — this is
   what prevents `_micro_micro` cascades.
 - Any new derived tier must extend those two FileStore helpers first.
 
@@ -136,10 +136,9 @@ and with them the last audio of 267 notes. Two rules since then:
   (`DerivedAudioCleanupPlanner`). A sidecar, `.txt`, image or another derived
   tier does not count, and neither does a zero-byte original. Everything else is
   reported as "orphan, kept" and is never deleted. `--list` prints every path.
-- `clean originals` refuses by default. A `_mini` no longer qualifies; with
-  `--accept-micro-as-only-copy` it deletes originals that have a non-empty
-  `_micro`. That `_micro` is 16 kHz mono and possibly silence-trimmed, and from
-  then on `clean derived` keeps it as an orphan.
+- `clean originals` was removed (and must not be re-added): no command deletes
+  an original recording. Existing notes whose original was deleted earlier keep
+  their `_micro` as an orphan under `clean derived`.
 
 ## CLI tooling
 

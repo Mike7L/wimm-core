@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Full pre-release check: every test, the release build (SWIFTDATA_ENABLED),
+# Full pre-release check: every test, the release build,
 # the iOS Release build and the web tests. Nothing is signed or installed.
 set -euo pipefail
 

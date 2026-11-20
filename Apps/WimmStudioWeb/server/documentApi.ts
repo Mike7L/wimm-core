@@ -3,12 +3,12 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { attachSourceDates, bulkImportDays } from './blockDates.ts';
 import { documentChanges } from './documentChanges.ts';
 import { handleInbox } from './inboxApi.ts';
-import { handleQuestion, handleQuestionRating, warmQuestionPath } from './questionApi.ts';
-import { apiRequestRejection, checkExpectedSha256, resolveAllowedMediaPath } from './requestGuard.ts';
+import { handleQuestion, handleQuestionRating } from './questionApi.ts';
+import { apiRequestRejection, resolveAllowedMediaPath } from './requestGuard.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Plugin } from 'vite';
 import type {
@@ -157,6 +157,7 @@ export function parsePersonalDocument(text: string): ParsedDocument {
       id: blocks.length,
       kind,
       markdown,
+      sha256: sha256(markdown),
       anchor,
       sectionId: currentSectionId,
       sectionHeading: currentSectionHeading,
@@ -896,6 +897,146 @@ export interface StudioApi {
   close(): void;
 }
 
+export type ReplaceBlockResult =
+  | { ok: true; sha256: string }
+  | { ok: false; status: number; error: string };
+
+/** Replaces one block through `wimm-cli doc replace-block` (PersonalDocument + NSFileCoordinator). */
+export async function replaceDocumentBlock(opts: {
+  docPath: string;
+  blockId: unknown;
+  markdown: unknown;
+  expectedSha256: unknown;
+  expectedBlockSha256: unknown;
+  cliBin?: string | null;
+}): Promise<ReplaceBlockResult> {
+  if (typeof opts.expectedSha256 !== 'string' || !opts.expectedSha256.trim()) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'Нет отпечатка версии документа (expectedSha256). Откройте абзац заново.',
+    };
+  }
+  if (typeof opts.expectedBlockSha256 !== 'string' || !opts.expectedBlockSha256.trim()) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'Нет отпечатка блока (expectedBlockSha256). Откройте абзац заново.',
+    };
+  }
+  if (typeof opts.markdown !== 'string') {
+    return { ok: false, status: 400, error: 'markdown must be a string' };
+  }
+  if (typeof opts.blockId !== 'number' || !Number.isInteger(opts.blockId) || opts.blockId < 0) {
+    return { ok: false, status: 400, error: 'blockId must be a non-negative integer' };
+  }
+  const bin = opts.cliBin !== undefined ? opts.cliBin : resolveWimmCliBinary();
+  if (!bin) {
+    return { ok: false, status: 503, error: 'wimm-cli не найден: правка не сохранена' };
+  }
+
+  const markdown = opts.markdown;
+  const expectedSha256 = opts.expectedSha256;
+  const expectedBlockSha256 = opts.expectedBlockSha256;
+  const blockId = opts.blockId;
+
+  return new Promise<ReplaceBlockResult>((resolve) => {
+    const child = spawn(
+      bin,
+      [
+        'doc',
+        'replace-block',
+        '--document',
+        opts.docPath,
+        '--block-id',
+        String(blockId),
+        '--expected-sha256',
+        expectedSha256,
+        '--expected-block-sha256',
+        expectedBlockSha256,
+      ],
+      { stdio: ['pipe', 'pipe', 'pipe'] }
+    );
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    let timedOut = false;
+    let settled = false;
+
+    const finish = (result: ReplaceBlockResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, 15_000);
+
+    child.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
+    child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+    child.stdin.on('error', () => {});
+    child.on('error', (err) => {
+      finish({ ok: false, status: 500, error: err.message });
+    });
+    child.on('close', (code) => {
+      if (timedOut) {
+        finish({ ok: false, status: 504, error: 'wimm-cli doc replace-block не ответил за 15 с' });
+        return;
+      }
+      const stdout = Buffer.concat(stdoutChunks).toString('utf8');
+      const stderr = Buffer.concat(stderrChunks).toString('utf8');
+      if (code === 0) {
+        try {
+          const parsed = JSON.parse(stdout) as { ok?: unknown; sha256?: unknown };
+          if (parsed?.ok === true && typeof parsed.sha256 === 'string') {
+            finish({ ok: true, sha256: parsed.sha256 });
+            return;
+          }
+        } catch {
+          // fall through to unexpected response
+        }
+        finish({ ok: false, status: 500, error: 'wimm-cli doc replace-block: неожиданный ответ' });
+        return;
+      }
+
+      let parsedErr: { code?: unknown; error?: unknown } | null = null;
+      try {
+        parsedErr = JSON.parse(stderr.trim()) as { code?: unknown; error?: unknown };
+      } catch {
+        // plain stderr fallback below
+      }
+      const errCode = typeof parsedErr?.code === 'string' ? parsedErr.code : undefined;
+      const errMsg = typeof parsedErr?.error === 'string' ? parsedErr.error : undefined;
+
+      if (errCode === 'changed_on_disk') {
+        finish({
+          ok: false,
+          status: 409,
+          error: 'Документ изменился после начала редактирования. Скопируйте черновик и откройте абзац заново.',
+        });
+        return;
+      }
+      if (errCode === 'block_not_found') {
+        finish({ ok: false, status: 404, error: 'Block not found' });
+        return;
+      }
+      if (errCode === 'invalid_input') {
+        finish({ ok: false, status: 400, error: errMsg || 'Некорректные параметры правки' });
+        return;
+      }
+      finish({
+        ok: false,
+        status: 500,
+        error: errMsg || stderr.trim().slice(0, 300) || `wimm-cli doc replace-block завершился с кодом ${code}`,
+      });
+    });
+
+    child.stdin.end(markdown, 'utf8');
+  });
+}
+
 /**
  * The Studio web API, shared by the Vite dev server (`wimmStudioApiPlugin`)
  * and the production server (`server/prodServer.ts`).
@@ -931,8 +1072,6 @@ export function createStudioApi(): StudioApi {
         if (activeStem !== lastActiveRecordingStem) {
           lastActiveRecordingStem = activeStem;
           if (activeRec) {
-            // A spoken question may be coming: warm settings reads and the Gemini connection now.
-            setTimeout(warmQuestionPath, 0);
             // The reply will be spoken soon: have Studio's voice model loaded by then.
             void sendStudioVoiceCommand({ action: 'prepare' }, { waitForAck: false });
             broadcastVoiceEvent('recording_started', { activeRecording: activeRec });
@@ -1310,47 +1449,20 @@ export function createStudioApi(): StudioApi {
 
           if (req.method === 'POST' && url.pathname === '/api/block') {
             const body = await readJsonBody(req);
-            const currentText = fs.readFileSync(DEFAULT_DOC_PATH, 'utf8');
-            const sendHashRefusal = (status: number, message: string) => {
-              res.statusCode = status;
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ error: message }));
-            };
-            const hashCheck = checkExpectedSha256(body.expectedSha256, sha256(currentText));
-            if (!hashCheck.ok) {
-              sendHashRefusal(hashCheck.status, hashCheck.message);
-              return;
-            }
-            if (typeof body.markdown !== 'string') {
-              res.statusCode = 400;
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ error: 'markdown must be a string' }));
-              return;
-            }
-            const parsed = parsePersonalDocument(currentText);
-            const block = parsed.blocks.find((b) => b.id === body.blockId);
-            if (!block) {
-              res.statusCode = 404;
-              res.end(JSON.stringify({ error: 'Block not found' }));
-              return;
-            }
-            const nextText =
-              currentText.slice(0, block.startOffset) +
-              body.markdown +
-              currentText.slice(block.endOffset);
-            const tmpPath = `${DEFAULT_DOC_PATH}.tmp-${process.pid}`;
-            fs.writeFileSync(tmpPath, nextText, 'utf8');
-            // Re-check right before the rename so another writer (Studio, the secretary)
-            // that saved meanwhile is not overwritten. Not a lock: it only narrows the window.
-            const recheck = checkExpectedSha256(body.expectedSha256, sha256(fs.readFileSync(DEFAULT_DOC_PATH, 'utf8')));
-            if (!recheck.ok) {
-              fs.rmSync(tmpPath, { force: true });
-              sendHashRefusal(recheck.status, recheck.message);
-              return;
-            }
-            fs.renameSync(tmpPath, DEFAULT_DOC_PATH);
+            const result = await replaceDocumentBlock({
+              docPath: DEFAULT_DOC_PATH,
+              blockId: body.blockId,
+              markdown: body.markdown,
+              expectedSha256: body.expectedSha256,
+              expectedBlockSha256: body.expectedBlockSha256,
+            });
             res.setHeader('Content-Type', 'application/json');
-            res.end(JSON.stringify({ ok: true, sha256: sha256(nextText) }));
+            if (!result.ok) {
+              res.statusCode = result.status;
+              res.end(JSON.stringify({ error: result.error }));
+              return;
+            }
+            res.end(JSON.stringify({ ok: true, sha256: result.sha256 }));
             notifyChange();
             return;
           }

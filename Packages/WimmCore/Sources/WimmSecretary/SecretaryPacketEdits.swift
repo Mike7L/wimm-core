@@ -606,6 +606,30 @@ extension SecretaryPacket {
         return String(decoding: try JSONSerialization.data(withJSONObject: input, options: [.sortedKeys, .withoutEscapingSlashes]), as: UTF8.self)
     }
 
+    /// What a read round adds to a packet the model already has, for a continued session: only
+    /// the newly supplied blocks and the keys that changed. The earlier request stays a byte-identical
+    /// prefix, so the provider can serve it from its cache instead of billing the whole packet again.
+    /// `expanded` (the full merged packet) remains the validation prompt.
+    static func continuation(previous: String, expanded: String) throws -> String {
+        guard let old = try JSONSerialization.jsonObject(with: Data(previous.utf8)) as? [String: Any],
+              let new = try JSONSerialization.jsonObject(with: Data(expanded.utf8)) as? [String: Any] else {
+            throw Failure("Packet input is not a JSON object.")
+        }
+        let known = Set((old["document_blocks"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String })
+        var added: [String: Any] = [:]
+        for (key, value) in new where key != "document_blocks" {
+            guard let before = old[key] else { added[key] = value; continue }
+            if !NSDictionary(dictionary: [key: before]).isEqual(to: [key: value]) { added[key] = value }
+        }
+        let blocks = (new["document_blocks"] as? [[String: Any]] ?? []).filter { !known.contains($0["id"] as? String ?? "") }
+        guard !blocks.isEmpty || !added.isEmpty else { throw Failure("The read round adds nothing to the packet.") }
+        added["document_blocks"] = blocks
+        added["continuation"] = "Host reply to your previous message. These document_blocks are added to the ones "
+            + "in the packet above; everything not listed here is unchanged. Answer again with the complete JSON "
+            + "result for the whole packet, repeating any earlier edit that still applies."
+        return String(decoding: try JSONSerialization.data(withJSONObject: added, options: [.sortedKeys, .withoutEscapingSlashes]), as: UTF8.self)
+    }
+
     /// Format-2 run reports, newest first, keyed by source snapshot: the latest record decides.
     private static func recentReports(root: URL) -> [EditsReport] {
         let runs = root.appendingPathComponent("secretary/runs")

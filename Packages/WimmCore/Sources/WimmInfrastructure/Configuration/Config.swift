@@ -181,7 +181,7 @@ public enum TranscriptionCfg {
 
 // LLM/network related configuration
 public enum LLMCfg {
-    public enum Provider: String, Sendable { case gemini, openrouter, local, apple }
+    public enum Provider: String, Sendable { case gemini, openrouter }
 
     /// Timeout in seconds for regular LLM JSON calls
     public static let requestTimeout: TimeInterval = {

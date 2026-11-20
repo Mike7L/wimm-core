@@ -642,6 +642,72 @@ final class SecretaryPacketTests: XCTestCase {
         XCTAssertTrue(args.contains("--safe-mode")); XCTAssertFalse(args.contains("--bare"))
         XCTAssertFalse(args.contains("--allowedTools")); XCTAssertTrue(args.contains("--system-prompt-file"))
     }
+    func testOneTurnPacketArgumentsLeaveTheBudgetToWimm() {
+        let executor = ClaudeCodeExecutor(binary: URL(fileURLWithPath: "/claude"))
+        var packet = SecretaryExecutionRequest(workspaceRoot: root, runDirectory: root, prompt: "P", kind: .pass,
+            wimmCLI: "/cli", budgetUSD: 0.5, model: "haiku", timeout: 60)
+        packet.systemPrompt = "semantic policy"
+        XCTAssertFalse(executor.arguments(for: packet, mcpConfig: root.appendingPathComponent("mcp.json")).contains("--max-budget-usd"),
+                       "checked after the only turn: it would mark a paid reply error_max_budget_usd")
+        let agent = SecretaryExecutionRequest(workspaceRoot: root, runDirectory: root, prompt: "P", kind: .pass,
+            wimmCLI: "/cli", budgetUSD: 0.5, model: "haiku", timeout: 60)
+        let args = executor.arguments(for: agent, mcpConfig: root.appendingPathComponent("mcp.json"))
+        XCTAssertEqual(args[args.firstIndex(of: "--max-budget-usd")! + 1], "0.50")
+    }
+    private static let haikuPrices = PriceTable(version: "test", models: ["claude-haiku-9-9": ModelPrice(input: 0.5, output: 2.5)])
+    func testPacketCostEstimateErrsHighAndKeepsUnknownPricesUnknown() {
+        let estimate = SecretaryPacketCostEstimate.estimate(inputBytes: 250_000, model: "haiku", executor: "claude-code", table: Self.haikuPrices)
+        XCTAssertEqual(estimate?.inputTokens, 100_000)
+        // 100k input at 1.25 × $0.5 (the 5-minute cache write Wimm forces) + 64k output at $2.5.
+        XCTAssertEqual(estimate?.usd ?? 0, 0.0625 + 0.16, accuracy: 1e-9)
+        XCTAssertEqual(ClaudeCodeExecutor.environment([:])["FORCE_PROMPT_CACHING_5M"], "1", "the estimate assumes the 5-minute write")
+        let dearer = PriceTable(version: "t", models: ["claude-haiku-9-9": ModelPrice(input: 0.5, output: 2.5),
+                                                       "claude-haiku-8": ModelPrice(input: 1, output: 5)])
+        XCTAssertEqual(SecretaryPacketCostEstimate.estimate(inputBytes: 0, model: "haiku", executor: "claude-code", table: dearer)?.usd ?? 0,
+                       0.32, accuracy: 1e-9, "an alias takes the dearest row naming it")
+        XCTAssertEqual(SecretaryPacketCostEstimate.estimate(inputBytes: 250_000, model: "claude-haiku-9-9-20261101", executor: "claude-code",
+                                                            table: Self.haikuPrices)?.inputTokens, 100_000)
+        XCTAssertNil(SecretaryPacketCostEstimate.estimate(inputBytes: 1, model: "sonnet", executor: "claude-code", table: Self.haikuPrices))
+        XCTAssertNil(SecretaryPacketCostEstimate.estimate(inputBytes: 1, model: nil, executor: "claude-code", table: Self.haikuPrices))
+        XCTAssertNil(SecretaryPacketCostEstimate.estimate(inputBytes: 1, model: "haiku", executor: "claude-code", table: nil))
+        XCTAssertNil(SecretaryPacketCostEstimate.estimate(inputBytes: 1, model: "haiku", executor: "codex", table: Self.haikuPrices))
+        let template = ModelPricing.template(models: ["claude-haiku-9-9"])
+        XCTAssertNil(SecretaryPacketCostEstimate.estimate(inputBytes: 1, model: "haiku", executor: "claude-code", table: template),
+                     "zero template rows are unfilled, not free")
+    }
+    func testPacketRequestOverTheEstimateIsRefusedBeforeItIsSent() async throws {
+        let executor = PacketRepairExecutor(bodies: ["not JSON"])
+        var dispatcher = SecretaryDispatcher(executor: executor, wimmCLI: URL(fileURLWithPath: "/usr/bin/true"), budgetUSD: 0.10, model: "haiku")
+        dispatcher.priceTable = { Self.haikuPrices }
+        let log = PacketEventLog()
+        let execution = try await dispatcher.runPacket(task: task, library: library, marks: store, onEvent: { log.append($0) })
+        let events = log.events
+        let requests = await executor.requests
+        XCTAssertTrue(requests.isEmpty)
+        XCTAssertTrue(execution.isError); XCTAssertEqual(execution.costUSD, 0)
+        let message = try XCTUnwrap(execution.error)
+        XCTAssertTrue(message.contains("estimated up to $"), message)
+        XCTAssertTrue(message.contains("remaining budget of $0.10"), message)
+        XCTAssertTrue(events.contains { $0.kind == .error && $0.message == message })
+        let runDirectory = task.workspace.runDirectory(task.id)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: runDirectory.appendingPathComponent("packet-1").path), "not a paid attempt")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: runDirectory.appendingPathComponent("packet-execution.json").path))
+    }
+    func testPacketRequestRunsWhenTheEstimateFitsOrThePriceIsUnknown() async throws {
+        let fits = PacketRepairExecutor(bodies: ["not JSON"])
+        var dispatcher = SecretaryDispatcher(executor: fits, wimmCLI: URL(fileURLWithPath: "/usr/bin/true"), budgetUSD: 2, model: "haiku")
+        dispatcher.priceTable = { Self.haikuPrices }
+        _ = try await dispatcher.runPacket(task: task, library: library, marks: store, onEvent: { _ in })
+        let sent = await fits.requests
+        XCTAssertEqual(sent.count, 1)
+
+        let unknown = PacketRepairExecutor(bodies: ["not JSON"])
+        var unpriced = SecretaryDispatcher(executor: unknown, wimmCLI: URL(fileURLWithPath: "/usr/bin/true"), budgetUSD: 0.10, model: "sonnet")
+        unpriced.priceTable = { Self.haikuPrices }
+        _ = try await unpriced.runPacket(task: task, library: library, marks: store, onEvent: { _ in })
+        let unpricedRequests = await unknown.requests
+        XCTAssertEqual(unpricedRequests.count, 1, "an unknown price is not a reason to refuse")
+    }
     func testContextExpansionStopsAfterTwoRequestsAndKeepsAllPaidCosts() async throws {
         let body = "{\"summary\":\"Нужен контекст\",\"read_sections\":[\"b2\"]}"
         let executor = PacketFakeExecutor(body: body, cost: 0.03)
@@ -654,6 +720,56 @@ final class SecretaryPacketTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: document), before); XCTAssertTrue(store.marks().isEmpty)
         XCTAssertTrue(FileManager.default.fileExists(atPath: task.workspace.runDirectory(task.id).appendingPathComponent("packet-2/input.json").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: task.workspace.runDirectory(task.id).appendingPathComponent("packet-3/input.json").path))
+    }
+    func testReadRoundContinuesTheFirstSessionWithOnlyTheAddedSections() async throws {
+        let read = "{\"summary\":\"Нужен контекст\",\"read_sections\":[\"b2\"]}"
+        let executor = PacketContinuationExecutor(bodies: [read, "not JSON"])
+        let dispatcher = SecretaryDispatcher(executor: executor, wimmCLI: URL(fileURLWithPath: "/usr/bin/true"), budgetUSD: 2)
+        let execution = try await dispatcher.runPacket(task: task, library: library, marks: store, onEvent: { _ in })
+        let sent = await executor.requests
+        XCTAssertEqual(sent.count, 2)
+        let run = task.workspace.runDirectory(task.id)
+        XCTAssertNil(sent[0].resumeSessionID)
+        XCTAssertEqual(sent[1].resumeSessionID, PacketContinuationExecutor.sessionID)
+        XCTAssertTrue(sent[1].packetSession)
+        // Claude Code finds a session by the directory it was started in.
+        XCTAssertEqual(sent[1].workspaceRoot.standardizedFileURL, run.appendingPathComponent("packet-1").standardizedFileURL)
+        XCTAssertEqual(sent[1].runDirectory.standardizedFileURL, run.appendingPathComponent("packet-2").standardizedFileURL)
+        let added = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(sent[1].prompt.utf8)) as? [String: Any])
+        XCTAssertNil(added["sources"], "the packet itself is the cached prefix, not resent")
+        XCTAssertEqual(added["read_sections_supplied"] as? [String], ["b2"])
+        let first = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(sent[0].prompt.utf8)) as? [String: Any])
+        let firstIDs = Set((first["document_blocks"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String })
+        let addedIDs = (added["document_blocks"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String }
+        XCTAssertTrue(firstIDs.isDisjoint(with: addedIDs), "only blocks the first request lacked")
+        XCTAssertLessThan(sent[1].prompt.utf8.count, sent[0].prompt.utf8.count)
+        // The merged packet stays on disk as the validation prompt.
+        let merged = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(contentsOf: run.appendingPathComponent("packet-2/input.json"))) as? [String: Any])
+        XCTAssertNotNil(merged["sources"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: run.appendingPathComponent("packet-2/continuation.json").path))
+        XCTAssertEqual(execution.costUSD ?? -1, 0.04, accuracy: 1e-9, "first round once, plus the continuation")
+    }
+    func testReadRoundSendsTheWholePacketWhenTheSessionCannotBeContinued() async throws {
+        let read = "{\"summary\":\"Нужен контекст\",\"read_sections\":[\"b2\"]}"
+        let executor = PacketContinuationExecutor(bodies: [read, "not JSON"], failResume: true)
+        let dispatcher = SecretaryDispatcher(executor: executor, wimmCLI: URL(fileURLWithPath: "/usr/bin/true"), budgetUSD: 2)
+        let execution = try await dispatcher.runPacket(task: task, library: library, marks: store, onEvent: { _ in })
+        let sent = await executor.requests
+        XCTAssertEqual(sent.count, 3)
+        XCTAssertNotNil(sent[1].resumeSessionID)
+        XCTAssertNil(sent[2].resumeSessionID); XCTAssertFalse(sent[2].packetSession)
+        XCTAssertNotNil((try JSONSerialization.jsonObject(with: Data(sent[2].prompt.utf8)) as? [String: Any])?["sources"])
+        XCTAssertEqual(execution.costUSD, 0.06)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: task.workspace.runDirectory(task.id).appendingPathComponent("packet-2/continuation-execution.json").path))
+    }
+    func testReadRoundWithUnknownCostOfAFailedContinuationIsNotRetried() async throws {
+        let read = "{\"summary\":\"Нужен контекст\",\"read_sections\":[\"b2\"]}"
+        let executor = PacketContinuationExecutor(bodies: [read, "not JSON"], failResume: true, failedResumeCost: nil)
+        let dispatcher = SecretaryDispatcher(executor: executor, wimmCLI: URL(fileURLWithPath: "/usr/bin/true"), budgetUSD: 2)
+        let execution = try await dispatcher.runPacket(task: task, library: library, marks: store, onEvent: { _ in })
+        let sent = await executor.requests
+        XCTAssertEqual(sent.count, 2, "unknown cost is not zero")
+        XCTAssertTrue(execution.isError)
     }
     func testMalformedResultRetainsCostAndDoesNotTouchWorkspace() async throws {
         let dispatcher = SecretaryDispatcher(executor: PacketFakeExecutor(body: "not JSON", cost: 0.04), wimmCLI: URL(fileURLWithPath: "/usr/bin/true"))
@@ -1127,6 +1243,13 @@ final class SecretaryPacketTests: XCTestCase {
 
 }
 
+private final class PacketEventLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [SecretaryEvent] = []
+    func append(_ event: SecretaryEvent) { lock.lock(); stored.append(event); lock.unlock() }
+    var events: [SecretaryEvent] { lock.lock(); defer { lock.unlock() }; return stored }
+}
+
 private struct PacketFakeExecutor: SecretaryExecutor {
     var name = "claude-code"
     let body: String
@@ -1152,6 +1275,33 @@ private actor PacketRepairExecutor: SecretaryExecutor {
         }
         return SecretaryExecution(exitStatus: 0, finalText: bodies[min(requests.count - 1, bodies.count - 1)], costUSD: cost,
                                   tokensIn: 100, tokensOut: 10, turns: 1)
+    }
+}
+
+private actor PacketContinuationExecutor: SecretaryExecutor {
+    nonisolated let name = "claude-code"
+    nonisolated static let sessionID = "00000000-0000-4000-8000-0000000000c1"
+    let bodies: [String]
+    let failResume: Bool
+    let failedResumeCost: Double?
+    var requests: [SecretaryExecutionRequest] = []
+    var answered = 0
+    init(bodies: [String], failResume: Bool = false, failedResumeCost: Double? = 0) {
+        self.bodies = bodies; self.failResume = failResume; self.failedResumeCost = failedResumeCost
+    }
+    func run(_ request: SecretaryExecutionRequest, onEvent: @escaping @Sendable (SecretaryEvent) -> Void) async throws -> SecretaryExecution {
+        requests.append(request)
+        if failResume, request.resumeSessionID != nil {
+            var failed = SecretaryExecution(exitStatus: 1, costUSD: failedResumeCost)
+            failed.isError = true; failed.error = "No conversation found with session ID"
+            return failed
+        }
+        let body = bodies[min(answered, bodies.count - 1)]; answered += 1
+        // Claude Code reports a continued session's cost as the session total.
+        let cost = request.resumeSessionID == nil ? 0.03 : 0.03 + 0.01
+        var execution = SecretaryExecution(exitStatus: 0, finalText: body, costUSD: cost, tokensIn: 100, tokensOut: 10, turns: 1)
+        execution.sessionID = Self.sessionID
+        return execution
     }
 }
 

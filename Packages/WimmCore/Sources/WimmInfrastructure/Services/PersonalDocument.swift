@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// A view of an ordinary Markdown file. Source ranges keep edits local: no
@@ -98,12 +99,23 @@ public struct PersonalDocument: Sendable {
         for source in sources(in: block) { value = value.replacingOccurrences(of: "[\(source.id)]", with: "") }
         return value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    public static func sha256(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
 }
 
-public enum PersonalDocumentError: LocalizedError {
+public enum PersonalDocumentError: LocalizedError, Equatable, Sendable {
     case changedOnDisk
+    case blockNotFound(Int)
+
     public var errorDescription: String? {
-        "The document changed on disk. Your draft is kept. Save a copy or reload before continuing."
+        switch self {
+        case .changedOnDisk:
+            return "The document changed on disk. Your draft is kept. Save a copy or reload before continuing."
+        case .blockNotFound(let id):
+            return "Block \(id) was not found in the document."
+        }
     }
 }
 
@@ -115,20 +127,63 @@ public actor PersonalDocumentStore {
         PersonalDocument(text: try String(contentsOf: url, encoding: .utf8))
     }
 
-    /// The equality check and replacement share a coordinated access. Another
-    /// editor's changes are never silently replaced by a stale UI draft.
-    public func save(_ text: String, expecting previous: String) throws {
+    private func coordinatedUpdate<T>(_ update: (String) throws -> (String, T)) throws -> T {
         var coordinationError: NSError?
         var failure: Error?
+        var result: T?
         NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError) { target in
             do {
-                guard try String(contentsOf: target, encoding: .utf8) == previous else {
-                    throw PersonalDocumentError.changedOnDisk
+                let current = try String(contentsOf: target, encoding: .utf8)
+                let (next, value) = try update(current)
+                if next != current {
+                    try Data(next.utf8).write(to: target, options: .atomic)
                 }
-                try Data(text.utf8).write(to: target, options: .atomic)
+                result = value
             } catch { failure = error }
         }
         if let coordinationError { throw coordinationError }
         if let failure { throw failure }
+        return result!
+    }
+
+    /// The equality check and replacement share a coordinated access. Another
+    /// editor's changes are never silently replaced by a stale UI draft.
+    public func save(_ text: String, expecting previous: String) throws {
+        try coordinatedUpdate { current in
+            guard current == previous else { throw PersonalDocumentError.changedOnDisk }
+            return (text, ())
+        }
+    }
+
+    /// Replaces one block inside a coordinated write after verifying both the file's
+    /// SHA-256 digest and the target block's current Markdown SHA-256 digest.
+    /// Returns the new file's SHA-256 digest.
+    public func replaceBlock(
+        id blockID: Int,
+        with markdown: String,
+        expectingSHA256 expectedSHA256: String,
+        expectingBlockSHA256 expectedBlockSHA256: String
+    ) throws -> String {
+        let expectedFile = expectedSHA256.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let expectedBlock = expectedBlockSHA256.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return try coordinatedUpdate { current in
+            guard !expectedFile.isEmpty, PersonalDocument.sha256(current) == expectedFile else {
+                throw PersonalDocumentError.changedOnDisk
+            }
+            guard !expectedBlock.isEmpty else {
+                throw PersonalDocumentError.changedOnDisk
+            }
+            let document = PersonalDocument(text: current)
+            guard let block = document.blocks.first(where: { $0.id == blockID }) else {
+                throw PersonalDocumentError.blockNotFound(blockID)
+            }
+            guard PersonalDocument.sha256(block.markdown) == expectedBlock else {
+                throw PersonalDocumentError.changedOnDisk
+            }
+            guard let next = document.replacing(blockID: blockID, with: markdown) else {
+                throw PersonalDocumentError.blockNotFound(blockID)
+            }
+            return (next, PersonalDocument.sha256(next))
+        }
     }
 }

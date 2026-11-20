@@ -163,33 +163,36 @@ public struct OpenRouterModelProvider: ModelProvider {
     }
 }
 
+public enum ModelProviderError: LocalizedError, Sendable, Equatable {
+    case unsupportedOnDeviceModel(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .unsupportedOnDeviceModel(let model):
+            return "On-device LLM provider '\(model)' is not supported"
+        }
+    }
+}
+
 public struct ModelProviderFactory {
-    public static func create(capability: ModelCapability, identifier: String? = nil, transport: LLMTransport = .shared) -> ModelProvider {
-        let modelId = identifier ?? ModelSelection.model(for: capability)
-        let providerType = ModelRouter.provider(for: modelId)
-        
-        switch providerType {
+    public static func create(
+        capability: ModelCapability,
+        identifier: String? = nil,
+        transport: LLMTransport = .shared
+    ) throws -> ModelProvider {
+        let modelId = (identifier ?? ModelSelection.model(for: capability))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = modelId.lowercased()
+        if lower == "apple" || lower.hasPrefix("apple/") || lower.hasPrefix("local/") {
+            throw ModelProviderError.unsupportedOnDeviceModel(modelId)
+        }
+        switch ModelRouter.provider(for: modelId) {
         case .gemini:
             return GeminiModelProvider(identifier: modelId, capability: capability, transport: transport)
         case .openrouter:
             return OpenRouterModelProvider(identifier: modelId, capability: capability, transport: transport)
-        case .apple:
-            return AppleModelFactory.create(identifier: modelId, capability: capability)
-        case .local:
-#if ENABLE_LOCAL_AI
-            guard LocalModelManager.isEnabled else {
-                return DisabledLocalProvider(identifier: modelId, capability: capability)
-            }
-            if capability == .see {
-                return LocalVisionProvider(identifier: modelId)
-            }
-            return LocalLLMProvider(identifier: modelId, capability: capability)
-#else
-            return DisabledLocalProvider(identifier: modelId, capability: capability)
-#endif
         }
     }
-
 }
 
 // MARK: - Provider payloads

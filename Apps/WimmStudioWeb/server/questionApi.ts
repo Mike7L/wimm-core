@@ -82,29 +82,6 @@ function logEvent(event: Record<string, unknown>): void {
   }
 }
 
-// --- Warm-up ---
-
-/**
- * Warms the cold path while the user is still talking: the first `defaults read`
- * after idle takes seconds (measured 3.2 s vs 0.25 s warm), and the first Gemini
- * request pays DNS + TLS. Called when a recording starts. Free: settings reads and
- * a model metadata GET, no generation. Nothing is cached, so private mode stays fresh.
- */
-export function warmQuestionPath(): void {
-  const t0 = Date.now();
-  if (isPrivateModeEnabled()) return;
-  const apiKey = resolveGeminiApiKey();
-  const model = resolveUnderstandGeminiModel();
-  const settingsMs = Date.now() - t0;
-  if (!apiKey) return;
-  fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}`, {
-    headers: { 'x-goog-api-key': apiKey },
-  })
-    .then((r) => r.arrayBuffer())
-    .then(() => console.log(`[question] warmed: settings ${settingsMs} ms, connect ${Date.now() - t0 - settingsMs} ms`))
-    .catch(() => {});
-}
-
 // --- Rating ---
 
 export function handleQuestionRating(res: ServerResponse, body: { questionId?: string; reader?: string; rating?: string }): void {

@@ -98,29 +98,83 @@ function defaultsTarget(domain: string): string {
   return path.join(os.homedir(), 'Library', 'Preferences', domain);
 }
 
-function readDefaultsValue(domain: string, key: string): string | null {
+export type DefaultsReadResult =
+  | { status: 'value'; value: string }
+  | { status: 'missing' }
+  | { status: 'error'; reason: string };
+
+export interface ReadDefaultsOptions {
+  defaultsBin?: string;
+  timeoutMs?: number;
+}
+
+const DEFAULTS_BIN = '/usr/bin/defaults';
+const DEFAULTS_TIMEOUT_MS = 1500;
+
+export function readDefaultsEntry(
+  domain: string,
+  key: string,
+  opts: ReadDefaultsOptions = {}
+): DefaultsReadResult {
+  const bin = opts.defaultsBin ?? DEFAULTS_BIN;
+  const timeout = opts.timeoutMs ?? DEFAULTS_TIMEOUT_MS;
+  const target = defaultsTarget(domain);
   try {
-    const out = execFileSync('/usr/bin/defaults', ['read', defaultsTarget(domain), key], {
+    const out = execFileSync(bin, ['read', target, key], {
       encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 1500,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout,
     }).trim();
-    return out.length > 0 ? out : null;
-  } catch {
-    return null;
+    return out.length > 0 ? { status: 'value', value: out } : { status: 'missing' };
+  } catch (err: any) {
+    const stderr =
+      typeof err?.stderr === 'string'
+        ? err.stderr
+        : Buffer.isBuffer(err?.stderr)
+          ? err.stderr.toString('utf8')
+          : '';
+    if (
+      err?.status === 1 &&
+      !err?.signal &&
+      err?.code !== 'ETIMEDOUT' &&
+      /The domain\/default pair of \(.+\) does not exist\s*$/m.test(stderr)
+    ) {
+      const plistPath = target.endsWith('.plist') ? target : `${target}.plist`;
+      if (fs.existsSync(plistPath)) {
+        try {
+          fs.accessSync(plistPath, fs.constants.R_OK);
+        } catch (accessErr: any) {
+          return { status: 'error', reason: accessErr?.code || 'unreadable plist' };
+        }
+      }
+      return { status: 'missing' };
+    }
+    const reason =
+      err?.code === 'ETIMEDOUT' || err?.signal
+        ? `timeout (${err?.code || err?.signal})`
+        : err?.code || stderr.trim().slice(0, 200) || `exit ${String(err?.status ?? 'unknown')}`;
+    return { status: 'error', reason };
   }
 }
 
-export function isPrivateModeEnabled(): boolean {
+function readDefaultsValue(domain: string, key: string): string | null {
+  const res = readDefaultsEntry(domain, key);
+  return res.status === 'value' ? res.value : null;
+}
+
+export function isPrivateModeEnabled(opts: ReadDefaultsOptions = {}): boolean {
   const envVal = (process.env.WIMM_PRIVATE_MODE || '').trim().toLowerCase();
   if (envVal.length > 0) {
-    return envVal === '1' || envVal === 'true' || envVal === 'yes';
+    if (envVal === '0' || envVal === 'false' || envVal === 'no') return false;
+    return true;
   }
   for (const domain of [SHARED_DEFAULTS_DOMAIN, APP_DEFAULTS_DOMAIN]) {
-    const raw = readDefaultsValue(domain, 'privateMode')?.toLowerCase();
-    if (raw === '1' || raw === 'true' || raw === 'yes') {
-      return true;
-    }
+    const res = readDefaultsEntry(domain, 'privateMode', opts);
+    if (res.status === 'error') return true;
+    if (res.status === 'missing') continue;
+    const raw = res.value.toLowerCase();
+    if (raw === '0' || raw === 'false' || raw === 'no') continue;
+    return true;
   }
   return false;
 }

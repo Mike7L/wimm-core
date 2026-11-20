@@ -723,6 +723,20 @@ replies with lists only; Wimm turns the block diff into format-2 operations —
   the reply with its good edits. Two effort-high Haiku replies had been lost
   that way. A source left `unfinished` with a `section` that was not supplied
   in full counts the same way (`SecretaryPacket.sectionsToRead`).
+  With Claude Code the read round continues the first round's session
+  (`--resume`, started in `packet-1/`) and sends only what it adds
+  (`SecretaryPacket.continuation`, saved as `packet-2/continuation.json`);
+  `packet-2/input.json` stays the merged packet that validates the reply. A
+  fresh full request had put the new blocks near the start of the JSON, so
+  it never read the first round's cache: 7 of 18 packet runs up to
+  2026-11-19 needed a read round, and on Sonnet each one cost as much as the
+  first. A continuation that fails with a reported cost of zero falls back to
+  the full request; an unknown cost does not. Claude Code reports a
+  continued session's `total_cost_usd` (and `modelUsage`) as the session
+  total, so the dispatcher records the continuation as that total less the
+  first round's; `usage` tokens are per request. Checked on run a57f's two
+  rounds (2026-11-20, Sonnet): round 2 read all 159 108 packet tokens from
+  the cache and cost $0.044 instead of the $0.466 the full request had cost.
   The editor commands of the file transport (`secretary claude`, `codex`,
   `gemini`, `terra-api`) run the same single read round since 2026-11-15:
   the sections are admitted into the session input (counted against the

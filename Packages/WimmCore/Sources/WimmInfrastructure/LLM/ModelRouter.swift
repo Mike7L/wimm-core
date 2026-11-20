@@ -13,16 +13,11 @@ public struct ModelRoute: Sendable {
 public enum ModelRouter {
     public static func route(for rawModel: String, fallback: LLMCfg.Provider = .gemini) -> ModelRoute {
         let model = rawModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        if model.hasPrefix("apple/") || model == "apple" {
-            return ModelRoute(model: model, provider: .apple)
-        }
-        if model.hasPrefix("local/") {
-            return ModelRoute(model: model, provider: .local)
-        }
-        if model.hasPrefix("models/") || model.lowercased().hasPrefix("gemini-") {
+        let lower = model.lowercased()
+        if lower.hasPrefix("models/") || lower.hasPrefix("gemini-") {
             return ModelRoute(model: model, provider: .gemini)
         }
-        if model.contains("/") {
+        if model.contains("/"), !lower.hasPrefix("local/"), !lower.hasPrefix("apple/") {
             return ModelRoute(model: model, provider: .openrouter)
         }
         return ModelRoute(model: model, provider: fallback)

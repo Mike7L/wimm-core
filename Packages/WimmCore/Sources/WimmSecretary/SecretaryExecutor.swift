@@ -186,7 +186,10 @@ public struct ClaudeCodeExecutor: SecretaryExecutor {
                         "--safe-mode", "--setting-sources", "", "--disable-slash-commands",
                         "--tools", "", "--strict-mcp-config", "--mcp-config", mcpConfig.path,
                         "--system-prompt-file", request.runDirectory.appendingPathComponent("system.md").path,
-                        "--max-budget-usd", String(format: "%.2f", request.budgetUSD), "--max-turns", "1"]
+                        "--max-turns", "1"]
+            // No `--max-budget-usd`: Claude Code checks it after a turn, so in a one-turn run it
+            // stops nothing and only marks the paid reply `error_max_budget_usd`. The dispatcher
+            // keeps the budget: an estimate before each request, the spent total after it.
             if let id = request.resumeSessionID { args += ["--resume", id] }
             if let model = request.model { args += ["--model", model] }
             if let effort = request.effort { args += ["--effort", effort] }

@@ -395,8 +395,6 @@ class AppState: ObservableObject, ProcessingPerformer {
             return await ConfiguredKeys.gemini()
         case .openrouter:
             return await ConfiguredKeys.openRouter()
-        case .apple, .local:
-            return true
         }
     }
 

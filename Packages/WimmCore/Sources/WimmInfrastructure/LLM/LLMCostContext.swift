@@ -6,8 +6,7 @@ import Foundation
 /// the transcription adapters), but the logging happens several layers down in
 /// `LLMJSONClient`. Threading two extra parameters through every intermediate
 /// signature would touch far more code than it is worth, so the attribution
-/// rides along as task-local state — the same trick already used by
-/// ``LLMQueueContext``.
+/// rides along as task-local state.
 ///
 /// Anything not wrapped simply logs without `note_file`; the operation still
 /// gets inferred from the request shape.

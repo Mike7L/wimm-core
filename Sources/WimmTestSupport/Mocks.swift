@@ -4,16 +4,6 @@ import Combine
 import WimmTranscription
 import WimmDomain
 
-#if ENABLE_LOCAL_AI
-import MLX
-
-public func configureMLXForTests() {
-    MLX.Device.setDefault(device: .cpu)
-}
-#else
-public func configureMLXForTests() {}
-#endif
-
 // MARK: - Mock Repositories for Refactoring
 
 public actor MockFileRepository: FileRepositoryProtocol {
@@ -62,9 +52,6 @@ public actor MockMetadataRepository: @preconcurrency MetadataRepositoryProtocol 
     }
     public func upsertNoteCard(for file: URL, card: NoteCard, lang: String?) async {}
     public func naiveNoteCard(for file: URL, transcript: String) async -> NoteCard? { return nil }
-    #if SWIFTDATA_ENABLED && canImport(SwiftData) && !SPM_TESTS
-    public func updateNoteMetaEntity(noteId: String, update: @escaping @Sendable (NoteMetaEntity) -> Void) async {}
-    #endif
 }
 
 public actor MockTranscriptRepository: TranscriptRepositoryProtocol {

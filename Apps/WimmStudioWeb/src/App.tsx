@@ -93,6 +93,7 @@ export function App() {
   const [editingBlockId, setEditingBlockId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState('');
   const editBaseSha256 = useRef<string | null>(null);
+  const editBaseBlockSha256 = useRef<string | null>(null);
 
   // Text selection popover state
   const [selectionTarget, setSelectionTarget] = useState<SelectionTarget | null>(null);
@@ -597,7 +598,7 @@ export function App() {
   };
 
   const saveBlockEdit = async (blockId: number) => {
-    if (!editBaseSha256.current) {
+    if (!editBaseSha256.current || !editBaseBlockSha256.current) {
       setError('Не знаю, с какой версии документа начата правка. Скопируйте черновик и откройте абзац заново.');
       return;
     }
@@ -608,6 +609,7 @@ export function App() {
         blockId,
         markdown: editDraft,
         expectedSha256: editBaseSha256.current,
+        expectedBlockSha256: editBaseBlockSha256.current,
       }),
     });
     if (!res.ok) {
@@ -1120,6 +1122,7 @@ export function App() {
                                   aria-label="Редактировать Markdown абзаца"
                                   onClick={() => {
                                     editBaseSha256.current = payload?.sha256 ?? null;
+                                    editBaseBlockSha256.current = block.sha256 ?? null;
                                     setEditingBlockId(block.id);
                                     setEditDraft(block.markdown);
                                   }}

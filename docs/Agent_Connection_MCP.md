@@ -21,7 +21,8 @@ costs Wimm nothing in tokens.
 | `create_note` | `title`, `markdown` | Creates a new `.md` note; returns its recall id and file path. No paid analysis. |
 | `search_notes` | `query`, optional `since` / `until` / `updated_since`, `limit` (≤ 50) | Best matches: header line, facts line, a snippet around the first match |
 | `recent_notes` | optional `days`, `since`, `until`, `updated_since`, `include_empty` (default true), `limit` (≤ 100) | Newest first: header line, facts line, summary or text preview |
-| `get_note` | `id` (full or unambiguous prefix, or the file name) | Provenance lines + every text variant as its own labeled block (capped at 20k chars in total) |
+| `get_note` | `id` (full or unambiguous prefix, or the file name), optional `full` | Provenance lines + every text variant as its own labeled block (capped at 20k chars in total; `full: true` returns every distinct variant without display truncation) |
+| `get_note_image` | `id`, `image_index` (1-based from `get_note`), optional `page` (PDF), optional `crop` (`x`, `y`, `width`, `height`, normalized bottom-left) | One original image or PDF page owned by the note (optionally cropped); refused in private mode, no free file paths |
 | `changed_notes` | `since` (date, or `"last_pass"`), `cursor`, `skip_unchanged_marked`, `limit` (≤ 200) | Oldest change first, keyset-paged; each note says what changed and how it relates to the agent's mark |
 | `request_retranscription` | `ids` (≤ 200), optional `model`, `analyze` (default false: a paid NoteCard call per note), `reason` | Queues audio notes — or the audio attachments of a text note (Evernote) — for a fresh transcription (see *Agent writes*) |
 | `retranscription_queue` | optional `state`, `limit` | Requests newest first with their outcome |
@@ -187,20 +188,22 @@ build chatter to stdout, and stdout is the protocol channel.
 Claude Code:
 
 ```bash
-claude mcp add wimm -- /path/to/Wimm.app/Contents/MacOS/WimmCLI mcp
+claude mcp add wimm -- ~/.local/share/wimm/WimmCLI mcp
 ```
 
 Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json`):
 
 ```json
 { "mcpServers": { "wimm": {
-    "command": "/path/to/Wimm.app/Contents/MacOS/WimmCLI",
+    "command": "~/.local/share/wimm/WimmCLI",
     "args": ["mcp"] } } }
 ```
 
-`./scripts/make_app.sh` installs `WimmCLI` into `Wimm.app` (and `WimmCLI.app`);
-a dev build lives at `.build/arm64-apple-macosx/debug/WimmCLI`. Set
-`WIMM_BASE_DIR` in the client's env block to point it at a scratch library.
+`./scripts/make_cli.sh -i` builds and installs `WimmCLI` to
+`~/.local/share/wimm/WimmCLI` (and `WimmCLI.app`, plus symlinks
+`~/.local/bin/wimm-cli` if `~/.local/bin` exists); a dev build lives at
+`.build/arm64-apple-macosx/debug/WimmCLI`. Set `WIMM_BASE_DIR` in the client's
+env block to point it at a scratch library.
 
 ## How it reads the library
 
@@ -306,9 +309,11 @@ transcript`. A no-speech verdict never replaces existing text
 outcome says so (`no_speech — the earlier transcript was kept`), and clearing
 made-up text stays the explicit `wimm-cli transcript clear-no-speech`.
 
-Model: `model` argument, default the Settings hear model. Gemini uploads the
-`_micro` (silence-trimmed — a 34-min recording can shrink to 40 s);
-`parakeet:ultra` reads the original on-device and costs nothing.
+Model: `model` argument, default the Settings hear model. Gemini uploads a
+throwaway silence-trimmed copy built by `MicroAudio.makeUploadCopy` (or reuses
+a legacy `_micro` if present; no new persistent `_micro` files are created — a
+34-min recording can shrink to 40 s); `parakeet:ultra` reads the original
+on-device and costs nothing.
 
 Private mode: no audio may leave the Mac, so `request_retranscription`
 refuses a cloud model up front and queues only `parakeet:` models. It and
@@ -343,15 +348,17 @@ counts. `transcript retry <path>` remains the path-based variant. Neither re-run
 note analysis (a paid NoteCard call) unless `--analyze` is passed
 (2026-11-17; before that both analyzed by default).
 
-Not coordinated: the sidecar lock is in-process, so a running Wimm.app
-writing the same sidecar at the same moment is not serialized against the
-worker (the same accepted risk as `transcript retry`).
+Sidecar coordination: sidecar writes are serialized across processes —
+`FileStore.mutateSidecar` holds an in-process `NSLock` plus a cross-process
+`flock` (`SidecarFileLock`, stripe files in the Darwin user temp dir),
+coordinating Studio, `wimm-cli`, the MCP server, and the background
+retranscription worker.
 
 ## Not done
 
-- No content-editing tools (create note, edit text). Adding one means going
-  through `FileStore.mutateSidecar` and deciding what an agent may change; do
-  not bolt it on without that discussion.
+- No tools that edit existing notes. `create_note` only appends a new `.md`
+  note (see *Saving a discussion*); editing existing note content stays out of
+  scope without a separate decision.
 - No in-app chat. The chat surface stays removed; the agent is external.
 - No semantic search; the agent compensates by trying synonyms.
 - No `note_meta` tool (raw sidecar fields without text): `get_note` already

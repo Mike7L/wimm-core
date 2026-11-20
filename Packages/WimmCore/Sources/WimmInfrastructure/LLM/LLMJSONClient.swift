@@ -328,7 +328,7 @@ public actor LLMJSONClient {
         }
 
         let effModel = modelOverride ?? model
-        let provider = ModelProviderFactory.create(
+        let provider = try ModelProviderFactory.create(
             capability: capability, identifier: effModel, transport: transport)
         let logOrigin = resolvedOrigin(origin)
         var logAttributes = buildLogAttributes(origin: logOrigin, userJSON: userJSON)
@@ -336,24 +336,6 @@ public actor LLMJSONClient {
         let sentUser = userJSON
         if let reason = reason, !reason.isEmpty {
             logAttributes["reason"] = reason
-        }
-        let queueType = Self.queueType(for: capability)
-        let requestKind = logAttributes["request_kind"] ?? "json"
-        let manualQueueJobId: UUID? = if !LLMQueueContext.inUnifiedQueue {
-            await MainActor.run {
-                UnifiedModelManager.shared.beginManualJob(
-                    type: queueType,
-                    input: String(sentUser.prefix(160)),
-                    priority: .normal,
-                    engine: effModel,
-                    context: [
-                        "origin": logOrigin,
-                        "request_kind": requestKind,
-                    ]
-                )
-            }
-        } else {
-            nil
         }
 
         let cid = LLMLogger.shared.logRequest(
@@ -401,14 +383,6 @@ public actor LLMJSONClient {
                 isStreaming: false,
                 correlationId: cid
             )
-            if let manualQueueJobId {
-                await MainActor.run {
-                    UnifiedModelManager.shared.completeManualJob(
-                        jobId: manualQueueJobId,
-                        output: String(result.prefix(160))
-                    )
-                }
-            }
             return PerformResult(text: result, metadata: provider.metadata)
         } catch {
             let errorAttributes = enrichLogAttributesForError(logAttributes, error: error)
@@ -424,28 +398,7 @@ public actor LLMJSONClient {
                 isStreaming: false,
                 correlationId: cid
             )
-            if let manualQueueJobId {
-                await MainActor.run {
-                    UnifiedModelManager.shared.completeManualJob(
-                        jobId: manualQueueJobId,
-                        error: error.localizedDescription
-                    )
-                }
-            }
             throw error
-        }
-    }
-
-    private static func queueType(for capability: ModelCapability) -> ModelType {
-        switch capability {
-        case .think:
-            return .processing
-        case .understand:
-            return .analysis
-        case .hear:
-            return .transcription
-        case .see:
-            return .vision
         }
     }
 }

@@ -1,10 +1,6 @@
 import Foundation
 import WimmDomain
 
-#if SWIFTDATA_ENABLED && canImport(SwiftData) && !SPM_TESTS
-    import SwiftData
-#endif
-
 /// Handles NoteCard read/write and metadata operations.
 public actor MetadataRepository: @preconcurrency MetadataRepositoryProtocol {
     public struct TranscriptionInfo: Sendable {
@@ -153,26 +149,6 @@ public actor MetadataRepository: @preconcurrency MetadataRepositoryProtocol {
         NoteMeta.upsertNoteCard(for: file, card: card, lang: lang)
         invalidateMetaCache(for: file)
     }
-
-    #if SWIFTDATA_ENABLED && canImport(SwiftData) && !SPM_TESTS
-        /// Update a NoteMetaEntity by noteId using a closure to modify the entity.
-        public func updateNoteMetaEntity(noteId: String, update: @escaping @Sendable (NoteMetaEntity) -> Void)
-        {
-            let context = SwiftDataContextProvider.newContext()
-            let nPred = #Predicate<NoteMetaEntity> { $0.id == noteId }
-            do {
-                if let entity = try context.fetch(FetchDescriptor<NoteMetaEntity>(predicate: nPred))
-                    .first
-                {
-                    update(entity)
-                    entity.updatedAt = Date()
-                    try context.save()
-                }
-            } catch {
-                log("updateNoteMetaEntity failed for \(noteId): \(error)")
-            }
-        }
-    #endif
 
     // MARK: - Metadata
 

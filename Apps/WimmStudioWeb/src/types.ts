@@ -25,6 +25,7 @@ export interface DocumentBlock {
   id: number;
   kind: BlockKind;
   markdown: string;
+  sha256?: string;
   anchor?: string;
   sectionId?: string;
   sectionHeading?: string;
