@@ -44,17 +44,24 @@ export function newNote(fields) {
   return { id: crypto.randomUUID(), date: new Date().toISOString(), title:'', text:'', kind:'text',
     revision: 1, processed: false, ...fields };
 }
-export const saveNew = note => transaction(['notes'], 'readwrite', tx => tx.objectStore('notes').add(note));
-export function editText(id, text) {
-  return transaction(['notes'], 'readwrite', tx => {
+export function wakeQueue() {
+  return chrome.runtime.sendMessage({action:'queue-sync'}).catch(console.error);
+}
+export async function saveNew(note, schedule=wakeQueue) {
+  await transaction(['notes'], 'readwrite', tx => tx.objectStore('notes').add(note));
+  if (transcriptionState(note)==='queued') await schedule();
+}
+export async function editText(id, text) {
+  await transaction(['notes'], 'readwrite', tx => {
     const store = tx.objectStore('notes');
     const req = store.get(id);
     req.onsuccess = () => {
       const note = req.result;
       if (!note) return tx.abort();
-      store.put({ ...note, text, revision: note.revision + 1, processed: false });
+      store.put({ ...note, text, revision: note.revision + 1, processed: false, transcriptionJob:{status:'edited'} });
     };
   });
+  await wakeQueue();
 }
 export const saveChunk = (note, seq, blob) => transaction(['chunks'], 'readwrite', tx =>
   tx.objectStore('chunks').add({note, seq, blob}));
@@ -101,5 +108,50 @@ export function approveDraft(draftId, markdown) {
         }
       };
     };
+  });
+}
+
+// A missing state also covers recordings imported by Wimm 1.0.
+export function transcriptionState(note) {
+  if (!['audio','image','pdf'].includes(note.kind) || note.recording || !note.blob || note.text?.trim()) return null;
+  return note.transcriptionJob?.status || 'queued';
+}
+
+function changeNote(id, update) {
+  return transaction(['notes'], 'readwrite', (tx, done) => {
+    const store = tx.objectStore('notes');
+    const read = store.get(id);
+    read.onsuccess = () => {
+      const current = read.result;
+      const next = current && update(current);
+      if (next) store.put(next);
+      done(next);
+    };
+  });
+}
+
+export function claimJob(id) {
+  return changeNote(id, note => {
+    if (!['queued', 'running'].includes(transcriptionState(note))) return;
+    return {...note, transcriptionJob: {status:'running', token:crypto.randomUUID()}};
+  });
+}
+
+export function finishJob(claim, text, error) {
+  return changeNote(claim.id, note => {
+    if (transcriptionState(note) !== 'running' || note.revision !== claim.revision ||
+        note.transcriptionJob.token !== claim.transcriptionJob.token) return;
+    if (error) return {...note, transcriptionJob:{status:'failed', error}};
+    if (!text.trim()) return {...note, transcriptionJob:{status:'silent'}};
+    return {...note, text:text.trim(), revision:note.revision + 1, processed:false,
+      transcriptionJob:{status:'done'}};
+  });
+}
+
+export function retryJob(id) {
+  return changeNote(id, note => {
+    if (['failed','silent'].includes(transcriptionState(note))) {
+      return {...note, transcriptionJob:{status:'queued'}};
+    }
   });
 }

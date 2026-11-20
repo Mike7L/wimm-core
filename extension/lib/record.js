@@ -1,4 +1,4 @@
-import {newNote,saveNew,saveChunk,finishRecording,listNotes,editText} from './db.js';
+import {newNote,saveNew,saveChunk,finishRecording,listNotes,wakeQueue} from './db.js';
 import {address} from './assistant.js';
 import {loadSpeech,liveSpeech} from './speech.js';
 
@@ -20,6 +20,7 @@ export function record({recognize,onStatus,onActive,onFinish,onError}) {
       try{model=await loadSpeech();}catch(e){onError('Распознавание недоступно. '+e.message);}
     }
     const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    let port, meterContext, analyser, samples, rmsLevel=0;
     let timer,endSpeech,writes=Promise.resolve(),writeError,words='',partial='',seq=0,note;
     try{
       const mimeType=['audio/webm;codecs=opus','audio/webm','audio/mp4'].find(t=>MediaRecorder.isTypeSupported(t));
@@ -39,34 +40,61 @@ export function record({recognize,onStatus,onActive,onFinish,onError}) {
         let quietSince=0,heard=false;
         try{
           endSpeech=await liveSpeech(model,stream,(final,preview)=>{words=final;partial=preview;},rms=>{
+            rmsLevel=rms;
             if(rms>=0.002){heard=true;quietSince=0;return;}
             quietSince ||= Date.now();
             if(heard && Date.now()-quietSince>=1500 && address(words+' '+partial)?.question && recorder.state==='recording')recorder.stop();
           });
         }catch(e){onError('Распознавание недоступно. '+e.message);}
       }
+      if (!endSpeech) {
+        try {
+          meterContext = new AudioContext();
+          await meterContext.resume();
+          analyser = meterContext.createAnalyser();
+          analyser.fftSize = 512;
+          meterContext.createMediaStreamSource(stream).connect(analyser);
+          samples = new Float32Array(analyser.fftSize);
+        } catch { analyser=null; }
+      }
       recorder.start(750);onActive();
       const start=Date.now();
-      timer=setInterval(()=>onStatus((words+' '+partial).trim() || 'Идёт запись звука.',(Date.now()-start)/1000),200);
+      function tick() {
+        if (analyser) {
+          analyser.getFloatTimeDomainData(samples);
+          rmsLevel=Math.sqrt(samples.reduce((sum,v)=>sum+v*v,0)/samples.length);
+        }
+        if (!port) {
+          const connected=chrome.runtime.connect({name:'recording-hud'});
+          port=connected;
+          connected.onMessage.addListener(msg=>{if(msg.action==='stop' && recorder.state==='recording')recorder.stop();});
+          connected.onDisconnect.addListener(()=>{if(port===connected)port=null;});
+        }
+        try {port.postMessage({started:start,level:Math.min(6,Math.sqrt(rmsLevel)*14)});} catch {port=null;}
+        onStatus((words+' '+partial).trim() || 'Идёт запись звука.',(Date.now()-start)/1000);
+      }
+      tick(); timer=setInterval(tick,250);
       if(stopping)recorder.stop();
       await stopped;clearInterval(timer);
+      port?.disconnect();port=null;
       stream.getTracks().forEach(t=>t.stop());
       await writes;
-      let saved=await finishRecording(note.id,words);
-      if(writeError)throw writeError;
-      if(!saved)throw new Error('Микрофон не передал звук.');
       let request=null;
       if(endSpeech){
         const finalize=endSpeech;endSpeech=null;
-        try{
-          const final=await finalize();
-          if(final!==saved.text){await editText(saved.id,final);saved={...saved,text:final};}
-          request=address(final);
-        }catch(e){onError('Аудио сохранено. '+e.message);}
+        try {
+          words=await finalize();
+          request=address(words);
+        } catch(e) {onError('Распознавание не завершилось. '+e.message);}
       }
+      const saved=await finishRecording(note.id,words);
+      if(!saved)throw new Error('Микрофон не передал звук.');
+      await wakeQueue();
+      if(writeError)throw writeError;
       return {saved,request};
     }finally{
-      clearInterval(timer);stream.getTracks().forEach(t=>t.stop());
+      clearInterval(timer);port?.disconnect();stream.getTracks().forEach(t=>t.stop());
+      if(meterContext)await meterContext.close().catch(()=>{});
       if(endSpeech)await endSpeech().catch(()=>{});
     }
   }).then(onFinish).catch(onError);

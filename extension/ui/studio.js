@@ -1,4 +1,5 @@
-import {newNote,saveNew,listNotes,noteById,state,setState,editText,approveDraft,onChange} from '../lib/db.js';
+import {newNote,saveNew,listNotes,noteById,state,setState,editText,approveDraft,onChange,transcriptionState,retryJob,wakeQueue} from '../lib/db.js';
+import {renderDocument} from './document.js';
 import {formats,importFiles} from '../lib/import.js';
 import {address,isSecretary,claude,prepareDraft,ready} from '../lib/assistant.js';
 import {recognizeFile} from '../lib/speech.js';
@@ -11,7 +12,7 @@ const symbols={audio:'∿',text:'≡',image:'▧',document:'▤',pdf:'▤'};
 const dateLabel=value=>new Date(value).toLocaleString('ru-RU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
 let notes=[],filter='all',readerNote,mediaUrl,editId,draft,rec,toastTimer,renderToken=0;
 let busy=false, speakingTurn=0;
-const pageNames={library:'Библиотека',secretary:'Секретарь',assistant:'Алёна',settings:'Настройки'};
+const pageNames={queue:'Очередь',document:'Личный документ',library:'Библиотека',secretary:'Секретарь',assistant:'Алёна',settings:'Настройки'};
 function notify(message,error=false){
   clearTimeout(toastTimer);$('toast').textContent=message;$('toast').classList.toggle('error',error);$('toast').hidden=false;
   toastTimer=setTimeout(()=>$('toast').hidden=true,error?12000:5000);
@@ -41,7 +42,12 @@ function renderList(){
   if(!rows.length){$('notes').append(node('p',notes.length?'По этому запросу заметок нет.':'Пока нет заметок. Начните запись или сохраните мысль текстом.','empty'));return;}
   for(const note of rows){
     const card=node('button',null,'noteRow'),col=node('span');
-    col.append(node('strong',note.title || kinds[note.kind]),node('small',(note.text || note.name || kinds[note.kind]).slice(0,160)));
+    const title=note.title || kinds[note.kind];
+    const preview=(note.text || '').trim().split('\n').filter(line=>line!==title).join(' ').slice(0,150);
+    col.className='noteSummary';
+    col.append(node('strong',title));
+    const job=transcriptionState(note);
+    if (jobLabels[job] || preview) col.append(node('small',jobLabels[job] || preview));
     card.append(node('span',symbols[note.kind],'noteIcon '+note.kind),col,node('small',dateLabel(note.date)));
     card.onclick=()=>openNote(note.id).catch(e=>notify(e.message,true));
     $('notes').append(card);
@@ -74,27 +80,70 @@ function renderSources(){
   }
   $('generate').disabled=busy || !count;
 }
+const jobLabels={queued:'В очереди',running:'Распознаётся',failed:'Ошибка распознавания',silent:'Текст не обнаружен'};
+function renderQueue(){
+  const jobs=notes.filter(n=>jobLabels[transcriptionState(n)] || n.transcriptionJob?.status==='done');
+  const pending=jobs.filter(n=>['queued','running'].includes(transcriptionState(n))).length;
+  $('queueSummary').textContent=pending ? 'В обработке и в ожидании: '+pending : 'Ожидающих записей нет.';
+  const list=document.createDocumentFragment();
+  const priority=n=>({running:0,queued:1,failed:2,silent:3}[transcriptionState(n)] ?? 4);
+  jobs.sort((a,b)=>priority(a)-priority(b) || (priority(a)===1?a.date.localeCompare(b.date):b.date.localeCompare(a.date)));
+  for(const note of jobs){
+    const job=transcriptionState(note);
+    const row=node('div',null,'queueRow');
+    const link=node('button',note.title || note.name || 'Заметка','queueNote');
+    link.onclick=()=>openNote(note.id).catch(e=>notify(e.message,true));
+    const info=node('span',jobLabels[job] || 'Распознано','jobStatus');
+    if(job==='failed') info.textContent+=' · '+note.transcriptionJob.error;
+    row.append(link,info);
+    if(job==='failed' || job==='silent'){
+      const retry=node('button','Повторить');
+      retry.onclick=async()=>{
+        retry.disabled=true;
+        try{await retryJob(note.id);await wakeQueue();await refresh();}
+        catch(e){notify(e.message,true);}
+      };
+      row.append(retry);
+    }
+    list.append(row);
+  }
+  $('jobs').replaceChildren(list);
+}
 async function refresh(){
   const token=++renderToken;
   const [rows,newDraft,doc]=await Promise.all([listNotes(),state('draft'),state('document')]);
   if(token!==renderToken)return;
-  notes=rows;renderList();renderSources();
+  notes=rows;renderList();renderSources();renderQueue();
+  if ($('reader').open && readerNote) {
+    const fresh=rows.find(n=>n.id===readerNote.id);
+    if(fresh){readerNote=fresh;renderReaderText(fresh);}
+  }
   if(newDraft?.id!==draft?.id) $('draft').value=newDraft?.markdown || '';
   draft=newDraft;$('draftBox').hidden=!draft;
-  citations($('document'),doc || 'Одобренные разделы появятся здесь.');
+  renderDocument($('document'),$('outline'),doc || '',notes,id=>openNote(id).catch(e=>notify(e.message,true)));
 }
 function saveFile(blob,name){
   const url=URL.createObjectURL(blob),a=node('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);
+}
+function renderReaderText(note){
+  const job=transcriptionState(note);
+  $('readText').textContent=[note.text,...(note.attachmentTexts||[])].filter(Boolean).join('\n\n') ||
+    jobLabels[job] || 'Текст к этому файлу пока не добавлен.';
+  $('transcribe').disabled=job==='queued' || job==='running';
 }
 async function openNote(id){
   const note=await noteById(id);
   if(!note)throw new Error('Заметка недоступна.');
   readerNote=note;$('readKind').textContent=kinds[note.kind];$('readTitle').textContent=note.title || kinds[note.kind];
-  $('readDate').textContent=dateLabel(note.date);$('readText').textContent=[note.text,...(note.attachmentTexts||[])].filter(Boolean).join('\n\n') || 'Текст к этому файлу пока не добавлен.';
+  $('readDate').textContent=dateLabel(note.date);renderReaderText(note);
   $('media').replaceChildren();$('originalUrl').replaceChildren();if(mediaUrl)URL.revokeObjectURL(mediaUrl);
   if(note.blob){
     mediaUrl=URL.createObjectURL(note.blob);
     if(note.kind==='image'&&note.mime!=='image/heic'){const img=node('img');img.src=mediaUrl;img.alt=note.title;$('media').append(img);}
+    if(note.kind==='pdf'){
+      const frame=node('iframe');frame.title=note.title || 'Просмотр PDF';
+      frame.src=mediaUrl;$('media').append(frame);
+    }
     if(note.kind==='audio'){const audio=node('audio');audio.controls=true;audio.src=mediaUrl;$('media').append(audio);}
   }
   if(note.url && /^https?:\/\//i.test(note.url)){
@@ -167,7 +216,6 @@ async function startRecording(){
 }
 
 $('today').textContent=new Date().toLocaleDateString('ru-RU',{weekday:'long',day:'numeric',month:'long'});
-for(let i=0;i<38;i++){const bar=node('b');bar.style.height=(8+Math.abs(Math.sin(i*1.23)*Math.cos(i*.17))*75)+'%';document.querySelector('.voiceVisual').append(bar);}
 for(const dialog of document.querySelectorAll('dialog'))dialog.querySelector('.close').onclick=()=>dialog.close();
 $('reader').addEventListener('close',()=>{$('media').replaceChildren();if(mediaUrl)URL.revokeObjectURL(mediaUrl);mediaUrl=null;});
 listen('compose','click',()=>openEditor());listen('editText','click',()=>{$('reader').close();openEditor(readerNote);});
@@ -177,7 +225,11 @@ $('editForm').onsubmit=async e=>{
     $('editor').close();await refresh();notify('Заметка сохранена.');}catch(err){notify(err.message,true);}
 };
 listen('transcribe','click',async()=>{
-  const note=readerNote,button=$('transcribe');button.disabled=true;button.textContent='Распознаю…';
+  const note=readerNote,button=$('transcribe');
+  if (['failed','silent'].includes(transcriptionState(note))) {
+    await retryJob(note.id); await wakeQueue(); await refresh();return;
+  }
+  button.disabled=true;button.textContent='Распознаю…';
   try{
     const text=await recognizeFile(note.blob);
     if(!text.trim())throw new Error('Речь не обнаружена.');
@@ -236,6 +288,6 @@ listen('checkUpdate','click',async()=>{
     $('updateResult').textContent=messages[status] || status;
   }finally{$('checkUpdate').disabled=false;}
 });
-await recoverAudio();await settings();await refresh();
+await recoverAudio();await settings();await refresh();wakeQueue();
 const lastAnswer=await state('answer');if(lastAnswer){$('replyBox').hidden=false;citations($('reply'),lastAnswer);}
 route();

@@ -19,3 +19,16 @@ The original model files have been repackaged in a tar archive.
 
 fflate 0.8.2, Arjun Barrett (MIT). See vendor/fflate/LICENSE.
 https://github.com/101arrowz/fflate
+
+markdown-it 14.1.1, Vitaly Puzrin, Alex Kocharin (MIT).
+https://github.com/markdown-it/markdown-it
+
+Tesseract.js 6.0.1 and tesseract.js-core 6.0.0 (Apache License 2.0).
+https://github.com/naptha/tesseract.js
+https://github.com/naptha/tesseract.js-core
+English and Russian tessdata_fast language data (Apache License 2.0).
+https://github.com/tesseract-ocr/tessdata_fast
+
+PDF.js 4.10.38, Mozilla Foundation (Apache License 2.0).
+Font and character map licenses accompany the respective resources.
+https://github.com/mozilla/pdf.js
