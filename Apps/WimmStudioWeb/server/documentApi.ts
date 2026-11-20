@@ -33,6 +33,7 @@ import {
   resolveWimmCliBinary,
 } from './shouldersApi.ts';
 import { sendStudioVoiceCommand, startStudioVoiceEvents } from './studioVoice.ts';
+import { listZonosVoices, synthesizeZonosWav } from './zonosVoice.ts';
 
 const HOME = os.homedir();
 const DEFAULT_DOC_PATH =
@@ -1547,6 +1548,43 @@ export function createStudioApi(): StudioApi {
             res.statusCode = ok ? 200 : 503;
             res.setHeader('Content-Type', 'application/json; charset=utf-8');
             res.end(JSON.stringify({ ok }));
+            return;
+          }
+
+          if (req.method === 'GET' && url.pathname === '/api/shoulders/zonos/voices') {
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.setHeader('Cache-Control', 'no-store');
+            try {
+              res.end(JSON.stringify({ voices: await listZonosVoices() }));
+            } catch {
+              res.statusCode = 503;
+              res.end(JSON.stringify({ error: 'ZONOS3-Mini voice catalog unavailable' }));
+            }
+            return;
+          }
+
+          if (req.method === 'POST' && url.pathname === '/api/shoulders/zonos/speech') {
+            const body = await readJsonBody(req);
+            const text = typeof body?.text === 'string' ? body.text.trim() : '';
+            const voice = typeof body?.voice === 'string' ? body.voice.trim() : '';
+            res.setHeader('Cache-Control', 'no-store');
+            if (!text || !voice) {
+              res.statusCode = 400;
+              res.end('Text and voice are required');
+              return;
+            }
+            const abort = new AbortController();
+            res.once('close', () => abort.abort());
+            try {
+              const wav = await synthesizeZonosWav(text, voice, abort.signal);
+              if (res.destroyed) return;
+              res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': wav.length });
+              res.end(wav);
+            } catch {
+              if (res.destroyed) return;
+              res.statusCode = 503;
+              res.end('ZONOS3-Mini synthesis failed');
+            }
             return;
           }
 
