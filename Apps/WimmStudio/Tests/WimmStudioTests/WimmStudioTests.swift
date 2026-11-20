@@ -114,22 +114,28 @@ final class WimmStudioTests: XCTestCase {
         XCTAssertEqual(pill.controlBarHeight, 32)
         XCTAssertFalse(pill.showsTimer)
         XCTAssertFalse(pill.showsSend)
+        XCTAssertFalse(pill.showsMicSource)
+        XCTAssertFalse(pill.showsMicMode)
         XCTAssertFalse(pill.showsStatusText)
         XCTAssertFalse(pill.showsLeadingActions)
 
-        // Compact bar size (360 x 38): actions, Send, no captions, no status text.
+        // Compact bar size (360 x 38): actions, mic controls, Send, no captions, no status text.
         let bar = ResponsiveHUDLayout(width: 360, height: 38)
         XCTAssertEqual(bar.listHeight, 0)
         XCTAssertEqual(bar.controlBarHeight, 38)
         XCTAssertTrue(bar.showsTimer)
         XCTAssertTrue(bar.showsSend)
+        XCTAssertTrue(bar.showsMicSource)
+        XCTAssertTrue(bar.showsMicMode)
         XCTAssertTrue(bar.showsLeadingActions)
         XCTAssertFalse(bar.showsCaptions)
         XCTAssertFalse(bar.showsStatusText)
 
-        // Narrow bar keeps leading actions without captions.
+        // Narrow bar keeps leading actions and mic source, drops mic mode, without captions.
         let narrow = ResponsiveHUDLayout(width: 280, height: 38)
         XCTAssertTrue(narrow.showsLeadingActions)
+        XCTAssertTrue(narrow.showsMicSource)
+        XCTAssertFalse(narrow.showsMicMode)
         XCTAssertFalse(narrow.showsCaptions)
 
         // Expanded HUD size (360 x 240):
@@ -137,6 +143,8 @@ final class WimmStudioTests: XCTestCase {
         XCTAssertEqual(full.listHeight, 202)
         XCTAssertEqual(full.listOpacity, 1.0, accuracy: 0.001)
         XCTAssertTrue(full.showsLeadingActions)
+        XCTAssertTrue(full.showsMicSource)
+        XCTAssertTrue(full.showsMicMode)
     }
 
     func testCustomReactionAndVoiceViaRoundTripInDocumentComments() throws {

@@ -8,7 +8,9 @@ struct ResponsiveHUDLayout: Equatable {
     static let barHeight: CGFloat = 38
     static let timerMinWidth: CGFloat = 135
     static let sendMinWidth: CGFloat = 160
+    static let micSourceMinWidth: CGFloat = 210
     static let actionsMinWidth: CGFloat = 250
+    static let micModeMinWidth: CGFloat = 290
     static let textMinWidth: CGFloat = 480
     static let listFadeSpan: CGFloat = 24
 
@@ -20,7 +22,9 @@ struct ResponsiveHUDLayout: Equatable {
     var listOpacity: Double { Double(min(1, max(0, (listHeight - 6) / Self.listFadeSpan))) }
     var showsTimer: Bool { width >= Self.timerMinWidth }
     var showsSend: Bool { width >= Self.sendMinWidth }
+    var showsMicSource: Bool { width >= Self.micSourceMinWidth }
     var showsLeadingActions: Bool { width >= Self.actionsMinWidth }
+    var showsMicMode: Bool { width >= Self.micModeMinWidth }
     var showsCaptions: Bool { false }
     /// The stream is readable above the bar; the bar then repeats none of it.
     var showsList: Bool { listHeight >= 24 }
@@ -581,12 +585,12 @@ struct ResponsiveHUDView: View {
 
                 micSwitch(hitSize: islandHit)
 
-                HStack(spacing: 6) {
+                HStack(spacing: 4) {
                     trailingControlItems(layout: layout, vikActive: vikActive)
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            .padding(.horizontal, layout.showsTimer ? 8 : 6)
+            .padding(.horizontal, 6)
         } else if let island, island.isEnabled, island.edge == .left {
             HStack(spacing: 6) {
                 micSwitch(hitSize: islandHit)
@@ -682,6 +686,10 @@ struct ResponsiveHUDView: View {
             Text(elapsedString(since: started, now: clockNow))
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.red)
+        }
+
+        if !vikActive, (layout.showsMicSource || layout.showsMicMode) {
+            HUDMicControls(capture: capture, showsSource: layout.showsMicSource, showsMode: layout.showsMicMode)
         }
 
         if layout.showsSend, let vik, vik.isResponding {

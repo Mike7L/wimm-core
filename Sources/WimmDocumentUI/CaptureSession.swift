@@ -36,6 +36,33 @@ protocol CaptureLiveTranscribing: Actor {
 
 extension ParakeetLiveTranscriber: CaptureLiveTranscribing {}
 
+public enum CaptureMicrophoneMode: String, Equatable, Sendable {
+    case standard
+    case voiceIsolation
+    case wideSpectrum
+    case unknown
+
+    public var displayName: String {
+        switch self {
+        case .standard: "Стандартный"
+        case .voiceIsolation: "Изоляция голоса"
+        case .wideSpectrum: "Широкий спектр"
+        case .unknown: "Неизвестно"
+        }
+    }
+
+    #if os(macOS)
+    init(_ mode: AVCaptureDevice.MicrophoneMode) {
+        switch mode {
+        case .standard: self = .standard
+        case .voiceIsolation: self = .voiceIsolation
+        case .wideSpectrum: self = .wideSpectrum
+        @unknown default: self = .unknown
+        }
+    }
+    #endif
+}
+
 /// One recording: microphone → AAC/ADTS in the library + live Parakeet text,
 /// plus spoken comments cut at the document clicks made while it runs.
 ///
@@ -46,24 +73,74 @@ extension ParakeetLiveTranscriber: CaptureLiveTranscribing {}
 @MainActor @Observable
 public final class CaptureSession {
     public convenience init() {
-        self.init(sourceFactory: { MicrophoneAudioSource() },
-                  liveFactory: { ParakeetLiveTranscriber() },
-                  speechFactory: { SpeechDetector() })
+        let isTest = StoragePaths.isTestProcess
+        self.init(
+            deviceSourceFactory: { MicrophoneAudioSource(preferredDeviceUID: $0) },
+            liveFactory: { ParakeetLiveTranscriber() },
+            speechFactory: { SpeechDetector() },
+            preferences: isTest ? nil : .standard,
+            observeHardwareChanges: !isTest
+        )
     }
 
-    init(sourceFactory: @escaping () -> any LiveAudioSource,
-         liveFactory: @escaping () -> any CaptureLiveTranscribing,
-         speechFactory: @escaping () -> (any SpeechDetecting)? = { nil }) {
-        self.sourceFactory = sourceFactory
+    convenience init(
+        sourceFactory: @escaping () -> any LiveAudioSource,
+        liveFactory: @escaping () -> any CaptureLiveTranscribing,
+        speechFactory: @escaping () -> (any SpeechDetecting)? = { nil }
+    ) {
+        self.init(
+            deviceSourceFactory: { _ in sourceFactory() },
+            liveFactory: liveFactory,
+            speechFactory: speechFactory,
+            availableInputsProvider: { [] },
+            systemDefaultUIDProvider: { nil },
+            preferences: nil,
+            observeHardwareChanges: false
+        )
+    }
+
+    init(
+        deviceSourceFactory: @escaping (String?) -> any LiveAudioSource,
+        liveFactory: @escaping () -> any CaptureLiveTranscribing,
+        speechFactory: @escaping () -> (any SpeechDetecting)? = { nil },
+        availableInputsProvider: @escaping () -> [AudioInputOption] = { RecordingInputDeviceInspector.availableInputDevices() },
+        systemDefaultUIDProvider: @escaping () -> String? = { RecordingInputDeviceInspector.systemDefaultInputUID() },
+        preferences: UserDefaults? = nil,
+        observeHardwareChanges: Bool = false
+    ) {
+        self.deviceSourceFactory = deviceSourceFactory
         self.liveFactory = liveFactory
         self.speechFactory = speechFactory
+        self.availableInputsProvider = availableInputsProvider
+        self.systemDefaultUIDProvider = systemDefaultUIDProvider
+        self.preferences = preferences
+        self.inputPreference = preferences.map { AudioInputPreference.load(from: $0) } ?? .systemDefault
+        refreshAvailableInputs()
+        refreshMicrophoneModes()
+        #if os(macOS)
+        if observeHardwareChanges {
+            deviceMonitor = AudioInputDeviceMonitor { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.refreshAvailableInputs()
+                }
+            }
+        }
+        #endif
     }
 
     @ObservationIgnored private let speechFactory: () -> (any SpeechDetecting)?
     @ObservationIgnored private var speech: (any SpeechDetecting)?
 
-    @ObservationIgnored private let sourceFactory: () -> any LiveAudioSource
+    @ObservationIgnored private let deviceSourceFactory: (String?) -> any LiveAudioSource
     @ObservationIgnored private let liveFactory: () -> any CaptureLiveTranscribing
+    @ObservationIgnored private let availableInputsProvider: () -> [AudioInputOption]
+    @ObservationIgnored private let systemDefaultUIDProvider: () -> String?
+    @ObservationIgnored private let preferences: UserDefaults?
+    #if os(macOS)
+    @ObservationIgnored private var deviceMonitor: AudioInputDeviceMonitor?
+    #endif
+    @ObservationIgnored private var inputChanges: [InputChange] = []
+
     public enum Phase: Equatable { case idle, starting, recording, finishing }
 
     public private(set) var phase: Phase = .idle
@@ -78,6 +155,36 @@ public final class CaptureSession {
     public private(set) var inputTrouble = false
     /// Grows by one each time a note is sent and the next one starts.
     public private(set) var sendCount: UInt64 = 0
+    public private(set) var availableInputDevices: [AudioInputOption] = []
+    public private(set) var systemDefaultInputUID: String?
+    public private(set) var inputPreference: AudioInputPreference
+    public private(set) var activeInputDevice: RecordingInputDevice?
+    public private(set) var activeInputOption: AudioInputOption?
+    public private(set) var activeMicrophoneMode: CaptureMicrophoneMode = .standard
+    public private(set) var preferredMicrophoneMode: CaptureMicrophoneMode = .standard
+    public private(set) var isSwitchingInput = false
+
+    public var displayedInputDevice: AudioInputOption? {
+        if phase == .recording || phase == .finishing {
+            if let activeInputOption { return activeInputOption }
+            if let activeInputDevice {
+                return AudioInputOption(uid: "", name: activeInputDevice.name, transport: activeInputDevice.transport)
+            }
+        }
+        return AudioInputRouting.resolve(
+            preference: inputPreference,
+            available: availableInputDevices,
+            systemDefaultUID: systemDefaultInputUID
+        )
+    }
+
+    public var toggleInputTarget: AudioInputOption? {
+        AudioInputRouting.toggleTarget(current: displayedInputDevice, available: availableInputDevices)
+    }
+
+    public var canToggleInputDevice: Bool {
+        toggleInputTarget != nil && !isBusy && !isSwitchingInput
+    }
     public struct PendingSend: Equatable, Sendable {
         public var quietSeconds: Double
         public var totalSeconds: Double
@@ -166,7 +273,7 @@ public final class CaptureSession {
             try FileManager.default.createDirectory(at: FileStore.recordingsDirectory(), withIntermediateDirectories: true)
             let url = FileStore.newRecordingURL(identity: identity, extension: AudioFileSink.fileExtension)
             identity.persist(for: url)
-            let source = sourceFactory()
+            let source = makeSource()
             try await source.requestAccess()
             guard actionRevision == revision else {
                 phase = .idle
@@ -182,8 +289,11 @@ public final class CaptureSession {
             recordingURL = url
             startedAt = Date()
             phase = .recording
+            inputChanges = []
+            updateActiveInputFromSource()
             stampInputDevice()
             stampLocation()
+            refreshMicrophoneModes()
             startLive()
             startLevel()
             startGateLoop(gate)
@@ -191,12 +301,16 @@ public final class CaptureSession {
         } catch {
             source?.stop()
             source = nil
+            activeInputDevice = nil
+            activeInputOption = nil
+            inputChanges = []
             gate?.finish()
             gate = nil
             gateLoop?.cancel()
             gateLoop = nil
             speech = nil
             phase = .idle
+            refreshMicrophoneModes()
             if case CaptureSessionError.superseded? = error as? CaptureSessionError { return }
             errorMessage = Self.microphoneMessage(for: error, device: inputDeviceName)
         }
@@ -228,7 +342,7 @@ public final class CaptureSession {
                 guard clock.now < deadline else { throw error }
                 try? await Task.sleep(for: Self.microphoneRetryInterval)
                 guard actionRevision == revision else { throw CaptureSessionError.superseded }
-                source = sourceFactory()
+                source = makeSource()
                 self.source = source
                 attempt += 1
             }
@@ -297,6 +411,9 @@ public final class CaptureSession {
         phase = .finishing
         source?.stop()
         source = nil
+        activeInputDevice = nil
+        activeInputOption = nil
+        inputChanges = []
         // A silence send may already be on the main actor. Let it swap files, then close whatever note is current.
         gate?.endEvents()
         await gateLoop?.value
@@ -315,6 +432,7 @@ public final class CaptureSession {
             level = 0
             startedAt = nil
             phase = .idle
+            refreshMicrophoneModes()
             return
         }
         closeOpenAnchor()
@@ -328,6 +446,7 @@ public final class CaptureSession {
         level = 0
         startedAt = nil
         phase = .idle
+        refreshMicrophoneModes()
         onNoteSaved?(url)
     }
 
@@ -338,6 +457,9 @@ public final class CaptureSession {
         guard phase == .recording else { return }
         phase = .finishing
         closeAudio()
+        activeInputDevice = nil
+        activeInputOption = nil
+        inputChanges = []
         onRecordingChanged?(false)
         loop?.cancel()
         levelLoop?.cancel()
@@ -395,8 +517,11 @@ public final class CaptureSession {
         gate?.swap(to: newSink)?.finish()
         sendCount &+= 1
         recordingURL = newURL
+        inputChanges = []
+        updateActiveInputFromSource()
         stampInputDevice()
         stampLocation()
+        refreshMicrophoneModes()
         let oldLoop = loop
         oldLoop?.cancel()
         loop = nil
@@ -587,6 +712,8 @@ public final class CaptureSession {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(100))
                 guard !Task.isCancelled, let self else { return }
+                self.refreshMicrophoneModes()
+                if self.isSwitchingInput { continue }
                 let stopped = (self.source as? MicrophoneAudioSource).map { !$0.isRunning } ?? false
                 let silence = self.levelMeter.digitalSilenceSeconds
                 let silent = !stopped && silence >= Self.silenceLimit(afterSilentRestarts: silentRestarts)
@@ -602,11 +729,12 @@ public final class CaptureSession {
                     }
                     self.source?.stop()
                     self.levelMeter.resetSilence()
-                    let replacement = self.sourceFactory()
+                    let replacement = self.makeSource()
                     do {
-                        _ = try self.startAudio(replacement)
+                        let restartedFormat = try self.startAudio(replacement)
                         self.source = replacement
-                        self.stampInputDevice()
+                        self.format = restartedFormat
+                        self.recordInputChangeIfNeeded(reason: "deviceChanged")
                         if failingSince != nil {
                             log("[Capture] \(self.inputDeviceName ?? device) restarted after a failed restart")
                             failingSince = nil
@@ -647,13 +775,139 @@ public final class CaptureSession {
         }
     }
 
+    // MARK: - Input selection & Mic Mode
+
+    public func toggleInputDevice() {
+        guard let next = AudioInputRouting.toggledPreference(
+            current: displayedInputDevice,
+            available: availableInputDevices
+        ) else { return }
+        selectInputPreference(next)
+    }
+
+    public func selectInputPreference(_ preference: AudioInputPreference) {
+        inputPreference = preference
+        if let preferences { preference.save(to: preferences) }
+        refreshAvailableInputs()
+        if phase == .recording && !isSwitchingInput {
+            Task { await self.switchActiveInput() }
+        }
+    }
+
+    public func showSystemMicrophoneModes() {
+        #if os(macOS)
+        AVCaptureDevice.showSystemUserInterface(.microphoneModes)
+        refreshMicrophoneModes()
+        #endif
+    }
+
+    public func refreshAvailableInputs() {
+        let nextDevices = availableInputsProvider()
+        if availableInputDevices != nextDevices { availableInputDevices = nextDevices }
+        let nextDefault = systemDefaultUIDProvider()
+        if systemDefaultInputUID != nextDefault { systemDefaultInputUID = nextDefault }
+    }
+
+    private func refreshMicrophoneModes() {
+        #if os(macOS)
+        let active = CaptureMicrophoneMode(AVCaptureDevice.activeMicrophoneMode)
+        let preferred = CaptureMicrophoneMode(AVCaptureDevice.preferredMicrophoneMode)
+        if activeMicrophoneMode != active { activeMicrophoneMode = active }
+        if preferredMicrophoneMode != preferred { preferredMicrophoneMode = preferred }
+        #endif
+    }
+
+    private func makeSource() -> any LiveAudioSource {
+        let uid = AudioInputRouting.boundDeviceUID(
+            preference: inputPreference,
+            available: availableInputDevices,
+            systemDefaultUID: systemDefaultInputUID
+        )
+        return deviceSourceFactory(uid)
+    }
+
+    private func switchActiveInput() async {
+        guard phase == .recording, !isSwitchingInput else { return }
+        let revision = actionRevision
+        isSwitchingInput = true
+        defer { isSwitchingInput = false }
+
+        source?.stop()
+        source = nil
+        levelMeter.resetSilence()
+
+        let replacement = makeSource()
+        do {
+            let newFormat = try await startAudioRetrying(replacement, revision: revision)
+            guard phase == .recording, actionRevision == revision else {
+                source?.stop()
+                source = nil
+                return
+            }
+            format = newFormat
+            errorMessage = nil
+            recordInputChangeIfNeeded(reason: "userSwitch")
+            refreshMicrophoneModes()
+        } catch {
+            if case CaptureSessionError.superseded? = error as? CaptureSessionError { return }
+            guard phase == .recording, actionRevision == revision else { return }
+            errorMessage = Self.microphoneMessage(for: error, device: displayedInputDevice?.name)
+            let fallback = deviceSourceFactory(nil)
+            do {
+                let fallbackFormat = try startAudio(fallback)
+                source = fallback
+                format = fallbackFormat
+                recordInputChangeIfNeeded(reason: "fallback")
+                refreshMicrophoneModes()
+            } catch {
+                fallback.stop()
+                await stopRecording()
+            }
+        }
+    }
+
+    private func updateActiveInputFromSource() {
+        let mic = source as? MicrophoneAudioSource
+        activeInputDevice = mic?.inputDevice
+        activeInputOption = mic?.inputOption
+    }
+
+    private func recordInputChangeIfNeeded(reason: String) {
+        let mic = source as? MicrophoneAudioSource
+        let nextDevice = mic?.inputDevice
+        let nextOption = mic?.inputOption
+        activeInputOption = nextOption
+        guard let nextDevice else { return }
+        if activeInputDevice == nil {
+            activeInputDevice = nextDevice
+            stampInputDevice()
+            return
+        }
+        guard nextDevice != activeInputDevice else { return }
+        let oldName = activeInputDevice?.name
+        activeInputDevice = nextDevice
+        if let url = recordingURL, let startedAt {
+            inputChanges.append(InputChange(
+                offset: Date().timeIntervalSince(startedAt),
+                name: nextDevice.name,
+                transport: nextDevice.transport,
+                reason: reason
+            ))
+            FileStore.upsertMetadata(for: url, updates: [
+                InputChange.metadataKey: inputChanges.map(\.sidecarValue)
+            ])
+        }
+        log("[Capture] input changed from \(oldName ?? "none") to \(nextDevice.name) (\(reason))")
+    }
+
     private var inputDeviceName: String? {
-        (source as? MicrophoneAudioSource)?.inputDevice?.name
+        (source as? MicrophoneAudioSource)?.inputDevice?.name ?? displayedInputDevice?.name
     }
 
     /// Studio notes record which microphone they came from, as Wimm's recorder does.
     private func stampInputDevice() {
-        guard let url = recordingURL, let device = (source as? MicrophoneAudioSource)?.inputDevice else { return }
+        guard let url = recordingURL,
+              let device = activeInputDevice ?? (source as? MicrophoneAudioSource)?.inputDevice else { return }
         device.stamp(url)
     }
 
@@ -664,6 +918,19 @@ public final class CaptureSession {
 
     private static func storeLiveText(_ text: String, for url: URL) {
         FileStore.storeLiveText(text, for: url)
+    }
+
+    private struct InputChange: Equatable {
+        static let metadataKey = "audioInputChanges"
+        let offset: TimeInterval
+        let name: String
+        let transport: String
+        let reason: String
+
+        var sidecarValue: [String: Any] {
+            ["offsetSeconds": (offset * 10).rounded() / 10,
+             "name": name, "transport": transport, "reason": reason]
+        }
     }
 }
 

@@ -3,6 +3,10 @@ import WimmDomain
 
 #if canImport(AVFoundation)
 @preconcurrency import AVFoundation
+#if os(macOS)
+import AudioToolbox
+import CoreAudio
+#endif
 
 public typealias LiveAudioBufferHandler = @Sendable (AVAudioPCMBuffer) -> Void
 public typealias LiveAudioCompletionHandler = @Sendable (Error?) -> Void
@@ -18,16 +22,21 @@ public protocol LiveAudioSource: Sendable {
 
 public final class MicrophoneAudioSource: @unchecked Sendable {
     private let audioEngine: AVAudioEngine
+    public let preferredDeviceUID: String?
     public var isRunning: Bool { audioEngine.isRunning }
     /// The device the running engine is bound to (nil before `start`).
     public var inputDevice: RecordingInputDevice? {
         RecordingInputDeviceInspector.current(inputNode: audioEngine.inputNode)
+    }
+    public var inputOption: AudioInputOption? {
+        RecordingInputDeviceInspector.currentOption(inputNode: audioEngine.inputNode)
     }
 
     private let permissionRequester: @Sendable () async -> Bool
 
     public init(
         audioEngine: AVAudioEngine = AVAudioEngine(),
+        preferredDeviceUID: String? = nil,
         permissionRequester: @escaping @Sendable () async -> Bool = {
             await withCheckedContinuation { cont in
                 AVCaptureDevice.requestAccess(for: .audio) { granted in
@@ -37,6 +46,7 @@ public final class MicrophoneAudioSource: @unchecked Sendable {
         }
     ) {
         self.audioEngine = audioEngine
+        self.preferredDeviceUID = preferredDeviceUID
         self.permissionRequester = permissionRequester
     }
 }
@@ -57,6 +67,15 @@ extension MicrophoneAudioSource: LiveAudioSource {
         completionHandler _: @escaping LiveAudioCompletionHandler
     ) throws -> AVAudioFormat {
         let inputNode = audioEngine.inputNode
+        #if os(macOS)
+        if let preferredDeviceUID {
+            if let targetID = RecordingInputDeviceInspector.deviceID(forUID: preferredDeviceUID) {
+                try Self.bindInputDevice(targetID, on: inputNode)
+            } else {
+                log("[Capture] preferred input \(preferredDeviceUID) unavailable; using system default")
+            }
+        }
+        #endif
         let format = inputNode.outputFormat(forBus: 0)
 
         guard format.sampleRate > 0, format.channelCount > 0,
@@ -78,6 +97,30 @@ extension MicrophoneAudioSource: LiveAudioSource {
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
     }
+
+    #if os(macOS)
+    private static func bindInputDevice(_ deviceID: AudioDeviceID, on inputNode: AVAudioInputNode) throws {
+        guard let unit = inputNode.audioUnit else {
+            throw NSError(domain: "MicrophoneAudioSource", code: 2004,
+                          userInfo: [NSLocalizedDescriptionKey: "Audio unit unavailable for device selection"])
+        }
+        var current = AudioDeviceID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        if AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+                                kAudioUnitScope_Global, 0, &current, &size) == noErr,
+           current == deviceID {
+            return
+        }
+        var mutableID = deviceID
+        let status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+                                          kAudioUnitScope_Global, 0, &mutableID,
+                                          UInt32(MemoryLayout<AudioDeviceID>.size))
+        guard status == noErr else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status),
+                          userInfo: [NSLocalizedDescriptionKey: "Failed to bind input audio device (\(status))"])
+        }
+    }
+    #endif
 }
 
 public final class FixtureAudioSource: @unchecked Sendable {
