@@ -87,6 +87,8 @@ export interface VoicePresetOption {
   kind: 'neural' | 'system';
 }
 
+type ZonosVoice = { id: string; label: string };
+
 const ANGEL_VOICE_OPTIONS: VoicePresetOption[] = [
   { id: 'F4', label: 'Supertonic F4 — Светлый женский (по умолч.)', kind: 'neural' },
   { id: 'F1', label: 'Supertonic F1 — Мягкий женский', kind: 'neural' },
@@ -216,6 +218,22 @@ export function ShouldersPanel({
   const [demonVoiceId, setDemonVoiceId] = useState<string>(() => {
     return localStorage.getItem('WimmStudioWeb.shouldersDemonVoice') || 'M5';
   });
+  const [useZonos, setUseZonos] = useState(
+    () => localStorage.getItem('WimmStudioWeb.shouldersUseZonos') === 'true'
+  );
+  const [zonosVoices, setZonosVoices] = useState<ZonosVoice[] | null>(null);
+  const [zonosAngelId, setZonosAngelId] = useState(
+    () => localStorage.getItem('WimmStudioWeb.shouldersZonosAngel') ?? ''
+  );
+  const [zonosDemonId, setZonosDemonId] = useState(
+    () => localStorage.getItem('WimmStudioWeb.shouldersZonosDemon') ?? ''
+  );
+  const [zonosCatalogError, setZonosCatalogError] = useState(false);
+  const [zonosSpeechError, setZonosSpeechError] = useState(false);
+  const effectiveZonosAngel = zonosVoices?.find((voice) => voice.id === zonosAngelId)?.id
+    ?? zonosVoices?.[0]?.id ?? '';
+  const effectiveZonosDemon = zonosVoices?.find((voice) => voice.id === zonosDemonId)?.id
+    ?? zonosVoices?.[1]?.id ?? effectiveZonosAngel;
   const [speedMultiplier, setSpeedMultiplier] = useState<number>(() => {
     const saved = Number(localStorage.getItem('WimmStudioWeb.shouldersSpeedMultiplier'));
     return Number.isFinite(saved) && saved >= 0.7 && saved <= 1.6 ? saved : 1.0;
@@ -273,7 +291,9 @@ export function ShouldersPanel({
   const autoListenTimerRef = useRef<number | null>(null);
   const speechGenRef = useRef<number>(0);
   const speechChainRef = useRef<Promise<void>>(Promise.resolve());
-  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const stopAudioRef = useRef<(() => void) | null>(null);
+  const zonosAbortRef = useRef<AbortController | null>(null);
+  const zonosRef = useRef({ enabled: useZonos, angel: effectiveZonosAngel, demon: effectiveZonosDemon });
   // Speech through Wimm Studio (its voice model stays loaded): which lines of which
   // turn it has started and finished, as reported on the voice stream.
   const studioVoiceSessionRef = useRef<string>(Math.random().toString(36).slice(2, 8));
@@ -313,12 +333,6 @@ export function ShouldersPanel({
   useEffect(() => {
     speaksAloudRef.current = speaksAloud;
     localStorage.setItem('WimmStudioWeb.shouldersSpeaksAloud', String(speaksAloud));
-    if (!speaksAloud && typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      activeUtterancesRef.current = 0;
-      setIsSpeaking(false);
-      setSpeakingLineIndex(null);
-    }
   }, [speaksAloud]);
 
   useEffect(() => {
@@ -355,6 +369,34 @@ export function ShouldersPanel({
   }, [demonVoiceId]);
 
   useEffect(() => {
+    zonosRef.current = { enabled: useZonos, angel: effectiveZonosAngel, demon: effectiveZonosDemon };
+  }, [useZonos, effectiveZonosAngel, effectiveZonosDemon]);
+
+  useEffect(() => {
+    localStorage.setItem('WimmStudioWeb.shouldersUseZonos', String(useZonos));
+    if (!useZonos) return;
+
+    const abort = new AbortController();
+    setZonosVoices(null);
+    setZonosCatalogError(false);
+    fetch('/api/shoulders/zonos/voices', { signal: abort.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error();
+        const { voices } = await response.json() as { voices: ZonosVoice[] };
+        if (!abort.signal.aborted) setZonosVoices(voices);
+      })
+      .catch(() => {
+        if (!abort.signal.aborted) setZonosCatalogError(true);
+      });
+    return () => abort.abort();
+  }, [useZonos]);
+
+  useEffect(() => {
+    localStorage.setItem('WimmStudioWeb.shouldersZonosAngel', zonosAngelId);
+    localStorage.setItem('WimmStudioWeb.shouldersZonosDemon', zonosDemonId);
+  }, [zonosAngelId, zonosDemonId]);
+
+  useEffect(() => {
     speedMultiplierRef.current = speedMultiplier;
     localStorage.setItem('WimmStudioWeb.shouldersSpeedMultiplier', String(speedMultiplier));
   }, [speedMultiplier]);
@@ -383,11 +425,9 @@ export function ShouldersPanel({
   const stopSpeaking = useCallback(() => {
     speechGenRef.current += 1;
     speechChainRef.current = Promise.resolve();
-    if (currentAudioRef.current) {
-      currentAudioRef.current.pause();
-      currentAudioRef.current.src = '';
-      currentAudioRef.current = null;
-    }
+    zonosAbortRef.current?.abort();
+    zonosAbortRef.current = null;
+    stopAudioRef.current?.();
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
@@ -407,6 +447,12 @@ export function ShouldersPanel({
     setIsSpeaking(false);
     setSpeakingLineIndex(null);
   }, []);
+
+  useEffect(() => {
+    if (!speaksAloud) stopSpeaking();
+  }, [speaksAloud, stopSpeaking]);
+
+  useEffect(() => () => stopSpeaking(), [stopSpeaking]);
 
   /** A voice event from Studio: a line started, the queue ran dry, or a line failed. */
   const handleStudioVoiceEvent = useCallback(
@@ -463,6 +509,9 @@ export function ShouldersPanel({
 
     const gen = speechGenRef.current;
     const chosenVoice = line.speaker === 'angel' ? angelVoiceRef.current : demonVoiceRef.current;
+    const zonos = zonosRef.current;
+    const zonosVoice = zonos[line.speaker];
+    const useStudioVoice = !zonos.enabled && chosenVoice !== 'SYSTEM';
     const mult = speedMultiplierRef.current;
     // +10% quicker base speed (Angel 1.15, Demon 1.21) * user multiplier
     const targetSpeed = (line.speaker === 'angel' ? 1.15 : 1.21) * mult;
@@ -473,7 +522,7 @@ export function ShouldersPanel({
     // An on-device Supertonic-3 voice (F1..F5, M1..M5) is read by Wimm Studio, which keeps the
     // model loaded. The line is handed over at once, so Studio prepares it while the previous plays.
     const studioTurn = `${studioVoiceSessionRef.current}-${gen}`;
-    if (chosenVoice !== 'SYSTEM' && studioVoiceRef.current.turn !== studioTurn) {
+    if (useStudioVoice && studioVoiceRef.current.turn !== studioTurn) {
       studioVoiceRef.current = {
         turn: studioTurn,
         maxStarted: -1,
@@ -482,9 +531,9 @@ export function ShouldersPanel({
       };
     }
     // Set before Studio answers: a stop that comes first must still reach it.
-    if (chosenVoice !== 'SYSTEM') studioVoiceUsedRef.current = true;
+    if (useStudioVoice) studioVoiceUsedRef.current = true;
     const studioPromise: Promise<boolean> =
-      chosenVoice !== 'SYSTEM' && !studioVoiceRef.current.fallback
+      useStudioVoice && !studioVoiceRef.current.fallback
         ? fetch('/api/shoulders/speak', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -508,26 +557,25 @@ export function ShouldersPanel({
             })
         : Promise.resolve(false);
 
-    // Studio did not answer (not running, or an older build): synthesize through the CLI instead.
-    const makeWav = (): Promise<string | null> =>
-      chosenVoice !== 'SYSTEM'
-        ? fetch('/api/shoulders/tts', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              text: cleanText,
-              voice: chosenVoice,
-              speed: targetSpeed,
-            }),
-          })
-            .then(async (r) => {
-              if (!r.ok) return null;
-              const blob = await r.blob();
-              return URL.createObjectURL(blob);
-            })
-            .catch(() => null)
-        : Promise.resolve(null);
-    const wavPromise: Promise<string | null> = studioPromise.then((viaStudio) =>
+    // Studio's fallback uses the CLI. Zonos requests run in playback order.
+    const makeWav = async (signal?: AbortSignal): Promise<Blob | null> => {
+      if (!zonosVoice && zonos.enabled) return null;
+      if (!zonos.enabled && !useStudioVoice) return null;
+      const endpoint = zonos.enabled ? '/api/shoulders/zonos/speech' : '/api/shoulders/tts';
+      return fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal,
+        body: JSON.stringify({
+          text: cleanText,
+          voice: zonos.enabled ? zonosVoice : chosenVoice,
+          speed: targetSpeed,
+        }),
+      })
+        .then((r) => r.ok ? r.blob() : null)
+        .catch(() => null);
+    };
+    const wavPromise = zonos.enabled ? null : studioPromise.then((viaStudio) =>
       viaStudio ? null : makeWav()
     );
 
@@ -556,16 +604,23 @@ export function ShouldersPanel({
         return;
       }
 
-      const blobUrl = await wavPromise;
-      if (speechGenRef.current !== gen) {
-        if (blobUrl) URL.revokeObjectURL(blobUrl);
-        return;
+      let blob: Blob | null;
+      if (zonos.enabled) {
+        const abort = new AbortController();
+        zonosAbortRef.current = abort;
+        blob = await makeWav(abort.signal);
+        if (zonosAbortRef.current === abort) zonosAbortRef.current = null;
+      } else {
+        blob = await wavPromise;
       }
+      if (speechGenRef.current !== gen) return;
+      if (zonos.enabled) setZonosSpeechError(!blob);
 
-      if (blobUrl) {
+      if (blob) {
+        const blobUrl = URL.createObjectURL(blob);
         await new Promise<void>((resolve) => {
           const audio = new Audio(blobUrl);
-          currentAudioRef.current = audio;
+          if (zonos.enabled) audio.playbackRate = targetSpeed;
           audio.onplay = () => {
             if (speechGenRef.current !== gen) return;
             setIsSpeaking(true);
@@ -573,13 +628,18 @@ export function ShouldersPanel({
             setHighestSpokenIndex((prev) => Math.max(prev, index));
           };
           const done = () => {
-            if (currentAudioRef.current === audio) {
-              currentAudioRef.current = null;
-            }
+            if (stopAudioRef.current !== stop) return;
+            stopAudioRef.current = null;
             URL.revokeObjectURL(blobUrl);
             finishOne();
             resolve();
           };
+          const stop = () => {
+            audio.pause();
+            audio.removeAttribute('src');
+            done();
+          };
+          stopAudioRef.current = stop;
           audio.onended = done;
           audio.onerror = done;
           audio.play().catch(done);
@@ -1493,6 +1553,28 @@ export function ShouldersPanel({
           </div>
 
           <div className="space-y-2 border-t border-zinc-800 pt-2.5">
+            <label className="block font-semibold text-zinc-200">
+              Озвучка
+              <select
+                value={useZonos ? 'zonos' : 'studio'}
+                onChange={(e) => {
+                  stopSpeaking();
+                  setZonosSpeechError(false);
+                  setUseZonos(e.target.value === 'zonos');
+                }}
+                className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-xs font-normal text-zinc-100 focus:border-amber-500 focus:outline-none"
+              >
+                <option value="studio">Supertonic‑3 / системная</option>
+                <option value="zonos">ZONOS3‑Mini</option>
+              </select>
+            </label>
+            {useZonos && !zonosVoices?.length && (
+              <p role="status" className="text-[11px] text-zinc-400">
+                {zonosCatalogError
+                  ? 'Сервер ZONOS3‑Mini недоступен (127.0.0.1:1919).'
+                  : zonosVoices ? 'На сервере ZONOS3‑Mini нет голосов.' : 'Загружаем голоса ZONOS3‑Mini…'}
+              </p>
+            )}
             <div>
               <div className="mb-1 flex items-center justify-between">
                 <label htmlFor={angelVoiceSelectId} className="font-semibold text-amber-200">
@@ -1500,6 +1582,7 @@ export function ShouldersPanel({
                 </label>
                 <button
                   type="button"
+                  disabled={useZonos && !effectiveZonosAngel}
                   onClick={() =>
                     speakLine(
                       { speaker: 'angel', text: 'Помнишь, ты сам себе это обещал?' },
@@ -1507,18 +1590,19 @@ export function ShouldersPanel({
                       true
                     )
                   }
-                  className="text-[10px] text-amber-300 underline hover:text-amber-100"
+                  className="text-[10px] text-amber-300 underline hover:text-amber-100 disabled:opacity-50"
                 >
                   Прослушать
                 </button>
               </div>
               <select
                 id={angelVoiceSelectId}
-                value={angelVoiceId}
-                onChange={(e) => setAngelVoiceId(e.target.value)}
+                value={useZonos ? effectiveZonosAngel : angelVoiceId}
+                disabled={useZonos && !effectiveZonosAngel}
+                onChange={(e) => useZonos ? setZonosAngelId(e.target.value) : setAngelVoiceId(e.target.value)}
                 className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none"
               >
-                {ANGEL_VOICE_OPTIONS.map((v) => (
+                {(useZonos ? zonosVoices ?? [] : ANGEL_VOICE_OPTIONS).map((v) => (
                   <option key={v.id} value={v.id}>
                     {v.label}
                   </option>
@@ -1533,6 +1617,7 @@ export function ShouldersPanel({
                 </label>
                 <button
                   type="button"
+                  disabled={useZonos && !effectiveZonosDemon}
                   onClick={() =>
                     speakLine(
                       { speaker: 'demon', text: 'Да ладно тебе, кто вообще об этом узнает?' },
@@ -1540,18 +1625,19 @@ export function ShouldersPanel({
                       true
                     )
                   }
-                  className="text-[10px] text-red-300 underline hover:text-red-100"
+                  className="text-[10px] text-red-300 underline hover:text-red-100 disabled:opacity-50"
                 >
                   Прослушать
                 </button>
               </div>
               <select
                 id={demonVoiceSelectId}
-                value={demonVoiceId}
-                onChange={(e) => setDemonVoiceId(e.target.value)}
+                value={useZonos ? effectiveZonosDemon : demonVoiceId}
+                disabled={useZonos && !effectiveZonosDemon}
+                onChange={(e) => useZonos ? setZonosDemonId(e.target.value) : setDemonVoiceId(e.target.value)}
                 className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-2.5 py-1.5 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none"
               >
-                {DEMON_VOICE_OPTIONS.map((v) => (
+                {(useZonos ? zonosVoices ?? [] : DEMON_VOICE_OPTIONS).map((v) => (
                   <option key={v.id} value={v.id}>
                     {v.label}
                   </option>
@@ -1822,6 +1908,12 @@ export function ShouldersPanel({
             </button>
           )}
         </div>
+      )}
+
+      {useZonos && zonosSpeechError && (
+        <p role="status" className="border-b border-amber-500/30 px-3.5 py-2 text-xs text-amber-200">
+          ZONOS3‑Mini не озвучил реплику. Используется голос браузера, если он доступен.
+        </p>
       )}
 
       {/* 4. Main Dialogue Viewport (80% of panel height) */}
