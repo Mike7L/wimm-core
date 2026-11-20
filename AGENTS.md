@@ -125,8 +125,9 @@ reasons behind the rules are in `docs/` (index: `docs/README.md`).
   sidecar.
 - Repairs/audits (`audit-transcripts`, OCR, backfills) are read-only or
   dry-run by default; any write is a separate decision via `mutateSidecar`.
-- Development and tests use test data only: never open a real note library
-  or a real `_ME` workspace from this repository's tooling.
+- Agents may read the real note library and the real `_ME` document when the
+  work needs it (read-only; a write there is a separate user decision). Tests
+  and fixtures still use test data only.
 
 ## Privacy
 
@@ -193,7 +194,10 @@ bookkeeping.
   Antigravity) are offered to the secretary like any other note; do not
   filter them out of passes. One exception: a journal rewritten less than an
   hour ago waits (`SessionJournal.isStillChanging`), but still counts as
-  pending for the boundary. Held or punctuation-only notes may not pin the
+  pending for the boundary. Scripted model runs are not chats and are never
+  imported: a log started under `secretary/runs/`, or one whose first user
+  message is one whole JSON object (`SessionJournal.isScriptedPrompt`, e.g. a
+  packet replayed with `claude -p`). Held or punctuation-only notes may not pin the
   pass boundary: the planner counts only what preparation offers
   (`NoteFingerprint.needsPass`).
 - The secretary-pass skill leaves all bookkeeping to Wimm (`prepare` → `read`

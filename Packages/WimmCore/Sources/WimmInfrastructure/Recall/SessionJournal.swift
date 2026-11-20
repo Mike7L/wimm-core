@@ -25,6 +25,17 @@ public enum SessionJournal {
         return nil
     }
 
+    /// A chat whose first user message is one whole JSON object is a script feeding a model
+    /// (a secretary packet replayed with `claude -p`, a benchmark case), not a conversation, and
+    /// the importer skips it. The `/secretary/runs/` working-directory rule misses replays started
+    /// elsewhere: 124 such journals (8 MB) reached the secretary, five of them on 2026-11-20 at a
+    /// paid single-source pass each (~$0.50), every one judged noise.
+    public static func isScriptedPrompt(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("{"), trimmed.hasSuffix("}") else { return false }
+        return (try? JSONSerialization.jsonObject(with: Data(trimmed.utf8))) is [String: Any]
+    }
+
     /// The first KB of a `.txt` note, enough for the header.
     public static func header(of file: URL) -> String? {
         guard file.pathExtension.lowercased() == "txt", let handle = try? FileHandle(forReadingFrom: file) else { return nil }

@@ -146,4 +146,33 @@ final class StudioSessionImportTests: XCTestCase {
         let anti = try XCTUnwrap(bodies.first { $0.contains("Anti question") })
         XCTAssertTrue(anti.contains("Anti answer"))
     }
+
+    func testSkipsScriptedRunsWhoseFirstPromptIsAJSONObject() async throws {
+        let fm = FileManager.default
+        let home = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: home) }
+        // A packet replay started outside the workspace: only its first prompt gives it away.
+        let claude = home.appendingPathComponent(".claude/projects/-tmp-scratchpad-ab")
+        let recordings = home.appendingPathComponent("Recordings")
+        for directory in [claude, recordings] { try fm.createDirectory(at: directory, withIntermediateDirectories: true) }
+        let packet = #"{\"as_of\":\"2026-11-19T17:44:43+01:00\",\"document_blocks\":[{\"id\":\"b0\",\"text\":\"Документ\"}],\"sources\":[]}"#
+        let replay = claude.appendingPathComponent("\(UUID()).jsonl")
+        try Data("""
+        {"type":"user","cwd":"/tmp/scratchpad/ab","timestamp":"2026-11-19T17:44:43Z","message":{"role":"user","content":"\(packet)"}}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"{\\"edits\\":[]}"}]}}
+        """.utf8).write(to: replay)
+        // A chat that only mentions JSON is still a chat.
+        let chat = claude.appendingPathComponent("\(UUID()).jsonl")
+        try Data("""
+        {"type":"user","timestamp":"2026-11-19T18:00:00Z","message":{"role":"user","content":"{ это не JSON, а мысль в скобках }"}}
+        {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Понял"}]}}
+        """.utf8).write(to: chat)
+        let old = Date().addingTimeInterval(-7200)
+        for url in [replay, chat] { try fm.setAttributes([.modificationDate: old], ofItemAtPath: url.path) }
+
+        let files = await StudioSessionImport(home: home, recordings: recordings).run()
+        XCTAssertEqual(files.count, 1)
+        let body = try String(contentsOf: XCTUnwrap(files.first), encoding: .utf8)
+        XCTAssertTrue(body.contains("мысль в скобках"))
+    }
 }

@@ -132,3 +132,24 @@ test('open section whose cleaned prose exceeds OPEN_SECTION_LIMIT falls back to 
     assert.ok(!result.dossier.includes('Уникальный маркер подраздела.'));
   });
 });
+
+test('plainDossierText drops what is never spoken: images, linked marks, addresses, embedded data', () => {
+  const blob = 'A'.repeat(5000);
+  const cleaned = plainDossierText(
+    [
+      `Утром был в мастерской ![фото](data:image/png;base64,${blob}) и вернулся.`,
+      'Сказал это дважды [S12](note://Wimm_2026-01-01_10-00-00.m4a), потом [письмо](https://example.com/a/b?c=d).',
+      'Адрес https://example.com/long/path и <img src="x.png" alt="y"> в тексте.',
+      `Хвост ${blob} конец.`,
+    ].join('\n'),
+  );
+  assert.equal(
+    cleaned,
+    [
+      'Утром был в мастерской и вернулся.',
+      'Сказал это дважды, потом письмо.',
+      'Адрес и в тексте.',
+      'Хвост конец.',
+    ].join('\n'),
+  );
+});

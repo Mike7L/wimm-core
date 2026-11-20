@@ -219,7 +219,11 @@ actor StudioSessionImport {
             ]
             guard !cleaned.isEmpty, !servicePrefixes.contains(where: { cleaned.hasPrefix($0) }) else { return true }
             if date == nil { date = parseDate(row["timestamp"]) }
-            if role == "user", firstPrompt == nil { firstPrompt = cleaned }
+            if role == "user", firstPrompt == nil {
+                // A scripted model run, not a chat; stop before reading the rest of its log.
+                if SessionJournal.isScriptedPrompt(cleaned) { return false }
+                firstPrompt = cleaned
+            }
             dialogue.append("## \(role == "user" ? "Пользователь" : source.rawValue)\n\n\(cleaned)")
             return true
         }
@@ -291,7 +295,10 @@ actor StudioSessionImport {
             if date == nil, let seconds = fields.message(5)?.message(1)?.varint(1), seconds > 0 {
                 date = Date(timeIntervalSince1970: TimeInterval(seconds))
             }
-            if isUser, firstPrompt == nil { firstPrompt = text }
+            if isUser, firstPrompt == nil {
+                if SessionJournal.isScriptedPrompt(text) { return nil }
+                firstPrompt = text
+            }
             dialogue.append("## \(isUser ? "Пользователь" : Source.antigravity.rawValue)\n\n\(text)")
         }
         guard let firstPrompt, let date else { return nil }

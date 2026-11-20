@@ -374,13 +374,24 @@ function stripReferenceDefinitions(md: string): string {
   return out.join('\n');
 }
 
+/** A run without a space this long is data (base64, an address), not a word. */
+const UNSPEAKABLE_RUN = 200;
+
 /** Text for the model's ear: no source marks, anchors or link targets. */
 export function plainDossierText(md: string): string {
   return stripReferenceDefinitions(md)
     .replace(/^<a\s+id="[^"]+"\s*><\/a>\s*$/gm, '')
     .replace(/\s*→\s*\[[^\]]+\]\(#[^)]+\)/g, '')
+    // Nothing below is ever spoken, and it was ~90% of a 116K-token turn (2026-11-20):
+    // images, linked source marks, link targets, bare addresses, embedded data.
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/<img\b[^>]*>/gi, '')
+    .replace(/\[[A-Z]+\d+\]\([^)]*\)/g, '')
     .replace(/(?<!!)\[([A-Z]+\d+)\](?![(:])/g, '')
-    .replace(/\[([^\]]+)\]\(#[^)]+\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/<?\bhttps?:\/\/[^\s>)]+>?/gi, '')
+    .replace(new RegExp(`\\S{${UNSPEAKABLE_RUN},}`, 'g'), '')
+    .replace(/(\S) {2,}(?=\S)/g, '$1 ')
     .replace(/[ \t]+([.,;:])/g, '$1')
     .replace(/[ \t]+$/gm, '')
     .replace(/^---+\s*$/gm, '')
