@@ -98,4 +98,79 @@ final class RecordingAudioSessionTests: XCTestCase {
         XCTAssertEqual(value["transport"] as? String, "BluetoothHFP")
         XCTAssertEqual(value["reason"] as? String, "newDeviceAvailable")
     }
+
+    @MainActor
+    func testStartCaptureRetryingSucceedsAfterTransientRefusalsWithFreshRecorders() async throws {
+        var createdIDs: [Int] = []
+        var cleanedIDs: [Int] = []
+        var retriedAttempts: [Int] = []
+        var sleptDelays: [TimeInterval] = []
+        var nextID = 0
+
+        let result = try await IOSAudioRecorder.startCaptureRetrying(
+            sleep: { delay in sleptDelays.append(delay) },
+            makeRecorder: {
+                nextID += 1
+                createdIDs.append(nextID)
+                return nextID
+            },
+            start: { recorderID in recorderID >= 4 },
+            cleanup: { recorderID in cleanedIDs.append(recorderID) },
+            onRetry: { attempt in retriedAttempts.append(attempt) }
+        )
+
+        XCTAssertEqual(result?.recorder, 4)
+        XCTAssertEqual(result?.attempts, 4)
+        XCTAssertEqual(createdIDs, [1, 2, 3, 4])
+        XCTAssertEqual(cleanedIDs, [1, 2, 3])
+        XCTAssertEqual(retriedAttempts, [1, 2, 3])
+        XCTAssertEqual(sleptDelays, [0.25, 0.25, 0.25])
+    }
+
+    @MainActor
+    func testStartCaptureRetryingReturnsNilAfterExhausting3SecondWindow() async throws {
+        var createdIDs: [Int] = []
+        var cleanedIDs: [Int] = []
+        var sleptDelays: [TimeInterval] = []
+        var nextID = 0
+
+        let result = try await IOSAudioRecorder.startCaptureRetrying(
+            sleep: { delay in sleptDelays.append(delay) },
+            makeRecorder: {
+                nextID += 1
+                createdIDs.append(nextID)
+                return nextID
+            },
+            start: { _ in false },
+            cleanup: { recorderID in cleanedIDs.append(recorderID) }
+        )
+
+        XCTAssertNil(result)
+        XCTAssertEqual(createdIDs.count, 1 + IOSAudioRecorder.startRetryCount)
+        XCTAssertEqual(cleanedIDs, createdIDs)
+        XCTAssertEqual(sleptDelays.count, IOSAudioRecorder.startRetryCount)
+        XCTAssertEqual(sleptDelays.reduce(0, +), 3.0, accuracy: 0.001)
+    }
+
+    @MainActor
+    func testStartCaptureRetryingStopsImmediatelyOnCancellation() async throws {
+        var createdIDs: [Int] = []
+        var cleanedIDs: [Int] = []
+        var nextID = 0
+
+        let result = try await IOSAudioRecorder.startCaptureRetrying(
+            sleep: { _ in throw CancellationError() },
+            makeRecorder: {
+                nextID += 1
+                createdIDs.append(nextID)
+                return nextID
+            },
+            start: { _ in false },
+            cleanup: { recorderID in cleanedIDs.append(recorderID) }
+        )
+
+        XCTAssertNil(result)
+        XCTAssertEqual(createdIDs, [1])
+        XCTAssertEqual(cleanedIDs, [1])
+    }
 }

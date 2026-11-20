@@ -27,6 +27,7 @@ class IOSAudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
     @Published private(set) var heartRateBPM: Int?
     
     private var audioRecorder: AVAudioRecorder?
+    private var isStarting = false
     private var levelTimer: Timer?
     private var streamingTranscriber: IOSStreamingTranscriber?
     private var transcriptionMonitorTask: Task<Void, Never>?
@@ -103,7 +104,9 @@ class IOSAudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
     /// kept a "running" note whose file never got a single packet).
     @discardableResult
     func startRecording() async -> Bool {
-        guard !isRecording else { return true }
+        guard !isRecording, !isStarting else { return isRecording }
+        isStarting = true
+        defer { isStarting = false }
         
         // Request microphone permission
         let permissionGranted = await AVAudioApplication.requestRecordPermission()
@@ -154,16 +157,36 @@ class IOSAudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
         ]
         
         do {
-            let recorder = try AVAudioRecorder(url: url, settings: settings)
-            audioRecorder = recorder
-            recorder.delegate = self
-            recorder.isMeteringEnabled = true
-            guard await Self.startCapture(recorder) else {
+            guard let started = try await Self.startCaptureRetrying(
+                makeRecorder: {
+                    let recorder = try AVAudioRecorder(url: url, settings: settings)
+                    recorder.delegate = self
+                    recorder.isMeteringEnabled = true
+                    recorder.prepareToRecord()
+                    return recorder
+                },
+                start: { $0.record() },
+                cleanup: {
+                    if !$0.isRecording, $0.currentTime == 0 {
+                        $0.deleteRecording()
+                    }
+                },
+                onRetry: { attempt in
+                    if attempt == 1 {
+                        log("[IOSRecording] record() refused, retrying for up to 3.0s input=\(RecordingAudioSession.currentInputDescription())")
+                    }
+                    RecordingAudioSession.reapplyPreferredInput()
+                }
+            ) else {
                 throw NSError(
                     domain: "WimmiOS",
                     code: -1,
                     userInfo: [NSLocalizedDescriptionKey: "Failed to start recording"]
                 )
+            }
+            audioRecorder = started.recorder
+            if started.attempts > 1 {
+                log("[IOSRecording] record() started on attempt \(started.attempts) input=\(RecordingAudioSession.currentInputDescription())")
             }
             identity.persist(for: url)
             NoteOrigin.stamp(url)
@@ -213,13 +236,43 @@ class IOSAudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
         }
     }
 
-    /// `record()` can refuse right after the session (re)activates while iOS
-    /// is still building the route; one short retry covers that.
-    private static func startCapture(_ recorder: AVAudioRecorder) async -> Bool {
-        if recorder.record() { return true }
-        log("[IOSRecording] record() refused, retrying once")
-        try? await Task.sleep(nanoseconds: 300_000_000)
-        return recorder.record()
+    nonisolated static let startRetryInterval: TimeInterval = 0.25
+    nonisolated static let startRetryCount = 12
+    nonisolated static var startRetryDelays: [TimeInterval] {
+        Array(repeating: startRetryInterval, count: startRetryCount)
+    }
+
+    /// `record()` can refuse right after the session activates while iOS is
+    /// still building a Bluetooth HFP route; recreate the recorder across a
+    /// bounded 3 s window without tearing down the audio session.
+    static func startCaptureRetrying<Recorder>(
+        retryDelays: [TimeInterval] = startRetryDelays,
+        sleep: (TimeInterval) async throws -> Void = { seconds in
+            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        },
+        makeRecorder: () throws -> Recorder,
+        start: (Recorder) -> Bool,
+        cleanup: (Recorder) -> Void,
+        onRetry: ((Int) -> Void)? = nil
+    ) async throws -> (recorder: Recorder, attempts: Int)? {
+        let initial = try makeRecorder()
+        if start(initial) { return (initial, 1) }
+        cleanup(initial)
+
+        for (index, delay) in retryDelays.enumerated() {
+            let failedAttempt = index + 1
+            onRetry?(failedAttempt)
+            do {
+                try await sleep(delay)
+            } catch is CancellationError {
+                return nil
+            }
+            if Task.isCancelled { return nil }
+            let recorder = try makeRecorder()
+            if start(recorder) { return (recorder, failedAttempt + 1) }
+            cleanup(recorder)
+        }
+        return nil
     }
 
     /// A start that never recorded: drop its header-only file (it holds no
