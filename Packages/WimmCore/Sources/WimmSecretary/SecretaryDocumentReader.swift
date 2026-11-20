@@ -22,6 +22,10 @@ public enum SecretaryDocumentReader {
         public let id: String
         public let section: String
         public let text: String
+        /// Every heading above the block, outermost first ("## Деньги › ### С Владой"), in
+        /// search and block reads, where a block arrives without its chapter. A diary entry
+        /// that starts "**10 августа.**" names neither the year nor the person; the path does.
+        public var path: String? = nil
     }
 
     public struct SectionRead: Codable, Sendable {
@@ -83,6 +87,9 @@ public enum SecretaryDocumentReader {
         private let all: [SecretaryPacket.Block]
         private let parsed: [SecretaryPacket.BlockIndex.Heading?]
         private let definitions: [Bool]
+        /// `Block.path` for every block; a heading's path ends with its parent.
+        private let paths: [String]
+        private let positions: [String: Int]
         private let lock = NSLock()
         private var index: SecretaryPacket.BlockIndex?
 
@@ -90,6 +97,23 @@ public enum SecretaryDocumentReader {
             all = SecretaryPacket.blocks(document)
             parsed = all.map { SecretaryPacket.heading($0.text) }
             definitions = all.map { SecretaryPacket.isDefinition($0.text) }
+            var chain: [(depth: Int, line: String)] = [], above = ""
+            paths = parsed.map { heading in
+                guard let heading else { return above }
+                while let last = chain.last, last.depth >= heading.depth { chain.removeLast() }
+                let path = chain.map(\.line).joined(separator: " › ")
+                chain.append((heading.depth, String(heading.line.prefix(200))))
+                above = chain.map(\.line).joined(separator: " › ")
+                return path
+            }
+            positions = Dictionary(all.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+        }
+
+        /// A block as search and block reads return it: with the path of headings above.
+        private func located(_ b: SecretaryPacket.Block) -> Block {
+            var block = SecretaryDocumentReader.block(b)
+            if let i = positions[b.id], !paths[i].isEmpty { block.path = paths[i] }
+            return block
         }
 
         public var blockCount: Int { all.count }
@@ -129,13 +153,13 @@ public enum SecretaryDocumentReader {
         public func find(query: String, byteLimit: Int = 24_000) -> FindRead {
             let selection = SecretaryPacket.contextSelection(index: searchIndex(), requests: [query], existing: [], limit: byteLimit)
             let report = selection.reports.first
-            return FindRead(status: report?.status ?? "not_found", blocks: selection.blocks.map(SecretaryDocumentReader.block),
+            return FindRead(status: report?.status ?? "not_found", blocks: selection.blocks.map(located),
                             omittedForBudget: report?.omittedForBudget ?? [], unmatchedTerms: report?.unmatchedTerms ?? [])
         }
 
         public func find(queries: [String], byteLimit: Int = 24_000) -> MultiFindRead {
             let selection = SecretaryPacket.contextSelection(index: searchIndex(), requests: queries, existing: [], limit: byteLimit)
-            return MultiFindRead(blocks: selection.blocks.map(SecretaryDocumentReader.block), reports: selection.reports.map {
+            return MultiFindRead(blocks: selection.blocks.map(located), reports: selection.reports.map {
                 .init(query: $0.request, status: $0.status, omittedForBudget: $0.omittedForBudget, unmatchedTerms: $0.unmatchedTerms)
             })
         }
@@ -143,7 +167,7 @@ public enum SecretaryDocumentReader {
         public func blocks(ids: [String]) -> [Block] {
             let selected = Set(ids)
             return all.indices.filter { selected.contains(all[$0].id) && !definitions[$0] }
-                .map { SecretaryDocumentReader.block(all[$0]) }
+                .map { located(all[$0]) }
         }
 
         private func searchIndex() -> SecretaryPacket.BlockIndex {

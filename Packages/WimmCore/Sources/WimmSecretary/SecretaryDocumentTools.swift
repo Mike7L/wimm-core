@@ -17,7 +17,12 @@ public enum SecretaryDocumentTools {
         sections in one call), document_find (one or several searches in one call) and \
         document_blocks. Ask for everything you need in one call rather than one call \
         per section. Block IDs belong to one document version: pass the returned \
-        `version` back to detect a document that changed in between.
+        `version` back to detect a document that changed in between. Search with the \
+        rare words of the topic (names, places, amounts) rather than whole questions; a \
+        found block carries `path`, the headings above it, which give the year and the \
+        topic its first line leaves out. Answer from block text: quote it and keep its \
+        source links ([S…]). A summary chapter is true as of the date in its heading, and \
+        a chapter that calls itself a model's opinion is not evidence.
         """
 
     static let maxBytes = 120_000
@@ -71,7 +76,7 @@ public enum SecretaryDocumentTools {
                 return Sections(sections: reads, notRead: notRead)
             },
             tool("document_find",
-                 "Search the personal document: up to 5 literal phrases or word sets in one call (a `;` inside a query separates alternatives). Returns matching blocks with their headings under one shared limit_bytes, round-robin across queries, and per query a status (matched / partial / not_found), the block IDs left out for budget and the words that occur nowhere. Lexical only: no match does not prove the topic is absent.",
+                 "Search the personal document: up to 5 literal phrases or word sets in one call (a `;` inside a query separates alternatives). Picks the best matches first (rare words weigh more) and returns them in document order, each with its heading and `path` (all headings above it), under one shared limit_bytes, round-robin across queries, and per query a status (matched / partial / not_found), the block IDs left out for budget and the words that occur nowhere. Lexical only: no match does not prove the topic is absent.",
                  ["queries": ["type": "array", "items": ["type": "string"], "minItems": 1, "maxItems": 5],
                   "limit_bytes": limit], required: ["queries"]) { loaded, arguments in
                 let queries = strings(arguments["queries"]).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -81,7 +86,7 @@ public enum SecretaryDocumentTools {
                 return loaded.snapshot.find(queries: queries, byteLimit: bytes(arguments["limit_bytes"]))
             },
             tool("document_blocks",
-                 "Read exact blocks of the personal document by ID (from an outline, a section or omitted_for_budget), up to 50.",
+                 "Read exact blocks of the personal document by ID (from an outline, a section or omitted_for_budget), up to 50, each with `path` (the headings above it).",
                  ["ids": ["type": "array", "items": ["type": "string"], "minItems": 1, "maxItems": 50]], required: ["ids"]) { loaded, arguments in
                 let ids = strings(arguments["ids"])
                 guard (1...50).contains(ids.count) else { throw MCPRecallServer.ToolError("ids must list 1 to 50 block IDs") }

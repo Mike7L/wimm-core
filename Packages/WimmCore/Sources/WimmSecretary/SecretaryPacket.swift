@@ -724,10 +724,17 @@ struct SecretaryPacket {
         /// Word → blocks (citation definitions excluded) that contain it, and its words.
         let postings: [String: [Int]]
         let vocabulary: [String]
+        /// Words of the headings above each block (its chapter, topic, period), not of
+        /// the block's own heading line. A diary entry says "**Март.**" and leaves the
+        /// year and the person to its headings; these words let it rank for them.
+        let pathTerms: [Set<String>]
+        /// Blocks that can match a query: every block but citation definitions.
+        let searchable: Int
 
         init(_ blocks: [Block], headings: [Heading?]? = nil, definitions: [Bool]? = nil) {
             self.blocks = blocks
-            self.headings = headings ?? blocks.map { SecretaryPacket.heading($0.text) }
+            let headings = headings ?? blocks.map { SecretaryPacket.heading($0.text) }
+            self.headings = headings
             let definitions = definitions ?? blocks.map { SecretaryPacket.isDefinition($0.text) }
             self.definitions = definitions
             citations = blocks.map { SecretaryPacket.contextIDs($0.text) }
@@ -739,7 +746,20 @@ struct SecretaryPacket {
             }
             self.postings = postings
             vocabulary = Array(postings.keys)
+            searchable = definitions.filter { !$0 }.count
+            var chain: [(depth: Int, terms: Set<String>)] = [], above = Set<String>()
+            pathTerms = headings.map { heading in
+                guard let heading else { return above }
+                while let last = chain.last, last.depth >= heading.depth { chain.removeLast() }
+                let path = chain.reduce(into: Set<String>()) { $0.formUnion($1.terms) }
+                chain.append((heading.depth, SecretaryPacket.terms(heading.title)))
+                above = chain.reduce(into: Set<String>()) { $0.formUnion($1.terms) }
+                return path
+            }
         }
+
+        /// How much a query word tells: rare words more than common ones (IDF).
+        func weight(matchingBlocks count: Int) -> Double { log(1 + Double(searchable) / Double(1 + count)) }
 
         /// Blocks with a word that starts with `stem`.
         func blocks(startingWith stem: String) -> Set<Int> {
@@ -822,14 +842,26 @@ struct SecretaryPacket {
                 var ranked: [(Int, Int)] = []
                 let needle = lower.trimmingCharacters(in: .whitespacesAndNewlines)
                 let needleBytes = plainNeedle(needle)
-                let queryBlocks = query.map(matching)
+                let stems = Array(query)
+                let queryBlocks = stems.map(matching)
+                let weights = queryBlocks.map { index.weight(matchingBlocks: $0.count) }
+                let totalWeight = max(weights.reduce(0, +), .leastNonzeroMagnitude)
                 for i in blocks.indices where !definitions[i] {
                     let citation = !citations[i].isDisjoint(with: ids)
-                    let hits = queryBlocks.filter { $0.contains(i) }.count
                     let exact: Bool
                     if let needleBytes, plain[i] { exact = containsBytes(lowered[i], needleBytes) }
                     else { exact = lowered[i].contains(needle) }
-                    let score = (citation ? 1200 : 0) + (sections.contains(i) ? 800 : 0) + (exact ? 1000 : 0) + min(100, hits * 10)
+                    // The words' share, 1...100, stays under the coarse classes. Rare words count
+                    // more; a word found only in the headings above the block counts half, and
+                    // only once the block itself matches a word. Measured on a real diary
+                    // (owner's `_ME/secretary/eval`): more answers inside a small byte budget.
+                    var own = 0.0, inPath = 0.0
+                    for (k, found) in queryBlocks.enumerated() {
+                        if found.contains(i) { own += weights[k] }
+                        else if index.pathTerms[i].contains(where: { $0.hasPrefix(stems[k]) }) { inPath += weights[k] }
+                    }
+                    let words = own > 0 ? 1 + Int((99 * min(1, (own + inPath / 2) / totalWeight)).rounded()) : 0
+                    let score = (citation ? 1200 : 0) + (sections.contains(i) ? 800 : 0) + (exact ? 1000 : 0) + words
                     if score > 0 { ranked.append((i, score)); matched[requestIndex].insert(i) }
                 }
                 ranked.sort { $0.1 == $1.1 ? $0.0 < $1.0 : $0.1 > $1.1 }

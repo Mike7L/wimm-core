@@ -48,3 +48,20 @@ Add a vector index only after a separately evaluated semantic-recall use case
 shows materially better answer quality than literal search. Any future index
 must be disposable and fully rebuildable from note sidecars; it must never
 become a second source of truth.
+
+## Document search ranking (2026-11-21)
+
+Still a linear scan with no stored index. Within it, `SecretaryPacket.contextSelection`
+(used by `document_find`, `wimm-cli doc find` and the secretary's context search) now
+orders blocks inside the same coarse class (citation / section / exact phrase) by the
+query words' IDF share instead of a plain word count, and a word found only in the
+headings above a block counts half once the block itself matches a word. Search and
+block reads also return `path`, every heading above the block, because a diary entry
+("**March.**") leaves the year and the person to its headings.
+
+Measured on the owner's real document (outside this repository: `_ME/secretary/eval`,
+60 questions written as an agent would query, 20 of them held out before tuning): share
+of questions whose answer block is returned at a 3 / 6 / 12 KB budget went from
+34 / 35 / 36 to 34 / 36 / 38 of 40 on the tuning set and from 13 / 15 / 17 to
+15 / 18 / 19 of 20 on the held-out set. Shorter query stems for 4–5 letter words were
+tried and gave nothing on the held-out set, so they were not adopted.

@@ -36,7 +36,11 @@ final class SecretaryDocumentReaderTests: XCTestCase {
         let section = SecretaryDocumentReader.section(document: document, query: "Работа")
         let ids = section.blocks.map(\.id)
         let read = SecretaryDocumentReader.blocks(document: document, ids: ids + ["b999999"])
-        XCTAssertEqual(read, section.blocks)
+        XCTAssertEqual(read.map(\.id), section.blocks.map(\.id))
+        XCTAssertEqual(read.map(\.text), section.blocks.map(\.text))
+        XCTAssertEqual(read.last?.path, "# Личный документ › ## Работа › ### Поиск работы",
+                       "a block read by ID carries the headings above it")
+        XCTAssertNil(section.blocks.last?.path, "a section read already carries its heading")
         XCTAssertFalse(SecretaryDocumentReader.blocks(document: document, ids: (1...100).map { "b\($0)" })
             .contains { $0.text.hasPrefix("[S1]:") })
     }
@@ -91,5 +95,55 @@ final class SecretaryDocumentReaderTests: XCTestCase {
         let read = SecretaryDocumentReader.find(document: document, query: "балет")
         XCTAssertTrue(read.blocks.map(\.text).joined().contains("Варвара любит балет"))
         XCTAssertFalse(read.blocks.map(\.text).joined().contains("recordings/a.m4a"))
+    }
+
+    func testFoundBlockCarriesHeadingPath() {
+        let diary = """
+        ## Деньги
+
+        ### С Варварой
+
+        **10 августа.** Остаток 300 €.
+        """
+        let found = SecretaryDocumentReader.find(document: diary, query: "остаток").blocks
+        let entry = found.first { $0.text.contains("Остаток") }
+        XCTAssertEqual(entry?.section, "### С Варварой")
+        XCTAssertEqual(entry?.path, "## Деньги › ### С Варварой")
+        XCTAssertEqual(found.first { $0.text.hasPrefix("## Деньги") }?.path, nil, "a top heading has nothing above it")
+    }
+
+    /// A byte budget for one entry and its heading (headings here are under 40 bytes):
+    /// which entry wins decides what an agent sees.
+    private func winner(_ document: String, _ query: String, among candidates: [String]) -> String? {
+        let budget = 40 + candidates.map(\.utf8.count).max()!
+        let text = SecretaryDocumentReader.find(document: document, query: query, byteLimit: budget).blocks.map(\.text).joined()
+        let won = candidates.filter { text.contains($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        return won.count == 1 ? won[0] : nil
+    }
+
+    func testRareWordOutranksCommonWordAtEqualCount() {
+        let common = ["Киоск открыт утром.", "Киоск закрыт днём.", "Киоск пустой вечером."]
+        let rare = "Паром ушёл в шесть."
+        let document = "## Остров\n\n" + (common + [rare]).map { $0 + "\n\n" }.joined()
+        XCTAssertEqual(winner(document, "киоск паром", among: common + [rare]), rare,
+                       "both match one query word; the word in one entry tells more than the word in three")
+    }
+
+    func testHeadingWordsAboveEntryBreakTies() {
+        let anton = "**Июль.** Остаток 50 €."
+        let varvara = "**Август.** Остаток 300 €."
+        let document = """
+        ## Остров
+
+        ### С Антоном
+
+        \(anton)
+
+        ### С Варварой
+
+        \(varvara)
+        """
+        XCTAssertEqual(winner(document, "варвара остаток", among: [anton, varvara]), varvara,
+                       "the person is named only in the heading above the entry")
     }
 }
