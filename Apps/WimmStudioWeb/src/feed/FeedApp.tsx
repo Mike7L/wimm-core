@@ -316,6 +316,16 @@ export function FeedApp({ embedded = false, onOpenBlock, onOpenSource, onNavigat
       },
     });
 
+  /** One tap on an answer option: the same answer note, naming the option. */
+  const pickOption = async (q: InboxQuestion, key: string) => {
+    try {
+      const { noteText } = await postJson<{ noteText: string }>('/api/inbox/answer', { number: q.number, option: key });
+      setAnswered((m) => new Map(m).set(q.number, noteText));
+    } catch (e: any) {
+      say(e?.message || 'Ответ не сохранён');
+    }
+  };
+
   const clarify = (r: InboxReply, inputMode: ReplyMode = 'voice') =>
     setReply({
       target: {
@@ -484,7 +494,7 @@ export function FeedApp({ embedded = false, onOpenBlock, onOpenSource, onNavigat
                 {shows('questions') &&
                   shownQuestions.map((q) => (
                     <Fx key={`q${q.number}`} leaving={false}>
-                      <QuestionEntry q={q} answeredNote={answered.get(q.number)} deferred={later.has(q.number)} onAnswer={(mode) => answerQuestion(q, mode)} onLater={() => setLater((s) => new Set(s).add(q.number))} />
+                      <QuestionEntry q={q} answeredNote={answered.get(q.number)} deferred={later.has(q.number)} onAnswer={(mode) => answerQuestion(q, mode)} onPick={(key) => pickOption(q, key)} onLater={() => setLater((s) => new Set(s).add(q.number))} />
                     </Fx>
                   ))}
                 {shows('questions') && nextChapter && (
@@ -671,7 +681,13 @@ function ChangeEntry({ c, liked, onLike, onReply, onSeen }: { c: InboxChange; li
   );
 }
 
-function QuestionEntry({ q, answeredNote, deferred, onAnswer, onLater }: { q: InboxQuestion; answeredNote?: string; deferred: boolean; onAnswer: (mode: ReplyMode) => void; onLater: () => void }) {
+function QuestionEntry({ q, answeredNote, deferred, onAnswer, onPick, onLater }: { q: InboxQuestion; answeredNote?: string; deferred: boolean; onAnswer: (mode: ReplyMode) => void; onPick: (key: string) => Promise<void>; onLater: () => void }) {
+  const [picking, setPicking] = useState(false);
+  const pick = async (key: string) => {
+    setPicking(true);
+    await onPick(key);
+    setPicking(false);
+  };
   return (
     <article className="f-entry attn" style={{ '--tone': 'var(--accent-blue)', opacity: deferred && !answeredNote ? 0.6 : undefined } as CSSProperties}>
       <EntryMeta kind={`Вопрос Q${q.number}`} where={whereOf(q.storyTitle ?? q.topic, q.heading)} blockId={q.blockId} />
@@ -687,8 +703,25 @@ function QuestionEntry({ q, answeredNote, deferred, onAnswer, onLater }: { q: In
           </span>
         </div>
       ) : (
+        <>
+        {q.options && (
+          <div className="f-options">
+            {q.options.map((o) => (
+              <div key={o.key} className="f-option">
+                <button type="button" className={`f-option-btn${o.key === q.recommend ? ' rec' : ''}`} disabled={picking} onClick={() => pick(o.key)}>
+                  <span className="k">{o.key}</span>
+                  <span>{plain(o.label)}</span>
+                  {o.key === q.recommend && <span className="tag">рекомендую</span>}
+                </button>
+                {o.key === q.recommend && q.why && <p className="f-option-note">{plain(q.why)}</p>}
+                {o.pros?.map((t) => <p key={`p${t}`} className="f-option-note">+ {plain(t)}</p>)}
+                {o.cons?.map((t) => <p key={`c${t}`} className="f-option-note">− {plain(t)}</p>)}
+              </div>
+            ))}
+          </div>
+        )}
         <div className="f-actions">
-          <ReplyActions onReply={onAnswer} voiceLabel="Ответить" />
+          <ReplyActions onReply={onAnswer} voiceLabel={q.options ? 'Свой ответ' : 'Ответить'} />
           <span className="f-space" />
           {!deferred && (
             <button type="button" className="chip quiet" onClick={onLater}>
@@ -696,6 +729,7 @@ function QuestionEntry({ q, answeredNote, deferred, onAnswer, onLater }: { q: In
             </button>
           )}
         </div>
+        </>
       )}
     </article>
   );

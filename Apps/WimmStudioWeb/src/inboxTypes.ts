@@ -29,6 +29,11 @@ export interface InboxQuestion {
   /** Bold lead of the queue item: the document chapter for questions moved from chapters. */
   topic?: string;
   sources: string[];
+  /** Answer options from the queue item's sub-list: one tap answers. Absent for a free-text question. */
+  options?: { key: string; label: string; pros?: string[]; cons?: string[] }[];
+  /** Key of the option the secretary recommends, and why. */
+  recommend?: string;
+  why?: string;
   sourceInfo: InboxSource[];
   blockId?: number;
   storyTitle?: string;

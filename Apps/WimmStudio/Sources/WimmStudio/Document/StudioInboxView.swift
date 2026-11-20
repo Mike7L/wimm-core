@@ -1,5 +1,6 @@
 import SwiftUI
 import WimmInfrastructure
+import WimmSecretary
 
 /// Left column of the document window: everything waiting for the owner,
 /// each row a jump into the text, a source or a thread.
@@ -428,14 +429,52 @@ struct StudioQuestionCard: View {
                     Text(error).font(.caption).foregroundStyle(.red)
                 }
             } else {
+                if let options = question.options { optionButtons(options, detailed: showsFullText) }
                 HStack {
+                    if question.options != nil, let error = inbox.errorMessage {
+                        Text(error).font(.caption).foregroundStyle(.red)
+                    }
                     Spacer()
-                    Button(draft.wrappedValue.isEmpty ? "Ответить" : "Продолжить ответ") { editing = true }
+                    Button(draft.wrappedValue.isEmpty ? (question.options == nil ? "Ответить" : "Свой ответ") : "Продолжить ответ") { editing = true }
                         .controlSize(.small)
                 }
             }
         }
         .rowStyle()
+    }
+
+    /// One tap saves the answer note; the recommended option leads with its reason.
+    @ViewBuilder
+    private func optionButtons(_ options: [SecretaryReviewQueue.Option], detailed: Bool) -> some View {
+        ForEach(options, id: \.key) { option in
+            let recommended = option.key == question.recommend
+            VStack(alignment: .leading, spacing: 2) {
+                Button {
+                    if let url = inbox.answer(question, option: option) { onAnswered(url) }
+                } label: {
+                    Text("\(option.key)) \(plain(option.label))" + (recommended ? " · рекомендую" : ""))
+                        .font(.system(size: 12, weight: recommended ? .semibold : .regular))
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+                .tint(recommended ? Color.accentColor : nil)
+                .help("Ответить на Q\(question.number): вариант \(option.key)")
+                if recommended, let why = question.why {
+                    Text(plain(why)).font(.system(size: 11)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if detailed {
+                    ForEach(option.pros ?? [], id: \.self) { optionNote("+ " + plain($0)) }
+                    ForEach(option.cons ?? [], id: \.self) { optionNote("− " + plain($0)) }
+                }
+            }
+        }
+    }
+
+    private func optionNote(_ text: String) -> some View {
+        Text(text).font(.system(size: 11)).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true).padding(.leading, 8)
     }
 
     private var questionNumber: some View {

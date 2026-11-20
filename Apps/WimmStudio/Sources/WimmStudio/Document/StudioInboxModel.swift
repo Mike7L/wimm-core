@@ -239,6 +239,11 @@ final class StudioInboxModel {
 
     /// The protocol's answer route: an ordinary library note "По Q<n> — …"
     /// that the next pass reads like any other source.
+    /// One tap on an answer option: the same note, naming the option.
+    func answer(_ question: StudioInbox.Question, option: SecretaryReviewQueue.Option) -> URL? {
+        answer(question, text: SecretaryReviewQueue.answerText(for: option))
+    }
+
     func answer(_ question: StudioInbox.Question, text: String) -> URL? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, openQuestions.contains(question) else { return nil }

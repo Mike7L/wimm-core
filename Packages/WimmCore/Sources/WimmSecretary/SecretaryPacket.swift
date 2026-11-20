@@ -1050,7 +1050,7 @@ struct SecretaryPacket {
             let regex = try NSRegularExpression(pattern: #"\bQ([0-9]+)\b"#)
             let ns = queue as NSString
             var number = regex.matches(in: queue, range: NSRange(location: 0, length: ns.length)).compactMap { Int(ns.substring(with: $0.range(at: 1))) }.max() ?? 0
-            let questions = plan.questions.map { question -> String in number += 1; return "- Q\(number). \(question.replacingOccurrences(of: "\n", with: " "))" }.joined(separator: "\n")
+            let questions = plan.questions.map { question -> String in number += 1; return SecretaryReviewQueue.item(number: number, question: question) }.joined(separator: "\n")
             let marker = "## Открытые вопросы"
             let revised: String
             if let range = queue.range(of: marker) {

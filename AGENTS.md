@@ -214,7 +214,10 @@ bookkeeping.
 - Questions to the user live only in `secretary/review_queue.md` (Q numbers).
   A `**[Q58]**` marker in the document places the question in the inbox/feed
   and is not a text change (`StudioInbox.comparable`, web `comparable`); keep
-  both in step.
+  both in step. A question may carry answer options as a sub-list; the format
+  is read only by `SecretaryReviewQueue` and its web port `parseQuestions`
+  (keep both in step). A tapped option is the same «По Q… — …» answer note,
+  never a queue edit or a model call.
 - The library disk cache (`SecretaryRecallCache/`) is keyed by
   `LibraryRecallSource.cacheBuilderVersion`, not by the executable: raise it
   with any change that builds an unchanged note file into different content

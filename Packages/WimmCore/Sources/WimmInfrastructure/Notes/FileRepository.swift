@@ -62,13 +62,7 @@ public actor FileRepository: FileRepositoryProtocol {
         }
 
         // Filter to supported files: audio (skip generated _mini/_micro) and documents (e.g. .pdf)
-        all = all.filter { url in
-            let ext = url.pathExtension.lowercased()
-            if FileStore.supportedAudioExtensions.contains(ext) {
-                return !FileStore.isDerivedAudioFile(url)
-            }
-            return FileStore.supportedDocumentExtensions.contains(ext)
-        }
+        all = all.filter(Self.isListed)
 
         // Deduplicate by filename, preferring the new location when conflicts exist
         var byName: [String: URL] = [:]
@@ -105,7 +99,7 @@ public actor FileRepository: FileRepositoryProtocol {
         
         var groups: [String: [URL]] = [:]
         for url in sorted {
-            let base = canonicalSessionID(for: url)
+            let base = Self.canonicalSessionID(for: url)
             groups[base, default: []].append(url)
         }
         
@@ -124,27 +118,14 @@ public actor FileRepository: FileRepositoryProtocol {
         var processedSessions = Set<String>()
         
         for url in sorted {
-            let base = canonicalSessionID(for: url)
+            let base = Self.canonicalSessionID(for: url)
             
             if processedSessions.contains(base) { continue }
             
             // This is a new session we haven't emitted yet.
             // Find the best anchor in the group.
             if let group = groups[base] {
-                // Determine Anchor
-                if let audio = group.first(where: { url in
-                    url.pathExtension.lowercased() == "m4a" && !FileStore.isDerivedAudioFile(url)
-                }) {
-                    result.append(audio)
-                } else if let primary = group.first(where: { url in
-                    !FileStore.isDerivedPreviewImage(url, sessionBase: base)
-                }) {
-                    result.append(primary)
-                } else if let first = group.first {
-                    // Fallback anchor: the session really is just an image
-                    // (standalone .heic/.png import) or only attachments.
-                    result.append(first)
-                }
+                if let anchor = Self.anchor(in: group, base: base) { result.append(anchor) }
                 processedSessions.insert(base)
             }
         }
@@ -156,7 +137,33 @@ public actor FileRepository: FileRepositoryProtocol {
         return result
     }
 
-    private func canonicalSessionID(for url: URL) -> String {
+    /// Files a listing considers at all: audio (not the derived copies) and documents.
+    static func isListed(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        if FileStore.supportedAudioExtensions.contains(ext) {
+            return !FileStore.isDerivedAudioFile(url)
+        }
+        return FileStore.supportedDocumentExtensions.contains(ext)
+    }
+
+    /// The file that stands for a session's group (name-sorted, listed files only).
+    static func anchor(in group: [URL], base: String) -> URL? {
+        if let audio = group.first(where: { url in
+            url.pathExtension.lowercased() == "m4a" && !FileStore.isDerivedAudioFile(url)
+        }) {
+            return audio
+        }
+        if let primary = group.first(where: { url in
+            !FileStore.isDerivedPreviewImage(url, sessionBase: base)
+        }) {
+            return primary
+        }
+        // Fallback anchor: the session really is just an image
+        // (standalone .heic/.png import) or only attachments.
+        return group.first
+    }
+
+    static func canonicalSessionID(for url: URL) -> String {
         var base = url.deletingPathExtension().lastPathComponent
 
         if let range = base.range(of: "_Attach_") {

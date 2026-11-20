@@ -41,7 +41,7 @@ interface SeenState {
   seenBlocks?: string[];
   repliesSeenAt?: string;
   questionsSeen?: number[];
-  answers?: Record<string, { question: { number: number; text: string; sources: string[] }; text: string }>;
+  answers?: Record<string, { question: ParsedQuestion; text: string }>;
   [key: string]: unknown;
 }
 
@@ -198,11 +198,75 @@ function defaultBaseline(docPath: string): { file: string; kind: 'seen' | 'backu
   return backups.find((b) => b.date.getTime() <= dayAgo) ?? backups.at(-1) ?? null;
 }
 
-// MARK: - Questions (StudioInbox.openQuestions)
+// MARK: - Questions (SecretaryReviewQueue.openQuestions in WimmSecretary: keep in step)
 
-export function parseQuestions(markdown: string): { number: number; text: string; sources: string[]; topic?: string }[] {
+export interface QuestionOption {
+  key: string;
+  label: string;
+  pros?: string[];
+  cons?: string[];
+}
+
+export interface ParsedQuestion {
+  number: number;
+  text: string;
+  sources: string[];
+  topic?: string;
+  /** At least two options with distinct keys; absent for a free-text question. */
+  options?: QuestionOption[];
+  recommend?: string;
+  why?: string;
+}
+
+const OPTION_LINE = /^([\p{L}\p{N}]{1,3})\)\s+(.+)$/u;
+const RECOMMEND_LINE = /^(?:рекомендую|рекомендация|recommend)\s*:\s*([\p{L}\p{N}]{1,3})\)?(?:\s*[—–:.,-]\s*|\s+|$)(.*)$/iu;
+const WHY_LINE = /^(?:почему|причина|why)\s*:\s*(.+)$/iu;
+const PRO_LINE = /^(?:(?:плюс|за|pro)\s*:|\+)\s*(.+)$/iu;
+const CON_LINE = /^(?:(?:минус|против|con)\s*:|[−–])\s*(.+)$/iu;
+
+interface QuestionDraft {
+  text: string;
+  indent: number;
+  options: QuestionOption[];
+  recommend?: string;
+  why?: string;
+  target: 'text' | 'option' | 'why' | 'none';
+}
+
+const plainLine = (text: string) => text.replaceAll('**', '').trim();
+
+function absorb(draft: QuestionDraft, line: string) {
+  let m: RegExpMatchArray | null;
+  const last = draft.options.at(-1);
+  if ((m = line.match(RECOMMEND_LINE))) {
+    draft.recommend = m[1].toLowerCase();
+    draft.why = m[2].trim() || undefined;
+    draft.target = 'why';
+  } else if ((m = line.match(WHY_LINE))) {
+    draft.why = m[1].trim();
+    draft.target = 'why';
+  } else if ((m = line.match(OPTION_LINE))) {
+    draft.options.push({ key: m[1].toLowerCase(), label: m[2].trim() });
+    draft.target = 'option';
+  } else if (last && (m = line.match(PRO_LINE))) {
+    last.pros = [...(last.pros ?? []), m[1].trim()];
+    draft.target = 'none';
+  } else if (last && (m = line.match(CON_LINE))) {
+    last.cons = [...(last.cons ?? []), m[1].trim()];
+    draft.target = 'none';
+  } else {
+    draft.target = 'none';
+  }
+}
+
+/** What a one-tap answer says (SecretaryReviewQueue.answerText). */
+export function optionAnswerText(option: QuestionOption): string {
+  return `вариант ${option.key}: ${option.label}`;
+}
+
+export function parseQuestions(markdown: string): ParsedQuestion[] {
   let inOpen = false;
-  const items: string[] = [];
+  const drafts: QuestionDraft[] = [];
   for (const line of markdown.split(/\r?\n/)) {
     if (line.startsWith('## ')) {
       inOpen = line.toLowerCase().includes('открытые вопросы');
@@ -210,13 +274,22 @@ export function parseQuestions(markdown: string): { number: number; text: string
     }
     if (!inOpen) continue;
     const trimmed = line.trim();
-    if (trimmed.startsWith('- ')) items.push(trimmed.slice(2));
-    else if (trimmed && items.length && line.startsWith(' ')) items[items.length - 1] += ' ' + trimmed;
-    else if (trimmed) items.push('');
+    const last = drafts.at(-1);
+    if (trimmed.startsWith('- ')) {
+      const body = trimmed.slice(2);
+      const indent = line.match(/^[ \t]*/)![0].length;
+      if (last && last.text && indent > last.indent && !/^Q\d+\./i.test(plainLine(body))) absorb(last, plainLine(body));
+      else drafts.push({ text: body, indent, options: [], target: 'text' });
+    } else if (trimmed && last && line.startsWith(' ')) {
+      if (last.target === 'text') last.text += ' ' + trimmed;
+      else if (last.target === 'option') last.options.at(-1)!.label += ' ' + plainLine(trimmed);
+      else if (last.target === 'why') last.why = [last.why, plainLine(trimmed)].filter(Boolean).join(' ');
+    } else if (trimmed) drafts.push({ text: '', indent: 0, options: [], target: 'text' });
   }
   const seen = new Set<number>();
-  const out: { number: number; text: string; sources: string[]; topic?: string }[] = [];
-  for (const raw of items) {
+  const out: ParsedQuestion[] = [];
+  for (const draft of drafts) {
+    const raw = draft.text;
     // "**Q64. Работа, 2010–2015.** …": the bold lead names the chapter or subject.
     const topic = raw.match(/^\*\*Q\d+\.\s*([^*]+?)\.?\*\*/)?.[1].trim();
     let text = raw.replaceAll('**', '');
@@ -226,7 +299,18 @@ export function parseQuestions(markdown: string): { number: number; text: string
     if (seen.has(number)) continue;
     seen.add(number);
     text = text.slice(match[0].length).replace(new RegExp(`^Q${number}\\.\\s*`), '').trim();
-    out.push({ number, text, sources: [...new Set(text.match(/\bS\d+\b/g) ?? [])], ...(topic ? { topic } : {}) });
+    const options =
+      draft.options.length >= 2 && new Set(draft.options.map((o) => o.key)).size === draft.options.length ? draft.options : undefined;
+    const recommend = options?.some((o) => o.key === draft.recommend) ? draft.recommend : undefined;
+    out.push({
+      number,
+      text,
+      sources: [...new Set(text.match(/\bS\d+\b/g) ?? [])],
+      ...(topic ? { topic } : {}),
+      ...(options ? { options } : {}),
+      ...(recommend ? { recommend } : {}),
+      ...(recommend && draft.why ? { why: draft.why } : {}),
+    });
   }
   return out.sort((a, b) => b.number - a.number);
 }
@@ -531,11 +615,16 @@ export async function handleInbox(req: IncomingMessage, res: ServerResponse, url
   if (req.method === 'POST' && url.pathname === '/api/inbox/answer') {
     const body = await deps.readJsonBody(req);
     const number = Number(body.number);
-    const text = String(body.text ?? '').trim();
-    if (!Number.isInteger(number) || !text) return json(res, 400, { error: 'Нужны номер вопроса и текст ответа' }), true;
+    // `option` is one tap on an answer option: the same note, naming the option.
+    const optionKey = typeof body.option === 'string' ? body.option : undefined;
+    const typed = String(body.text ?? '').trim();
+    if (!Number.isInteger(number) || (!typed && !optionKey)) return json(res, 400, { error: 'Нужны номер вопроса и текст ответа' }), true;
     const root = workspaceRoot(deps.docPath);
     const question = parseQuestions(readOptional(root && path.join(root, 'secretary', 'review_queue.md'))).find((q) => q.number === number);
     if (!question) return json(res, 404, { error: `Q${number} нет среди открытых вопросов` }), true;
+    const option = optionKey === undefined ? undefined : question.options?.find((o) => o.key === optionKey);
+    if (optionKey !== undefined && !option) return json(res, 404, { error: `У Q${number} нет варианта «${optionKey}»` }), true;
+    const text = option ? optionAnswerText(option) : typed;
     if ((loadSeen(deps.docPath).questionsSeen ?? []).includes(number)) return json(res, 409, { error: `На Q${number} уже ответили` }), true;
     const bin = resolveNoteCli(deps);
     if (!bin) return json(res, 503, { error: 'wimm-cli не найден: ответ не сохранён' }), true;

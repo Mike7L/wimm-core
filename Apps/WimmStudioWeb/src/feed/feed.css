@@ -177,6 +177,14 @@
 .wimm-feed .f-msg-text { font: 400 15px/1.5 var(--font-system); overflow-wrap: anywhere; }
 .wimm-feed .f-msg.mine .f-msg-text { color: var(--text-secondary); }
 
+.wimm-feed .f-options { display: flex; flex-direction: column; gap: 6px; }
+.wimm-feed .f-option-btn { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 9px 12px; border: 1px solid var(--border-subtle, currentColor); border-radius: 10px; background: transparent; color: inherit; font: 500 14.5px/1.4 var(--font-system); text-align: left; cursor: pointer; }
+.wimm-feed .f-option-btn:hover { background: var(--hover-tint); }
+.wimm-feed .f-option-btn:disabled { opacity: 0.5; cursor: default; }
+.wimm-feed .f-option-btn.rec { border-color: var(--accent-blue); }
+.wimm-feed .f-option-btn .k { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.wimm-feed .f-option-btn .tag { margin-left: auto; padding-left: 8px; color: var(--accent-blue); font-size: 12px; white-space: nowrap; }
+.wimm-feed .f-option-note { margin: 3px 0 0 12px; font: 400 13px/1.45 var(--font-system); color: var(--text-secondary); }
 .wimm-feed .f-done { display: flex; gap: 8px; align-items: flex-start; font: 400 13px/1.5 var(--font-system); color: var(--text-secondary); }
 .wimm-feed .f-done .ic { color: var(--accent-green); margin-top: 2px; }
 

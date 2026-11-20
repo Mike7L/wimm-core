@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import WimmDomain
 import WimmInfrastructure
+import WimmSecretary
 
 /// What the secretary and agents left behind, read straight from the files
 /// they already write: paragraphs changed since a baseline copy of the
@@ -178,39 +179,14 @@ enum StudioInbox {
 
     // MARK: - Questions
 
-    struct Question: Identifiable, Sendable, Codable, Equatable {
-        let number: Int
-        let text: String
-        let sources: [String]
-        var id: Int { number }
-    }
+    /// Parsed by shared code, so the CLI and the apps read one format.
+    typealias Question = SecretaryReviewQueue.Question
 
     /// Open questions: list items under "## Открытые вопросы" (until the next
-    /// level-2 heading), each carrying a permanent `Q<n>`.
+    /// level-2 heading), each carrying a permanent `Q<n>` and, optionally,
+    /// answer options.
     static func openQuestions(in markdown: String) -> [Question] {
-        var inOpen = false
-        var items: [String] = []
-        for line in markdown.components(separatedBy: .newlines) {
-            if line.hasPrefix("## ") {
-                inOpen = line.lowercased().contains("открытые вопросы")
-                continue
-            }
-            guard inOpen else { continue }
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("- ") { items.append(String(trimmed.dropFirst(2))) }
-            else if !trimmed.isEmpty, !items.isEmpty, line.hasPrefix(" ") { items[items.count - 1] += " " + trimmed }
-            else if !trimmed.isEmpty { items.append("") } // prose between items ends the previous one
-        }
-        var seen: Set<Int> = []
-        return items.compactMap { raw in
-            var text = raw.replacingOccurrences(of: "**", with: "")
-            guard let match = text.range(of: "^Q(\\d+)\\.\\s*", options: .regularExpression),
-                  let number = Int(text[match].dropFirst().prefix(while: \.isNumber)), seen.insert(number).inserted else { return nil }
-            text.removeSubrange(match)
-            // A repeated "Q31." at the start is an editing slip, not content.
-            if let again = text.range(of: "^Q\(number)\\.\\s*", options: .regularExpression) { text.removeSubrange(again) }
-            return Question(number: number, text: text.trimmingCharacters(in: .whitespaces), sources: sourceIDs(in: text))
-        }.sorted { $0.number > $1.number }
+        SecretaryReviewQueue.openQuestions(in: markdown)
     }
 
     /// Only place a question when all of its document citations point to
@@ -252,13 +228,7 @@ enum StudioInbox {
         return matches.count == 1 ? matches.first : nil
     }
 
-    static func sourceIDs(in text: String) -> [String] {
-        let pattern = try! NSRegularExpression(pattern: "\\bS\\d+\\b")
-        let ns = text as NSString
-        var seen: Set<String> = []
-        return pattern.matches(in: text, range: NSRange(location: 0, length: ns.length))
-            .map { ns.substring(with: $0.range) }.filter { seen.insert($0).inserted }
-    }
+    static func sourceIDs(in text: String) -> [String] { SecretaryReviewQueue.sourceIDs(in: text) }
 
     // MARK: - Pass journal
 
