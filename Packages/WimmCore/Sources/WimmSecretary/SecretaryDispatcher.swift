@@ -255,6 +255,8 @@ public struct SecretaryDispatcher: Sendable {
         let maxRounds = 2
         var validationPrompt = prompt
         var firstRound: (session: String, prompt: String, directory: URL, cost: Double?)?
+        // The Claude Code session the last reply came from, with the session total it reported.
+        var latestSession: PacketSession?
         let directory = task.workspace.runDirectory(task.id)
         for round in 1...maxRounds {
             guard !Task.isCancelled else { throw CancellationError() }
@@ -310,7 +312,8 @@ public struct SecretaryDispatcher: Sendable {
                 execution = try await executor.run(request(continuation, resume: (first.session, first.directory)), onEvent: onEvent)
                 // Claude Code reports a continued session's cost as the session total: this
                 // request is that total less the first round's. Totals that do not add up are unknown.
-                if let total = execution.costUSD, total != 0 {
+                let total = execution.costUSD
+                if let total, total != 0 {
                     if let earlier = first.cost, total >= earlier { execution.costUSD = total - earlier } else { execution.costUSD = nil }
                 }
                 // A session that could not be continued and reports a zero cost: send the whole packet
@@ -320,9 +323,13 @@ public struct SecretaryDispatcher: Sendable {
                     try packetAudit(directory, stage: "continuation_failed", detail: execution.error ?? "exit \(execution.exitStatus)")
                     onEvent(.init(.info, "could not continue the first round's session; sending the whole packet"))
                     execution = try await executor.run(request(prompt, resume: nil), onEvent: onEvent)
+                    latestSession = PacketSession(started: execution, in: roundDirectory, executor: executor.name)
+                } else {
+                    latestSession = PacketSession(continued: execution, total: total, of: first.session, in: first.directory)
                 }
             } else {
                 execution = try await executor.run(request(prompt, resume: nil), onEvent: onEvent)
+                latestSession = PacketSession(started: execution, in: roundDirectory, executor: executor.name)
             }
             if round == 1, executor.name == "claude-code", let session = execution.sessionID, UUID(uuidString: session) != nil {
                 firstRound = (session, prompt, roundDirectory, execution.costUSD)
@@ -340,7 +347,7 @@ public struct SecretaryDispatcher: Sendable {
             try JSONEncoder().encode(aggregate).write(to: directory.appendingPathComponent("packet-execution.json"), options: .atomic)
             if aggregate.isError || execution.exitStatus != 0 { return aggregate }
             do {
-                let reply = try SecretaryPacket.decodeEdits(execution.finalText ?? "")
+                var reply = try SecretaryPacket.decodeEdits(execution.finalText ?? "")
                 // One simple read round: the requested sections, then a complete answer.
                 if !reply.readSections.isEmpty, round == 1 {
                     prompt = try packet.prompt(sections: reply.readSections, validationPrompt: validationPrompt)
@@ -361,6 +368,11 @@ public struct SecretaryDispatcher: Sendable {
                     continue
                 }
                 var resolution = try packet.resolveEdits(reply, prompt: validationPrompt, marks: marks)
+                if let session = latestSession, let completed = await completeUndecided(
+                    reply: reply, resolution: resolution, packet: packet, validationPrompt: validationPrompt, session: session,
+                    aggregate: &aggregate, directory: directory, marks: marks, clock: clock, onEvent: onEvent) {
+                    reply = completed.reply; resolution = completed.resolution
+                }
                 // The edits stand. One more short request (no sources, its own contract) rewrites the
                 // status lines of the topics they touched; whatever goes wrong there, the edits still apply.
                 let spentNow = aggregate.costUSD ?? 0
@@ -445,6 +457,95 @@ public struct SecretaryDispatcher: Sendable {
             }
         }
         return aggregate
+    }
+
+    /// A Claude Code session a packet reply came from: the directory it was started in (how
+    /// `--resume` finds it) and the session total it last reported.
+    struct PacketSession {
+        let id: String
+        let directory: URL
+        let total: Double
+
+        /// A fresh request's session; nil when it cannot be continued at a known price.
+        init?(started execution: SecretaryExecution, in directory: URL, executor: String) {
+            guard executor == "claude-code", !execution.isError, execution.exitStatus == 0, let id = execution.sessionID,
+                  UUID(uuidString: id) != nil, let total = execution.costUSD else { return nil }
+            self.id = id; self.directory = directory; self.total = total
+        }
+
+        /// A continued request of session `id`, with the session total Claude Code reported for it.
+        init?(continued execution: SecretaryExecution, total: Double?, of id: String, in directory: URL) {
+            guard !execution.isError, execution.exitStatus == 0, execution.sessionID == id, let total, total != 0 else { return nil }
+            self.id = id; self.directory = directory; self.total = total
+        }
+    }
+
+    /// Sources a reply named in no edit and no list are asked about once more, in the same session:
+    /// the packet is then a cached prefix, so the follow-up costs a fraction of the first request
+    /// (continued read rounds cost $0.044–0.066 against $0.39–0.47 for the full request, Sonnet,
+    /// 2026-11-19/20). The merged reply replaces the first only when it is accepted and leaves every
+    /// source the first reply had decided as it was; otherwise the first reply applies unchanged and
+    /// the undecided sources stay queued, as before.
+    private func completeUndecided(reply: SecretaryPacket.EditsReply, resolution: SecretaryPacket.EditsResolution,
+                                   packet: SecretaryPacket, validationPrompt: String, session: PacketSession,
+                                   aggregate: inout SecretaryExecution, directory: URL, marks: AgentMarkStore,
+                                   clock: SecretaryStageClock, onEvent: @escaping @Sendable (SecretaryEvent) -> Void) async
+        -> (reply: SecretaryPacket.EditsReply, resolution: SecretaryPacket.EditsResolution)? {
+        let report = resolution.report
+        let undecided = report.sources.filter { $0.outcome == "unmentioned" }.map(\.id)
+        guard report.rejection == nil, !report.lazyReply, !undecided.isEmpty, !PrivateMode.isEnabled, !Task.isCancelled,
+              let spent = aggregate.costUSD, budgetUSD - spent >= 0.01 else { return nil }
+        do {
+            let prompt = try SecretaryPacket.completionPrompt(undecided: undecided)
+            if let refusal = SecretaryPacketCostEstimate.refusal(
+                inputBytes: validationPrompt.utf8.count + prompt.utf8.count + packet.system.utf8.count, model: model,
+                executor: executor.name, table: priceTable(), remainingUSD: budgetUSD - spent) {
+                throw SecretaryPacket.Failure(refusal)
+            }
+            let completionDirectory = directory.appendingPathComponent("packet-completion")
+            try FileManager.default.createDirectory(at: completionDirectory, withIntermediateDirectories: true)
+            try Data(prompt.utf8).write(to: completionDirectory.appendingPathComponent("continuation.json"), options: .atomic)
+            var request = SecretaryExecutionRequest(workspaceRoot: session.directory, runDirectory: completionDirectory,
+                prompt: prompt, kind: .pass, wimmCLI: wimmCLI.path, budgetUSD: budgetUSD - spent, model: model,
+                timeout: timeout(for: .pass), maxTurns: 1, effort: packetEffort())
+            request.systemPrompt = packet.system
+            request.packetSession = true
+            request.resumeSessionID = session.id
+            try packetAudit(directory, stage: "completion_request",
+                            detail: "undecided=\(undecided.joined(separator: ", ")); input_bytes=\(prompt.utf8.count)")
+            onEvent(.init(.info, "the reply decided nothing for \(undecided.count) source(s); asking once more in the same session"))
+            clock.mark("packet_apply")
+            var execution = try await executor.run(request, onEvent: onEvent)
+            clock.mark("model_completion")
+            // The session total less what the session had cost before; a total that does not add up is unknown.
+            if let total = execution.costUSD { execution.costUSD = total >= session.total ? total - session.total : nil }
+            try JSONEncoder().encode(execution).write(to: completionDirectory.appendingPathComponent("execution.json"), options: .atomic)
+            aggregate.costUSD = aggregate.costUSD.flatMap { total in execution.costUSD.map { total + $0 } }
+            aggregate.tokensIn = aggregate.tokensIn.flatMap { total in execution.tokensIn.map { total + $0 } }
+            aggregate.tokensOut = aggregate.tokensOut.flatMap { total in execution.tokensOut.map { total + $0 } }
+            aggregate.turns = aggregate.turns.flatMap { total in execution.turns.map { total + $0 } }
+            try JSONEncoder().encode(aggregate).write(to: directory.appendingPathComponent("packet-execution.json"), options: .atomic)
+            guard !execution.isError, execution.exitStatus == 0 else {
+                throw SecretaryPacket.Failure(execution.error ?? "the completion request failed (exit \(execution.exitStatus))")
+            }
+            let completion = try SecretaryPacket.decodeEdits(execution.finalText ?? "")
+            guard completion.readSections.isEmpty else { throw SecretaryPacket.Failure("the completion asked to read sections") }
+            let merged = reply.merging(completion, undecided: Set(undecided))
+            let second = try packet.resolveEdits(merged, prompt: validationPrompt, marks: marks)
+            if let rejection = second.report.rejection { throw SecretaryPacket.Failure("the merged reply was refused: \(rejection)") }
+            let before = Dictionary(uniqueKeysWithValues: report.sources.map { ($0.id, $0.outcome) })
+            if let moved = second.report.sources.first(where: { before[$0.id] != "unmentioned" && before[$0.id] != $0.outcome }) {
+                throw SecretaryPacket.Failure("the completion would change \(moved.id), which the first reply had decided")
+            }
+            let decided = second.report.sources.filter { before[$0.id] == "unmentioned" && $0.outcome != "unmentioned" }.count
+            try packetAudit(directory, stage: "completion_merged", detail: "decided \(decided) of \(undecided.count)")
+            onEvent(.init(.info, "the follow-up decided \(decided) of \(undecided.count) source(s)"))
+            return (merged, second)
+        } catch {
+            try? packetAudit(directory, stage: "completion_skipped", detail: error.localizedDescription)
+            onEvent(.init(.info, "undecided sources stay queued: \(error.localizedDescription)"))
+            return nil
+        }
     }
 
     /// Format-2 packet passes on Haiku think only when asked: at the default effort 4 of 6 replies

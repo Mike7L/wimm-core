@@ -377,7 +377,10 @@ function stripReferenceDefinitions(md: string): string {
 /** A run without a space this long is data (base64, an address), not a word. */
 const UNSPEAKABLE_RUN = 200;
 
-/** Text for the model's ear: no source marks, anchors or link targets. */
+/**
+ * Text for the model's ear: no source marks, anchors or link targets.
+ * Studio's dossier rebuild uses a Swift port (`ShouldersDossierText.swift`); keep the two in step.
+ */
 export function plainDossierText(md: string): string {
   return stripReferenceDefinitions(md)
     .replace(/^<a\s+id="[^"]+"\s*><\/a>\s*$/gm, '')

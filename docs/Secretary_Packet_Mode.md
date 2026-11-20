@@ -696,7 +696,11 @@ replies with lists only; Wimm turns the block diff into format-2 operations —
   - `unfinished` wins over both and is not acknowledged.
   - A source in no list stays unread (`unmentioned`).
   - Lists without any edit covering more than five sources are not trusted
-    (`lazy_reply`); those sources count as unmentioned.
+    (`lazy_reply`) when fewer than half of the entries carry a reason of their own
+    (two or more words, not repeated across entries); those sources count as
+    unmentioned. Until 2026-11-20 the count alone decided, and a careful Sonnet
+    reply (run `20261117-232929-f1a8`: 16 sources, 16 specific reasons such as
+    "already in the paragraph of 5 November with this source") lost all 16.
 - **Operations:** `insert_under_heading` by section id (a heading block id
   from the outline), only when the heading and its own text are among the
   supplied blocks; the paragraph lands at the end of that text. Insertions at
@@ -753,6 +757,48 @@ replies with lists only; Wimm turns the block diff into format-2 operations —
   what did not fit. Only edits refused for that reason count; a citation
   error asks for no section. The apply report also carries `pass_boundary`
   (`before`, `after`).
+- **Completion of undecided sources (2026-11-20):** when an accepted reply names
+  sources in no edit and no list, the dispatcher asks once more in the same Claude
+  Code session (`--resume`, started where the session began) with only
+  `{"undecided_sources": […], "continuation": …}` (`SecretaryPacket.completionPrompt`,
+  saved as `packet-completion/continuation.json`). The packet is a cached prefix, so
+  this costs what a continued read round does ($0.044–0.066 on Sonnet against
+  $0.39–0.47 for the full request). The completion's edits that name only undecided
+  sources and its list entries for them are merged into the first reply
+  (`EditsReply.merging`) and the merge is validated as one reply. It replaces the
+  first reply only when it is accepted and leaves every source the first reply
+  decided with the same outcome; otherwise the first reply applies as it was and the
+  undecided sources stay queued. Its cost is the session total less the session's
+  earlier total, as for a read round; an unknown cost, a lazy or rejected first reply,
+  a request without a continuable session (Codex, Gemini, a fake without session id)
+  or less than $0.01 of budget left asks nothing. Audit stages: `completion_request`,
+  `completion_merged`, `completion_skipped`. Why: from 2026-11-17 to 11-20, 6 of 20
+  Sonnet packet replies left sources unmentioned (78 of 100 and 97 of 113 in two runs
+  of 19 November); two such passes in a row put a source on the skipped list until its
+  text changes (102 skipped on 20 November).
+  Checked 2026-11-21 (Sonnet): the completion request sent into run `ae26`'s own
+  session (78 of 100 sources unmentioned) decided 78 of 78: 5 edits on supplied
+  blocks, each naming and citing only undecided sources (the 100-minute Cabana talk
+  and the audiologist visit among them), and 72 `done_no_additions` with 48 distinct
+  reasons. Two days later the cache had expired, so that call paid a full cache write
+  ($0.47: 160,856 tokens written, 6,387 out); in a live pass the packet is still
+  cached and the same call is about $0.10. A replay of the saved replies: the new
+  `lazy_reply` rule keeps the 16 sources of `f1a8`, and the completion would have
+  asked in 6 runs about 196 sources. The first live pass with both changes
+  (`20261121-000353-c0bc`, 23 sources, read round, $0.34) left no source
+  unmentioned, so it sent no completion; nor did the next one
+  (`20261121-001127-8c6d`, 97 sources, 457 KB, one request, $0.43, 4 edits and 93
+  `done_no_additions`), on the size of packet that had lost 78–97 sources before. The
+  contract now asks to decide every source with its own reason; the completion stays
+  as the fallback.
+- **Mass omissions do not skip (2026-11-21):** a report whose non-lazy reply left more
+  than half of a packet of more than five sources unmentioned neither extends nor ends
+  a source's skipped streak (`skippedSnapshots`). It released the 97 notes stuck since
+  the two runs of 19 November; the pass above took them in.
+  The file transport has no host round: its dry-run report lists `undecided_sources`
+  and the contract asks the editor to decide them before applying. The editor
+  commands (`secretary claude|codex|gemini RUN --send`) resend the whole packet in
+  their second request, so they do not ask: there it would cost a full request.
 - **Effort:** format-2 packet passes on a Haiku model run at `effort: high`
   unless an effort is set explicitly (`SecretaryDispatcher.packetEffort`). At
   the default effort, 4 of 6 replies did not reason; at `high`, 6 of 6 did.

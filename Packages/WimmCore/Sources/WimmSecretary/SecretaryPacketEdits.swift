@@ -31,10 +31,39 @@ extension SecretaryPacket {
     /// Two passes in a row without a mention or with a rejected reply move a source to the
     /// visible skipped list until its text changes.
     static let skipAfterPasses = 2
-    /// A reply without edits that declares more sources than this done or unfinished is not
-    /// trusted (Haiku, 2026-10-31: four zero-thinking replies waved through 19–45 sources each);
-    /// they count as unmentioned instead.
+    /// A reply without edits that declares more sources than this done or unfinished, with no
+    /// reason of their own (`isShortcutList`), is not trusted (Haiku, 2026-10-31: four
+    /// zero-thinking replies waved through 19–45 sources each); they count as unmentioned instead.
     static let lazyReplyLimit = 5
+
+    /// A list is a shortcut when fewer than half of its entries carry a reason of their own
+    /// (two or more words, not repeated across entries). Distinct reasons are a careful review:
+    /// run `20261117-232929-f1a8` (Sonnet) gave 16 sources 16 specific reasons ("already in the
+    /// paragraph of 5 November with this source") and lost all of them to the old count-only rule.
+    static func isShortcutList(_ reasons: [String?]) -> Bool {
+        guard reasons.count > lazyReplyLimit else { return false }
+        let own = reasons.compactMap { reason -> String? in
+            let words = (reason ?? "").lowercased().split { !$0.isLetter && !$0.isNumber }
+            return words.count >= 2 ? words.joined(separator: " ") : nil
+        }
+        let counts = Dictionary(own.map { ($0, 1) }, uniquingKeysWith: +)
+        return counts.values.filter { $0 == 1 }.count * 2 < reasons.count
+    }
+
+    /// The follow-up for sources a reply named nowhere, sent in the same session so the packet is
+    /// a cached prefix. From 2026-11-17 to 11-20, 6 of 20 Sonnet packet replies left sources
+    /// unmentioned (up to 97 of 113); two such passes in a row put a source on the skipped list
+    /// until its text changes.
+    static func completionPrompt(undecided: [String]) throws -> String {
+        let object: [String: Any] = [
+            "undecided_sources": undecided,
+            "continuation": "Host reply to your previous message. Your answer gave no decision for undecided_sources. "
+                + "The packet above is unchanged and your earlier answer stands: do not repeat any of it. Return one JSON "
+                + "object in the same format covering only these sources: for each one an edit on supplied blocks, "
+                + "done_no_additions or unfinished. No read_sections.",
+        ]
+        return String(decoding: try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]), as: UTF8.self)
+    }
     /// Deleted text per edit; anything longer is a rewrite and belongs to a tidy pass.
     static let deletedTextLimit = 300
 
@@ -66,7 +95,7 @@ extension SecretaryPacket {
     {"operation":"replace_text","block":"<supplied block id>","match":"short exact phrase from that block","text":"replacement","sources":["<S id>"]} corrects a phrase; keep every S…/U…/W… reference and delete at most 300 characters.
     replace_block is not available. An invalid edit is dropped together with every edit that names one of its sources, and those sources stay queued; so name the same source in every edit a change needs (for example the matching summary fix).
     A source you name in an edit and do not list in unfinished counts as fully handled: every substantial point of it is in the document.
-    done_no_additions: sources you read completely with nothing new for the document. unfinished: sources with something left to do, with the concrete obstacle and, if a missing section blocks it, that section's outline id. A source in no list stays in the queue.
+    done_no_additions: sources you read completely with nothing new for the document. unfinished: sources with something left to do, with the concrete obstacle and, if a missing section blocks it, that section's outline id. Decide every packet source: name it in an edit or list it in done_no_additions or unfinished, each with its own reason. A source you leave out stays in the queue unread and comes back in a later packet.
     oversize_previews are PARTIAL VIEWS of sources too large for a packet: size, kind, beginning and end only, not the full source. If a preview shows the source is not a note at all (an app log, a data dump, machine output), list it in "not_a_note":[{"source":"<S id>","reason":"short reason"}]; otherwise leave it out and Wimm keeps it waiting. Never use a preview source in an edit, a citation, done_no_additions or unfinished.
     A transcript is the text of its recording and OCR the text of its image: not having listened to audio or seen an image is not an obstacle.
     A transcript printed "by voice" is split into turns by on-device voice separation. A turn opening with a card id ("[P003]:") was spoken by the voice matched to that person's voice profile (voice_cards names the cards): attribute it to that person even where the wording alone would not show it; such a voice is mostly that person, so a turn whose content plainly belongs to someone else follows its content. "Голос N:" is a voice nobody recognized: name it only from the text. Never write card ids or "Голос N" in the document.
@@ -138,6 +167,24 @@ extension SecretaryPacket {
             questions = try c.decodeIfPresent([QuestionEntry].self, forKey: .questions)?.map(\.text) ?? []
             readSections = try c.decodeIfPresent([String].self, forKey: .readSections) ?? []
             statusUpdates = try c.decodeIfPresent([StatusUpdate].self, forKey: .statusUpdates) ?? []
+        }
+        init(summary: String, edits: [EditOperation], done: [DoneEntry], unfinished: [UnfinishedEntry], notANote: [DoneEntry],
+             questions: [String], readSections: [String], statusUpdates: [StatusUpdate]) {
+            self.summary = summary; self.edits = edits; self.done = done; self.unfinished = unfinished
+            self.notANote = notANote; self.questions = questions; self.readSections = readSections; self.statusUpdates = statusUpdates
+        }
+
+        /// This reply plus a completion reply's work on `undecided` only: its edits that name nothing
+        /// else and its list entries for those sources. The caller still checks that the merge
+        /// changed no source this reply had already decided.
+        func merging(_ completion: EditsReply, undecided: Set<String>) -> EditsReply {
+            let edits = completion.edits.filter { !($0.sources ?? []).isEmpty && Set($0.sources ?? []).isSubset(of: undecided) }
+            let summary = completion.summary.isEmpty ? self.summary : self.summary + " " + completion.summary
+            return EditsReply(summary: summary, edits: self.edits + edits,
+                              done: done + completion.done.filter { undecided.contains($0.source) },
+                              unfinished: unfinished + completion.unfinished.filter { undecided.contains($0.source) },
+                              notANote: notANote, questions: questions + completion.questions.filter { !questions.contains($0) },
+                              readSections: readSections, statusUpdates: statusUpdates)
         }
     }
 
@@ -432,7 +479,7 @@ extension SecretaryPacket {
             report.ignoredSources = Set(reply.done.map(\.source) + reply.unfinished.map(\.source)).subtracting(selected)
                 .union(Set(reply.notANote.map(\.source)).subtracting(previewed)).sorted()
             report.lazyReply = checkLazyReply && edits.isEmpty
-                && done.count + unfinished.count + notANote.count > Self.lazyReplyLimit
+                && Self.isShortcutList(done.values.map(\.reason) + unfinished.values.map(\.obstacle) + notANote.values.map(\.reason))
             if report.lazyReply { done = [:]; unfinished = [:]; notANote = [:] }
             var decisions: [SecretaryResult.SourceDecision] = []
             report.sources = outcomes { id in
@@ -646,9 +693,15 @@ extension SecretaryPacket {
     static func skippedSnapshots(root: URL) -> [String: Int] {
         var streak: [String: Int] = [:], settled = Set<String>()
         for report in recentReports(root: root) {
+            // A reply that left most of a large packet undecided shows the model did not work
+            // through it, not that these sources are hard (78 of 100 and 97 of 113 on 2026-11-19;
+            // asked again, the same session decided all 78 with five real edits). Its unmentioned
+            // sources neither extend nor end a streak. A lazy reply still counts.
+            let unmentioned = report.sources.filter { $0.outcome == "unmentioned" }.count
+            let massOmission = !report.lazyReply && report.sources.count > lazyReplyLimit && unmentioned * 2 > report.sources.count
             for source in report.sources {
                 let key = snapshotKey(file: source.file, sha256: source.sha256, text: source.text, analysis: source.analysis)
-                guard !settled.contains(key) else { continue }
+                guard !settled.contains(key), !(massOmission && source.outcome == "unmentioned") else { continue }
                 if ["unmentioned", "rejected"].contains(source.outcome) { streak[key, default: 0] += 1 } else { settled.insert(key) }
             }
         }

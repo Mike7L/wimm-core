@@ -85,7 +85,7 @@ final class ShouldersChat {
             return
         }
         let document = document
-        let text = try await Task.detached { try String(contentsOf: document, encoding: .utf8) }.value
+        let text = try await Task.detached { ShouldersDossierText.plain(try String(contentsOf: document, encoding: .utf8)) }.value
         let made = try await chat.complete(system: Self.dossierPrompt,
                                            messages: [.init(role: .user, text: text)])
         guard !made.isEmpty else { throw CocoaError(.fileReadCorruptFile) }

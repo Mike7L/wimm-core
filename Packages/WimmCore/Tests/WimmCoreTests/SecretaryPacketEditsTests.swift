@@ -358,6 +358,86 @@ final class SecretaryPacketEditsTests: XCTestCase {
         }
     }
 
+    func testListsWithReasonsOfTheirOwnAreTrustedWithoutEdits() throws {
+        try makeSources(SecretaryPacket.lazyReplyLimit + 2)
+        let packet = try prepare()
+        let entries = packet.selected.enumerated().map { i, id in ["source": id, "reason": "разговор \(i + 1) уже записан в абзаце о ноябре"] }
+        let careful = try packet.resolveEdits(reply(["done_no_additions": entries]), prompt: packet.prompt(), marks: store)
+        XCTAssertFalse(careful.report.lazyReply)
+        XCTAssertEqual(Set(careful.report.sources.map(\.outcome)), ["reviewed"])
+        XCTAssertEqual(careful.plan.sourceDecisions.count, packet.selected.count)
+        // One-word or repeated reasons are still a shortcut.
+        XCTAssertTrue(SecretaryPacket.isShortcutList(Array(repeating: "повтор", count: 6)))
+        XCTAssertTrue(SecretaryPacket.isShortcutList(["нет", nil, "", "Технические детали Wimm.", "Технические детали Wimm.", "a b"]))
+        XCTAssertFalse(SecretaryPacket.isShortcutList(Array(repeating: "повтор", count: SecretaryPacket.lazyReplyLimit)), "small lists are trusted")
+    }
+
+    // MARK: Completion of undecided sources
+
+    func testDispatcherAsksOnceInTheSameSessionForSourcesTheReplyLeftOut() async throws {
+        let probe = try prepare()
+        let summary = try block(probe, "Сводка")
+        let main = String(decoding: try JSONSerialization.data(withJSONObject: ["summary": "Маяк",
+            "edits": [edit("insert_after", block: summary, text: "Экспорт Markdown пока план [S2].\n\n", sources: ["S2"])]]), as: UTF8.self)
+        let completion = #"{"summary":"S1 уже в сводке","done_no_additions":[{"source":"S1","reason":"проект уже есть в сводке"}]}"#
+        let fake = SessionEditsExecutor(bodies: [main, completion])
+        let dispatcher = SecretaryDispatcher(executor: fake, wimmCLI: URL(fileURLWithPath: "/cli"))
+        let execution = try await dispatcher.runPacket(task: task, library: library, marks: store, onEvent: { _ in })
+        XCTAssertFalse(execution.isError, execution.error ?? "")
+        let requests = await fake.requests
+        XCTAssertEqual(requests.count, 2)
+        let run = task.workspace.runDirectory(task.id)
+        XCTAssertEqual(requests[1].resumeSessionID, SessionEditsExecutor.sessionID)
+        XCTAssertTrue(requests[1].packetSession)
+        XCTAssertEqual(requests[1].workspaceRoot.standardizedFileURL, run.appendingPathComponent("packet-1").standardizedFileURL)
+        let asked = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(requests[1].prompt.utf8)) as? [String: Any])
+        XCTAssertEqual(asked["undecided_sources"] as? [String], ["S1"])
+        XCTAssertNil(asked["sources"], "the packet is the cached prefix, not resent")
+        XCTAssertEqual(execution.costUSD ?? -1, 0.04, accuracy: 1e-9, "the first request plus the follow-up, not the session total twice")
+        let report = try JSONDecoder().decode(SecretaryPacket.EditsReport.self, from: Data(contentsOf: run.appendingPathComponent(SecretaryPacket.editsReportName)))
+        XCTAssertEqual(outcomes(report), ["S1": "reviewed", "S2": "used"])
+        let result = try JSONDecoder().decode(SecretaryResult.self, from: Data(contentsOf: run.appendingPathComponent("result.json")))
+        XCTAssertEqual(Set(result.sourceDecisions?.map(\.source) ?? []), ["S1", "S2"])
+        XCTAssertTrue(try String(contentsOf: document, encoding: .utf8).contains("Экспорт Markdown пока план [S2]."))
+    }
+
+    func testCompletionThatWouldUndoADecidedSourceIsIgnored() async throws {
+        let probe = try prepare()
+        let summary = try block(probe, "Сводка")
+        let main = String(decoding: try JSONSerialization.data(withJSONObject: ["summary": "Маяк",
+            "edits": [edit("insert_after", block: summary, text: "Экспорт Markdown пока план [S2].\n\n", sources: ["S2"])]]), as: UTF8.self)
+        // Names only S1 but cites S2 too: that edit fails and would take S2's edit down with it.
+        let completion = String(decoding: try JSONSerialization.data(withJSONObject: ["edits": [
+            edit("insert_after", block: summary, text: "Маяк снова [S1] [S2].\n\n", sources: ["S1"])]]), as: UTF8.self)
+        let fake = SessionEditsExecutor(bodies: [main, completion])
+        let dispatcher = SecretaryDispatcher(executor: fake, wimmCLI: URL(fileURLWithPath: "/cli"))
+        let execution = try await dispatcher.runPacket(task: task, library: library, marks: store, onEvent: { _ in })
+        XCTAssertFalse(execution.isError, execution.error ?? "")
+        let requests = await fake.requests
+        XCTAssertEqual(requests.count, 2)
+        let run = task.workspace.runDirectory(task.id)
+        let report = try JSONDecoder().decode(SecretaryPacket.EditsReport.self, from: Data(contentsOf: run.appendingPathComponent(SecretaryPacket.editsReportName)))
+        XCTAssertEqual(outcomes(report), ["S1": "unmentioned", "S2": "used"], "the first reply applies as it was")
+        let written = try String(contentsOf: document, encoding: .utf8)
+        XCTAssertTrue(written.contains("Экспорт Markdown пока план [S2]."))
+        XCTAssertFalse(written.contains("Маяк снова"))
+        XCTAssertEqual(execution.costUSD ?? -1, 0.04, accuracy: 1e-9, "the paid follow-up is still counted")
+        let audit = try String(contentsOf: run.appendingPathComponent("packet-validation.jsonl"), encoding: .utf8)
+        XCTAssertTrue(audit.contains("completion_skipped"), audit)
+    }
+
+    func testNoCompletionWithoutAContinuableSession() async throws {
+        let probe = try prepare()
+        let main = String(decoding: try JSONSerialization.data(withJSONObject: ["summary": "Маяк",
+            "edits": [edit("insert_after", block: try block(probe, "Сводка"), text: "План [S2].\n\n", sources: ["S2"])]]), as: UTF8.self)
+        let fake = EditsFakeExecutor(bodies: [main])
+        let execution = try await SecretaryDispatcher(executor: fake, wimmCLI: URL(fileURLWithPath: "/cli"))
+            .runPacket(task: task, library: library, marks: store, onEvent: { _ in })
+        XCTAssertFalse(execution.isError, execution.error ?? "")
+        let requests = await fake.requests
+        XCTAssertEqual(requests.count, 1, "no session to continue cheaply: the source simply stays queued")
+    }
+
     private func saveReport(_ report: SecretaryPacket.EditsReport, _ run: String) throws {
         let directory = root.appendingPathComponent("secretary/runs/\(run)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -407,6 +487,28 @@ final class SecretaryPacketEditsTests: XCTestCase {
         XCTAssertEqual(Set(try SecretaryPacket.prepare(task: task, library: library, marks: store, retryUnfinished: true).selected), ["S1", "S2"])
         try "Заметка 1: новый текст.".write(to: files[1], atomically: true, encoding: .utf8)
         XCTAssertEqual(Set(try prepare().selected), ["S1", "S2"])
+    }
+
+    func testMassOmissionDoesNotPutSourcesOnTheSkippedList() throws {
+        try makeSources(SecretaryPacket.lazyReplyLimit + 2)
+        let packet = try prepare(), prompt = try packet.prompt()
+        let summary = try block(packet, "Сводка")
+        // One edit, every other source left out: the model did not work through the packet.
+        let omission = try packet.resolveEdits(reply(["edits": [edit("insert_after", block: summary, text: "План [S2].\n\n", sources: ["S2"])]]),
+                                               prompt: prompt, marks: store)
+        XCTAssertFalse(omission.report.lazyReply)
+        try saveReport(omission.report, "20261119-100000-aaaa")
+        try saveReport(omission.report, "20261119-110000-bbbb")
+        XCTAssertTrue(SecretaryPacket.skippedSnapshots(root: root).isEmpty)
+        XCTAssertEqual(try prepare().hostQueues.skipped, 0)
+        // Templated lists without edits are a lazy reply: those sources still count.
+        let lazy = try packet.resolveEdits(reply(["done_no_additions": packet.selected.map { ["source": $0, "reason": "повтор"] }]),
+                                           prompt: prompt, marks: store)
+        XCTAssertTrue(lazy.report.lazyReply)
+        try saveReport(lazy.report, "20261119-120000-cccc")
+        try saveReport(lazy.report, "20261119-130000-dddd")
+        XCTAssertEqual(SecretaryPacket.skippedSnapshots(root: root).values.filter { $0 >= SecretaryPacket.skipAfterPasses }.count,
+                       packet.selected.count)
     }
 
     func testImageWithoutReadableTextWaitsForViewing() throws {
@@ -879,6 +981,7 @@ final class SecretaryPacketEditsTests: XCTestCase {
         XCTAssertEqual(mixedPreview["accepted"] as? Bool, true)
         XCTAssertEqual(mixedPreview["used_sources"] as? [String], ["S2"])
         XCTAssertEqual(mixedPreview["queued_sources"] as? [String], ["S1"])
+        XCTAssertEqual(mixedPreview["undecided_sources"] as? [String], [], "S1 was named by a rejected edit, not left out")
         let rejected = try XCTUnwrap(mixedPreview["rejected_edits"] as? [[String: Any]])
         XCTAssertEqual(rejected.map { $0["index"] as? Int }, [1])
         XCTAssertTrue((rejected.first?["reason"] as? String)?.contains("match is absent") == true)
@@ -903,6 +1006,23 @@ final class SecretaryPacketEditsTests: XCTestCase {
         XCTAssertNil((replayed["timings_ms"] as? [String: Double])?["session_save"])
         replayed["timings_ms"] = nil; first["timings_ms"] = nil
         XCTAssertEqual(replayed as NSDictionary, first as NSDictionary)
+    }
+}
+
+/// A Claude Code fake that keeps one session: a continued request reports the session total.
+private actor SessionEditsExecutor: SecretaryExecutor {
+    nonisolated let name = "claude-code"
+    nonisolated static let sessionID = "00000000-0000-4000-8000-0000000000e2"
+    let bodies: [String]
+    var requests: [SecretaryExecutionRequest] = []
+    init(bodies: [String]) { self.bodies = bodies }
+    func run(_ request: SecretaryExecutionRequest, onEvent: @escaping @Sendable (SecretaryEvent) -> Void) async throws -> SecretaryExecution {
+        requests.append(request)
+        let resumed = requests.filter { $0.resumeSessionID != nil }.count
+        var execution = SecretaryExecution(exitStatus: 0, finalText: bodies[min(requests.count - 1, bodies.count - 1)],
+                                           costUSD: 0.03 + Double(resumed) * 0.01, tokensIn: 100, tokensOut: 10, turns: 1)
+        execution.sessionID = Self.sessionID
+        return execution
     }
 }
 

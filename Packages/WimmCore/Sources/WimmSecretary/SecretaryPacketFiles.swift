@@ -588,6 +588,7 @@ public enum SecretaryPacketFiles {
     To add at the end of a long section, read it with --section ID --tail: one call returns the heading and the last blocks.
     Submit JSON with secretary apply RUN --response FILE; --dry-run validates without edits/marks.
     The host reports which edits it accepted and which sources it counted as used or reviewed.
+    If the dry-run report lists undecided_sources, your response named those sources in no edit and no list, so they would stay queued unread: give each one an edit, done_no_additions or unfinished and check again before applying.
     One packet per conversation: after a successful apply (not a dry run), do not run secretary prepare again in this conversation. The sources you have read stay in your history and make every later packet costlier and worse. The host keeps the pass state, so a new conversation or a fresh subagent continues from the same place.
     If the dry-run report lists status_refresh_needed, an accepted edit changed a topic that opens with a status line. Where the state really changed, add "status_updates":[{"block":"<id>","text":"new status body"}] to the same response: two or three sentences of what is true now, at most 800 characters, without the bold date label (the host writes the label and the date) and citing only references the topic already has; earlier steps stay in the history below. Leave a line out if its state did not change.
     """
@@ -712,6 +713,8 @@ extension SecretaryPacketFiles {
                 "previews": (resolution.report.previews ?? []).map { ["source": $0.id, "file": $0.file, "outcome": $0.outcome, "reason": $0.reason ?? ""] },
                 "unfinished_sources": resolution.report.sources.filter { $0.outcome == "unfinished" }.map { ["source": $0.id, "obstacle": $0.reason ?? "", "section": $0.section ?? ""] },
                 "queued_sources": (outcomes["unmentioned"] ?? []) + (outcomes["rejected"] ?? []),
+                // Sources the response named in no edit and no list: decide them before applying.
+                "undecided_sources": outcomes["unmentioned"] ?? [],
                 "lazy_reply": resolution.report.lazyReply, "ignored_sources": resolution.report.ignoredSources,
                 "edits": try JSONSerialization.jsonObject(with: JSONEncoder().encode(resolution.report.edits)),
                 "status_counts": Dictionary(grouping: resolution.plan.sourceDecisions, by: \.status).mapValues(\.count),
