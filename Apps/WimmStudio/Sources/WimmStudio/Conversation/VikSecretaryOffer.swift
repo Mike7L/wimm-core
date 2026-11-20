@@ -9,12 +9,13 @@ struct VikSecretaryOffer: Equatable {
     var bytes: Int
     var at: Date
 
-    /// A yes long after the question is no longer an answer to it.
-    static let answerWindow: TimeInterval = 30 * 60
+    /// A yes long after the question is no longer an answer to it; the buttons go away then too.
+    static let answerWindow: TimeInterval = 10 * 60
+    /// Unprompted speech waits for at least this much quiet after the user's last word.
+    static let quietBeforeSpeaking: Double = 5
 
     var question: String {
-        "Накопился пакет для секретаря: \(pending) \(Self.notes(pending)), около \(max(1, bytes / 1000)) КБ. " +
-            "Запустить? Скажи «Алёна, да» или «Алёна, нет»."
+        "Накопился пакет для секретаря: \(pending) \(Self.notes(pending)), около \(max(1, bytes / 1000)) КБ. Запустить?"
     }
 
     func isFresh(now: Date = Date()) -> Bool { now.timeIntervalSince(at) <= Self.answerWindow }

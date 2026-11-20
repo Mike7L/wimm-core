@@ -9,6 +9,16 @@ final class StudioSaveConfirmation {
     struct Line: Equatable {
         var message: String
         var systemImage: String
+        /// Buttons beside the message; only then does the banner take clicks.
+        var actions: [Action] = []
+    }
+
+    struct Action: Equatable {
+        var title: String
+        var isPrimary = false
+        var run: @MainActor () -> Void
+
+        static func == (a: Action, b: Action) -> Bool { a.title == b.title && a.isPrimary == b.isPrimary }
     }
 
     private var panel: NSPanel?
@@ -76,7 +86,8 @@ final class StudioSaveConfirmation {
             panel.contentViewController = hosting
             self.hosting = hosting
         }
-        let size = hosting.sizeThatFits(in: NSSize(width: 600, height: 100))
+        panel.ignoresMouseEvents = line.actions.isEmpty
+        let size = hosting.sizeThatFits(in: NSSize(width: line.actions.isEmpty ? 600 : 760, height: 160))
         // The screen is chosen when the banner appears; an update never moves it to another one.
         let screen = (panel.isVisible ? panel.screen : nil)
             ?? NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
@@ -91,7 +102,17 @@ final class StudioSaveConfirmation {
         let line: Line
 
         var body: some View {
-            Label(line.message, systemImage: line.systemImage)
+            HStack(spacing: 14) {
+                Label(line.message, systemImage: line.systemImage)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(line.actions, id: \.title) { action in
+                    if action.isPrimary {
+                        Button(action.title) { action.run() }.buttonStyle(.borderedProminent)
+                    } else {
+                        Button(action.title) { action.run() }
+                    }
+                }
+            }
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 22)

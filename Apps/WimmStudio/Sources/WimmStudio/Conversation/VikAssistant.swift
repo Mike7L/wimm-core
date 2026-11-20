@@ -36,8 +36,12 @@ final class VikAssistant {
     private(set) var nowSpeaking = ""
     private(set) var errorMessage: String?
     private(set) var savedReply: URL?
-    /// The open question «запустить секретаря?»; a short yes/no answers it.
+    /// The open question «запустить секретаря?»; a button or a short spoken yes/no answers it.
     private(set) var secretaryOffer: VikSecretaryOffer?
+    /// What a button press did («Запускаю секретаря.», a refusal); the host shows it as a receipt.
+    @ObservationIgnored var onNotice: ((String) -> Void)?
+    @ObservationIgnored private var offerSpoken = false
+    @ObservationIgnored private var offerExpiry: Task<Void, Never>?
     var enabled = true {
         didSet {
             preferences?.set(enabled, forKey: "WimmStudio.vikEnabled")
@@ -90,7 +94,11 @@ final class VikAssistant {
     var banner: StudioSaveConfirmation.Line? {
         switch phase {
         case .idle, .failed:
-            return nil
+            guard let offer = secretaryOffer, enabled else { return nil }
+            return .init(message: "Алёна: \(offer.question)", systemImage: "tray.full", actions: [
+                .init(title: "Запустить", isPrimary: true) { [weak self] in self?.answerSecretaryOffer(.run) },
+                .init(title: "Не сейчас") { [weak self] in self?.answerSecretaryOffer(.decline) },
+            ])
         case .listening:
             let heard = Self.clipped(request, limit: 60, keepsEnd: true)
             return .init(message: heard.isEmpty ? status : "Алёна слушает: \(heard)", systemImage: "waveform")
@@ -176,21 +184,56 @@ final class VikAssistant {
         self.runSecretary = runSecretary
     }
 
-    /// Asks aloud whether to start the secretary. Silent (banner only) while the
-    /// microphone records without headphones: the question would land in the note.
-    /// Returns the question when it was asked; nil when Alyona is busy, off or private.
+    /// Shows the question with two buttons at once; the voice asks only in a pause.
+    /// Returns false when Alyona is busy, off or private.
     @discardableResult
-    func offerSecretary(pending: Int, bytes: Int, now: Date = Date()) -> String? {
-        guard enabled, !isPrivate(), phase == .idle || phase == .failed else { return nil }
-        let offer = VikSecretaryOffer(pending: pending, bytes: bytes, at: now)
-        secretaryOffer = offer
-        let spoken = keepMicOpen || (!capture.isRecording && !capture.isBusy)
-        log("[Vik] secretary_offer pending=\(pending) bytes=\(bytes) spoken=\(spoken)")
-        if spoken {
-            voice.prepare()
-            voice.enqueue(offer.question)
+    func offerSecretary(pending: Int, bytes: Int, now: Date = Date()) -> Bool {
+        guard enabled, !isPrivate(), phase == .idle || phase == .failed else { return false }
+        if phase == .failed { phase = .idle; errorMessage = nil }
+        secretaryOffer = VikSecretaryOffer(pending: pending, bytes: bytes, at: now)
+        offerSpoken = false
+        log("[Vik] secretary_offer pending=\(pending) bytes=\(bytes)")
+        offerExpiry?.cancel()
+        offerExpiry = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(VikSecretaryOffer.answerWindow)) } catch { return }
+            self?.clearSecretaryOffer(reason: "expired")
         }
-        return offer.question
+        speakOfferIfQuiet()
+        return true
+    }
+
+    /// Alyona never interrupts on her own: an unprompted line waits until the user is
+    /// not speaking. The microphone off, or headphones with a pause since the last word.
+    /// Recording without headphones it stays unspoken: it would land in the note.
+    var userIsQuiet: Bool {
+        if !capture.isRecording { return !capture.isBusy }
+        guard keepMicOpen, !capture.isSending else { return false }
+        guard let quiet = capture.quietAfterSpeech else { return capture.liveText.isEmpty }
+        return quiet.seconds >= VikSecretaryOffer.quietBeforeSpeaking
+    }
+
+    private func speakOfferIfQuiet() {
+        guard let offer = secretaryOffer, !offerSpoken, enabled, !isPrivate(), phase == .idle,
+              offer.isFresh(), userIsQuiet else { return }
+        offerSpoken = true
+        log("[Vik] secretary_offer_spoken")
+        voice.prepare()
+        voice.enqueue(offer.question)
+    }
+
+    /// A button press: same decision as the spoken yes/no, shown instead of spoken.
+    func answerSecretaryOffer(_ command: VikSecretaryCommand) {
+        guard secretaryOffer != nil else { return }
+        let message = decideSecretary(command)
+        if phase == .idle { voice.stop() }
+        onNotice?(message)
+    }
+
+    private func clearSecretaryOffer(reason: String) {
+        guard secretaryOffer != nil else { return }
+        log("[Vik] secretary_offer_end reason=\(reason)")
+        secretaryOffer = nil
+        offerExpiry?.cancel(); offerExpiry = nil
     }
 
     func startMonitoring() {
@@ -206,6 +249,7 @@ final class VikAssistant {
 
     func shutdown() {
         monitor?.cancel(); monitor = nil
+        offerExpiry?.cancel(); offerExpiry = nil
         cancel(reason: "shutdown")
     }
 
@@ -213,6 +257,7 @@ final class VikAssistant {
     /// existing silence event; live-text stability is not an ASR completion signal.
     func tick() {
         guard enabled else { return }
+        if !isPrivate(), phase == .idle { speakOfferIfQuiet() }
         if isPrivate() {
             if isResponding || phase == .listening ||
                 (capture.isRecording && VikRequest.extract(from: capture.liveText) != nil &&
@@ -565,18 +610,20 @@ final class VikAssistant {
 
     /// The user's spoken decision on the secretary; no model call.
     private func secretaryReply(_ command: VikSecretaryCommand) -> AsyncThrowingStream<String, Error> {
-        secretaryOffer = nil
-        let message: String
+        let message = decideSecretary(command)
+        return AsyncThrowingStream { $0.yield(message); $0.finish() }
+    }
+
+    private func decideSecretary(_ command: VikSecretaryCommand) -> String {
+        clearSecretaryOffer(reason: command == .run ? "run" : "declined")
         switch command {
         case .decline:
-            log("[Vik] secretary_declined")
-            message = "Хорошо, не запускаю."
+            return "Хорошо, не запускаю."
         case .run:
             let refusal = runSecretary()
             log("[Vik] secretary_run started=\(refusal == nil)")
-            message = refusal ?? "Запускаю секретаря."
+            return refusal ?? "Запускаю секретаря."
         }
-        return AsyncThrowingStream { $0.yield(message); $0.finish() }
     }
 
     /// Opens a Claude Code draft; the user's Enter there is the only start.

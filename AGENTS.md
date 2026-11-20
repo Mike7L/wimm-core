@@ -51,9 +51,13 @@ reasons behind the rules are in `docs/` (index: `docs/README.md`).
   a Claude Code draft by deep link, no model call; it
   must never auto-submit without a new user decision. Second exception: when
   the pending notes fill one secretary packet (`SecretaryPassScan.pendingBytes`
-  ≥ packet size), she asks once per packet whether to start a pass (spoken only
-  with the mic closed or in headphones mode, else banner only); only a spoken
-  yes or «запусти секретаря» starts it (`VikSecretaryOffer`), never code alone.
+  ≥ packet size), she asks once per packet whether to start a pass: a banner
+  with «Запустить»/«Не сейчас» buttons; only a button, a spoken yes or
+  «запусти секретаря» starts it (`VikSecretaryOffer`), never code alone.
+- Alyona never interrupts the user on her own: unprompted speech waits for a
+  pause (`VikAssistant.userIsQuiet`: mic off, or headphones with ≥ 5 s quiet;
+  never while recording without headphones). An emergency exception needs a
+  new decision.
 - Note place: sidecar `location` (`NoteLocation`), written once via
   `NoteLocation.stamp` and never replaced. A note made now gets the device
   position (`DeviceLocation`, never blocks capture, none if refused); an

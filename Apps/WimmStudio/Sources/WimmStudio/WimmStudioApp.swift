@@ -346,10 +346,9 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
         guard VikSecretaryOffer.shouldOffer(bytes: scan.pendingBytes, packetBytes: packetBytes,
                                             lastOfferedBytes: secretaryOfferedBytes),
               !model.secretary.isRunning, !PrivateMode.isEnabled,
-              let question = vik.offerSecretary(pending: scan.pending, bytes: scan.pendingBytes) else { return }
+              vik.offerSecretary(pending: scan.pending, bytes: scan.pendingBytes) else { return }
         secretaryOfferedBytes = scan.pendingBytes
         secretaryOfferedAfterRun = model.secretary.startedAt
-        saveConfirmation.show(message: "Алёна: \(question)", systemImage: "tray.full", duration: .seconds(20))
     }
 
     /// A note was created or edited here: refresh the library and queue it for the iPhone.
@@ -471,6 +470,7 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         trackVikBanner()
+        vik.onNotice = { [weak self] in self?.saveConfirmation.show(message: "Алёна: \($0)", systemImage: "tray.full") }
         vik.startMonitoring()
         monitorSecretaryBacklog()
         recentNotes.reload()

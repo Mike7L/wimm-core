@@ -259,14 +259,17 @@ final class VikAssistantTests: XCTestCase {
         let h = VikHarness()
         defer { h.assistant.shutdown() }
         // Recording without headphones: the question would land in the note, so it is not spoken.
-        XCTAssertNotNil(h.assistant.offerSecretary(pending: 5, bytes: 600_000))
+        XCTAssertTrue(h.assistant.offerSecretary(pending: 5, bytes: 600_000))
         XCTAssertTrue(h.voice.lines.isEmpty)
+        XCTAssertEqual(h.assistant.banner?.actions.map(\.title), ["Запустить", "Не сейчас"])
         h.privateMode = true
-        XCTAssertNil(h.assistant.offerSecretary(pending: 5, bytes: 600_000))
+        XCTAssertFalse(h.assistant.offerSecretary(pending: 5, bytes: 600_000))
         h.privateMode = false
         h.capture.isRecording = false
-        XCTAssertNotNil(h.assistant.offerSecretary(pending: 5, bytes: 600_000))
+        XCTAssertTrue(h.assistant.offerSecretary(pending: 5, bytes: 600_000))
         XCTAssertEqual(h.voice.lines.count, 1)
+        h.assistant.tick()
+        XCTAssertEqual(h.voice.lines.count, 1) // Asked once.
         XCTAssertTrue(h.voice.lines[0].contains("Запустить?"))
 
         h.capture.isRecording = true
@@ -277,6 +280,33 @@ final class VikAssistantTests: XCTestCase {
         XCTAssertEqual(h.calls.count, 0)
         XCTAssertEqual(h.assistant.answer, "Запускаю секретаря.")
         XCTAssertNil(h.assistant.secretaryOffer)
+    }
+
+    func testUnpromptedQuestionWaitsForAPauseAndButtonsAnswerIt() {
+        let h = VikHarness()
+        defer { h.assistant.shutdown() }
+        var notices: [String] = []
+        h.assistant.onNotice = { notices.append($0) }
+        h.assistant.keepMicOpen = true
+        h.capture.liveText = "Я сейчас говорю"
+        h.capture.quietAfterSpeech = (1, 1)
+        h.assistant.offerSecretary(pending: 5, bytes: 600_000)
+        h.assistant.tick()
+        XCTAssertTrue(h.voice.lines.isEmpty) // Never over the user's speech.
+        h.capture.quietAfterSpeech = (6, 1)
+        h.assistant.tick()
+        XCTAssertEqual(h.voice.lines.count, 1)
+
+        h.assistant.banner?.actions.first { $0.title == "Не сейчас" }?.run()
+        XCTAssertNil(h.assistant.secretaryOffer)
+        XCTAssertNil(h.assistant.banner)
+        XCTAssertEqual(h.secretaryRuns, 0)
+        h.assistant.offerSecretary(pending: 5, bytes: 600_000)
+        h.secretaryRefusal = "Секретарь уже работает."
+        h.assistant.banner?.actions.first { $0.isPrimary }?.run()
+        XCTAssertEqual(h.secretaryRuns, 1)
+        XCTAssertEqual(notices, ["Хорошо, не запускаю.", "Секретарь уже работает."])
+        XCTAssertEqual(h.calls.count, 0)
     }
 
     func testSecretaryDeclineAnswersWithoutModel() async {
