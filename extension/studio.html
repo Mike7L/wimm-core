@@ -1,0 +1,30 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Wimm · Блокнот</title><link rel="icon" href="icons/48.png"><link rel="stylesheet" href="ui/base.css"><link rel="stylesheet" href="ui/studio.css"></head><body>
+<aside><div class="brand"><img src="icons/48.png" alt="">Wimm</div>
+<nav aria-label="Блокнот"><a href="#library"><i>▤</i>Библиотека</a><a href="#secretary"><i>▧</i>Секретарь</a><a href="#assistant"><i>✳</i>Алёна</a></nav>
+<div class="asideFoot"><a href="#settings"><i>⚙</i>Настройки</a><div class="local"><b></b> Локальный блокнот</div></div></aside>
+<main>
+<header class="top"><span id="bread">Мой блокнот</span><span id="today"></span></header>
+<div class="content">
+<section data-page="library">
+<div class="heading"><div><div class="eyebrow">Мой блокнот</div><h1>Библиотека</h1></div><button id="compose">＋ Текстовая заметка</button></div>
+<div class="captureGrid">
+<article class="voiceCard"><div class="voiceVisual" aria-hidden="true"></div><div class="eyebrow">Микрофон</div><h2>Запись голоса</h2><button id="record" class="recordButton"><span class="dot"></span><span id="recordLabel">Начать запись</span></button><small id="recordTime"></small></article>
+<article id="drop" class="drop"><div class="fileMark" aria-hidden="true">⇧</div><h2>Импорт файлов</h2><p>Перетащите аудио, документы или изображения.</p><button id="chooseFiles">Выбрать файлы</button><input type="file" id="files" multiple hidden></article>
+</div><p id="live" role="status" hidden></p>
+<div class="listHeader"><h2>Заметки <span id="count"></span></h2><input type="search" id="search" placeholder="Поиск по заметкам" aria-label="Поиск по заметкам"></div>
+<div id="filters" class="filters" aria-label="Фильтр по типу"><button data-filter="all" class="selected">Все</button><button data-filter="audio">Аудио</button><button data-filter="text">Текст</button><button data-filter="image">Изображения</button><button data-filter="document">Документы</button></div>
+<div id="notes"></div></section>
+<section data-page="secretary" hidden><div class="eyebrow">Claude API</div><h1>Секретарь</h1><p class="intro">Выберите источники. Claude предложит раздел для вашего личного документа со ссылками на заметки.</p>
+<div class="panel"><h2>Источники</h2><div id="sources"></div><button id="generate" class="primary">Подготовить черновик</button></div>
+<div id="draftBox" class="panel" hidden><h2>Черновик Claude</h2><label for="draft">Проверьте и при необходимости исправьте текст</label><textarea id="draft" rows="9"></textarea><div class="row"><button id="approve" class="primary">Добавить в документ</button><button id="discard">Отложить черновик</button></div></div>
+<div class="panel"><div class="row"><h2>Личный документ</h2><span class="spacer"></span><button id="exportDoc">Скачать .md</button></div><div id="document" class="prose"></div></div></section>
+<section data-page="assistant" hidden><div class="eyebrow">Голосовой помощник</div><h1>Алёна</h1><p class="intro">Во время записи скажите «Алёна, …» и задайте вопрос. Алёна также понимает команды «найди …» и «запусти секретаря».</p>
+<div class="panel"><form id="askForm"><label for="ask">Обращение к Алёне</label><textarea id="ask" rows="3" placeholder="Алёна, найди заметки про отпуск" required></textarea><div class="row"><button class="primary" id="askButton">Спросить</button><label class="inline"><input id="speak" type="checkbox"> Озвучивать ответ</label></div></form></div><div id="replyBox" class="panel" hidden><h2>Ответ Алёны</h2><div id="reply" class="prose"></div></div></section>
+<section data-page="settings" hidden><div class="eyebrow">Подключения</div><h1>Настройки</h1><div class="panel"><h2>Claude API</h2><p class="muted">Ключ доступен расширению до закрытия браузера. Запросы идут напрямую в Anthropic.</p>
+<form id="settingsForm"><label>Ключ Anthropic<input type="password" id="key" placeholder="sk-ant-…" autocomplete="off"></label><label>Модель Claude<input type="text" id="model" required value="claude-sonnet-4-6"></label><div class="row"><button class="primary">Сохранить</button><button id="forget" type="button">Удалить ключ</button></div></form></div>
+<div class="panel"><h2>Распознавание речи</h2><label class="inline"><input type="checkbox" id="recognize"> Распознавать речь во время записи</label><p class="muted">Русская модель Vosk работает на устройстве. Алёна получает финальный текст обращения после завершения записи.</p></div><div class="panel"><h2>Версия и обновления</h2><p id="installedVersion" class="muted"></p><button id="checkUpdate">Проверить обновления</button><p id="updateResult" role="status"></p></div></section>
+</div></main>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+<dialog id="editor"><form id="editForm"><div class="row"><h2 id="editorTitle">Текстовая заметка</h2><span class="spacer"></span><button type="button" class="close" aria-label="Закрыть">×</button></div><label for="body">Текст</label><textarea id="body" required rows="8" placeholder="Что запомнить?"></textarea><button class="primary">Сохранить</button></form></dialog>
+<dialog id="reader"><div class="row"><span id="readKind" class="eyebrow"></span><span class="spacer"></span><button class="close" aria-label="Закрыть">×</button></div><h2 id="readTitle"></h2><p id="readDate" class="muted"></p><div id="media"></div><p id="readText" class="prose"></p><div id="originalUrl"></div><div class="row"><button id="transcribe" hidden>Распознать аудио</button><button id="editText">Изменить текст</button><button id="download">Скачать оригинал</button></div></dialog>
+<script src="vendor/vosk/vosk.js"></script><script type="module" src="ui/studio.js"></script></body></html>
