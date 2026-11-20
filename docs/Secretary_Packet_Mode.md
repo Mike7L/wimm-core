@@ -791,6 +791,17 @@ replies with lists only; Wimm turns the block diff into format-2 operations —
   `done_no_additions`), on the size of packet that had lost 78–97 sources before. The
   contract now asks to decide every source with its own reason; the completion stays
   as the fallback.
+  Controlled replay the same night (Sonnet, the saved `packet-1/input.json`, only the
+  contract sentence changed; artifacts in each run's `ab-contract-20261121/`):
+
+  | Packet | Before: decided, cost | Contract line: decided, cost | + completion (warm cache) |
+  | --- | ---: | ---: | ---: |
+  | `ae26`, 100 sources | 22, $0.42 | 41, $0.45 | 100 (59 of 59), +$0.05 |
+  | `d66c`, 113 sources | 16, $0.42 | 113, $0.48 (5 edits, was 1) | not needed |
+
+  The contract line alone is not enough (`ae26`); the completion closes the rest for
+  about a tenth of the request (157,746 tokens read from the cache, 1,907 out). Cost per
+  decided source fell from $0.019–0.026 to $0.004–0.005.
 - **Mass omissions do not skip (2026-11-21):** a report whose non-lazy reply left more
   than half of a packet of more than five sources unmentioned neither extends nor ends
   a source's skipped streak (`skippedSnapshots`). It released the 97 notes stuck since
