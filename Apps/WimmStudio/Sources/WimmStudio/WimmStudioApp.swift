@@ -646,6 +646,11 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
                 onOpenDocument: { [weak self] in self?.focusDocumentWindow() },
                 onOpenNote: { [weak self] in self?.openHUDNote($0) },
                 onOpenWeb: { [weak self] in self?.webLauncher.open() },
+                onOpenList: { [weak self] in
+                    // Same key as the document window's timeline toggle.
+                    UserDefaults.standard.set(true, forKey: "WimmStudio.showsTimeline")
+                    self?.focusDocumentWindow()
+                },
                 island: island,
                 vik: vik,
                 onSaveQuickNote: { [weak self] make in self?.saveQuickNote(make) }

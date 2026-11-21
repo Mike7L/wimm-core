@@ -43,6 +43,7 @@ struct ResponsiveHUDView: View {
     let onOpenDocument: () -> Void
     var onOpenNote: (URL) -> Void = { _ in }
     var onOpenWeb: (() -> Void)?
+    var onOpenList: (() -> Void)?
     var island: HUDIslandModel?
     var vik: VikAssistant?
     var onSaveQuickNote: (@MainActor (@escaping @MainActor () async throws -> [URL]) -> Void)?
@@ -62,6 +63,7 @@ struct ResponsiveHUDView: View {
         onOpenDocument: @escaping () -> Void,
         onOpenNote: @escaping (URL) -> Void = { _ in },
         onOpenWeb: (() -> Void)? = nil,
+        onOpenList: (() -> Void)? = nil,
         island: HUDIslandModel? = nil,
         vik: VikAssistant? = nil,
         onSaveQuickNote: (@MainActor (@escaping @MainActor () async throws -> [URL]) -> Void)? = nil
@@ -71,6 +73,7 @@ struct ResponsiveHUDView: View {
         self.onOpenDocument = onOpenDocument
         self.onOpenNote = onOpenNote
         self.onOpenWeb = onOpenWeb
+        self.onOpenList = onOpenList
         self.island = island
         self.vik = vik
         self.onSaveQuickNote = onSaveQuickNote
@@ -295,7 +298,7 @@ struct ResponsiveHUDView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 5) {
-                    if recentNotes.notes.isEmpty && !capture.isRecording && capture.anchors.isEmpty && !showsVikReply {
+                    if activeNote == nil && !capture.isRecording && capture.anchors.isEmpty && !showsVikReply {
                         Text(recentNotes.isLoading ? "Loading library…" : "No recent notes")
                             .font(.system(size: 11, weight: .medium, design: .rounded))
                             .foregroundStyle(.secondary)
@@ -303,16 +306,15 @@ struct ResponsiveHUDView: View {
                             .padding(.vertical, 16)
                     }
 
+                    // Only the active note lives here; older ones are in the
+                    // library timeline (list button in the bar).
                     let placement = vikPlacement
-                    ForEach(recentNotes.notes) { note in
+                    if let note = activeNote {
                         noteRow(note)
                             .id(note.id)
-                        if let vik, placement == .afterNote(note.id) {
-                            ObservedRow { vikReply(vik) }.id(Self.vikReplyID)
-                        }
                     }
 
-                    if let vik, placement == .afterNotes {
+                    if let vik, placement != .hidden, placement != .afterLive {
                         ObservedRow { vikReply(vik) }.id(Self.vikReplyID)
                     }
 
@@ -389,6 +391,11 @@ struct ResponsiveHUDView: View {
         DispatchQueue.main.async {
             proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
         }
+    }
+
+    /// The note the HUD is about: the live recording, else the newest note.
+    private var activeNote: Note? {
+        capture.isRecording ? nil : recentNotes.notes.last
     }
 
     private func noteRow(_ note: Note) -> some View {
@@ -638,6 +645,12 @@ struct ResponsiveHUDView: View {
                     .frame(width: 1, height: 14)
                     .padding(.horizontal, 7)
                     .accessibilityHidden(true)
+                if let onOpenList {
+                    StudioBarButton(icon: "list.bullet",
+                                    help: "Все заметки (таймлайн библиотеки)") {
+                        onOpenList()
+                    }
+                }
                 StudioBarButton(icon: "doc.text",
                                 help: "Open Personal Document") {
                     onOpenDocument()
@@ -837,10 +850,12 @@ private struct HUDNoteRow: View {
                         .accessibilityHidden(true)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(note.studioTitle)
+                        // The active note is read in full; the HUD scrolls it.
+                        Text(note.insertableText ?? note.studioTitle)
                             .font(.system(size: 12, weight: .medium, design: .rounded))
                             .foregroundStyle(.primary.opacity(0.88))
-                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
 
                         HStack(spacing: 5) {
                             Text(note.absoluteDate.formatted(Self.dateStyle))
