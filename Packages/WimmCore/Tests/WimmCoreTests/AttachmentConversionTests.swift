@@ -75,4 +75,26 @@ final class AttachmentConversionTests: XCTestCase {
         XCTAssertTrue(body.contains("[[\(pngBase)]]"), "the link to the original SVG is replaced: \(body)")
         XCTAssertFalse(body.contains("logo.svg)"), body)
     }
+
+    func testLostAttachmentBecomesATextThatSaysSo() throws {
+        let txt = recordings.appendingPathComponent("Wimm_2016-01-02_10-00-00_dddddddd.txt")
+        try Data("Скриншот ниже\n".utf8).write(to: txt)
+        let sidecar = FileStore.metadataURL(forRecordingURL: txt)
+        let id = "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"
+        try JSONSerialization.data(withJSONObject: [
+            "schema": "WimmMeta@v1",
+            "attachments": [["id": id, "url": "Recordings/screenshot_gone.png", "type": "image"]],
+        ]).write(to: sidecar)
+
+        let report = try AttachmentConversion.run(library: library, apply: true, converter: fake)
+        XCTAssertEqual(report.items.map(\.format), [.lost])
+        let lost = library.appendingPathComponent("Attachments/Lost/\(id).txt")
+        XCTAssertTrue(try String(contentsOf: lost, encoding: .utf8).contains("screenshot_gone.png"))
+
+        let split = try AttachmentSplitMigration.run(.init(
+            apply: true, backupDirectory: library.appendingPathComponent("repair-backups/l"), library: library))
+        XCTAssertEqual(split.parents.first?.items.map(\.action), ["split"])
+        let meta = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: sidecar)) as? [String: Any])
+        XCTAssertNil(meta["attachments"], "no attachment is left behind")
+    }
 }

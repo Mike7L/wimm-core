@@ -6,9 +6,10 @@ import WimmDomain
 /// written next to the original, which stays where it is. SVG becomes PNG,
 /// AMR/WebM voice becomes m4a, a saved web page, calendar or archive becomes
 /// text; anything else, or a failed conversion, becomes a short text note
-/// that says what the file was. The parent's entry then points at the new
-/// file (`convertedFrom` keeps the old URL), so `AttachmentSplitMigration`
-/// splits it like any other. Entries whose file is missing are left alone.
+/// that says what the file was. An entry whose file is gone (missing, or a
+/// path on another device) becomes a text under `Attachments/Lost/` that
+/// says so. The parent's entry then points at the new file (`convertedFrom`
+/// keeps the old URL), so `AttachmentSplitMigration` splits it like any other.
 ///
 /// Dry-run unless `apply`. A rerun reuses a converted file that already
 /// exists. Every sidecar write goes through `FileStore.mutateSidecar`.
@@ -33,7 +34,7 @@ public enum AttachmentConversion {
         }
     }
 
-    public enum Format: String, Codable, Sendable { case svg, amr, webm, html, ics, zip, unknown }
+    public enum Format: String, Codable, Sendable { case svg, amr, webm, html, ics, zip, unknown, lost }
 
     public struct Item: Codable, Sendable, Equatable {
         public var parentSidecar: String
@@ -60,13 +61,18 @@ public enum AttachmentConversion {
         let recordings = library.appendingPathComponent("Recordings", isDirectory: true)
         var report = Report(dryRun: !apply)
         for parent in plan.parents {
-            for entry in parent.items where entry.action == "unsupported" {
-                let source = library.appendingPathComponent(entry.source)
+            for entry in parent.items where ["unsupported", "missing", "outside-library"].contains(entry.action) {
+                let lost = entry.action != "unsupported"
+                let source = lost ? URL(fileURLWithPath: entry.source) : library.appendingPathComponent(entry.source)
                 var item = Item(parentSidecar: parent.sidecar, attachmentID: entry.attachmentID,
-                                source: entry.source, format: format(of: source), output: nil, action: "convert")
+                                source: entry.source, format: lost ? .lost : format(of: source), output: nil,
+                                action: lost ? "describe" : "convert")
                 do {
-                    let output = try convert(source, format: item.format, relative: entry.source,
-                                             apply: apply, converter: converter, action: &item.action)
+                    let output = lost
+                        ? try describeLost(entry, parentSidecar: parent.sidecar, library: library, apply: apply,
+                                           action: &item.action)
+                        : try convert(source, format: item.format, relative: entry.source,
+                                      apply: apply, converter: converter, action: &item.action)
                     item.output = AttachmentSplitMigration.relativePath(output, library: library)
                     if apply {
                         try repoint(sidecar: recordings.appendingPathComponent(parent.sidecar),
@@ -158,6 +164,22 @@ public enum AttachmentConversion {
         return output
     }
 
+    /// The file is gone; what is left is the fact that it was there.
+    private static func describeLost(_ entry: AttachmentSplitMigration.Item, parentSidecar: String, library: URL,
+                                     apply: Bool, action: inout String) throws -> URL {
+        let folder = library.appendingPathComponent("Attachments/Lost", isDirectory: true)
+        let output = folder.appendingPathComponent(entry.attachmentID.uppercased() + ".txt")
+        if FileManager.default.fileExists(atPath: output.path) { action = "reuse"; return output }
+        guard apply else { return output }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let name = (entry.source as NSString).lastPathComponent
+        let body = "Вложение потеряно: файла `\(name)` (\(entry.kind)) нет в библиотеке. "
+            + "Он был приложен к заметке `\(AttachmentSplitMigration.baseName(ofSidecar: parentSidecar))`; "
+            + "путь в записи: `\(entry.source)`.\n"
+        try Data(body.utf8).write(to: output, options: .atomic)
+        return output
+    }
+
     private static func describe(_ format: Format) -> String {
         switch format {
         case .svg: return "векторная картинка SVG"
@@ -167,6 +189,7 @@ public enum AttachmentConversion {
         case .ics: return "событие календаря"
         case .zip: return "архив zip"
         case .unknown: return "файл неизвестного типа"
+        case .lost: return "потерянный файл"
         }
     }
 

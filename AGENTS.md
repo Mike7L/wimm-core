@@ -85,10 +85,10 @@ reasons behind the rules are in `docs/` (index: `docs/README.md`).
   belong to the document workflow.
 - **One note = one media.** New code never writes sidecar `attachments`; each
   captured file is its own note. Grouping is time + `[[links]]` + the
-  document, never a group field. Existing attachments (Evernote import,
-  evening journal, iPhone) await a dry-run-first split migration; until it is
-  applied, counts and audits must still include `attachments` via
-  `NoteAttachmentMedia`.
+  document, never a group field. The split migration was applied to the Mac
+  library on 2026-11-21 (`notes convert-attachments`, then
+  `notes split-attachments`); until the iPhone's copies are verified, counts
+  and audits must still include `attachments` via `NoteAttachmentMedia`.
 - **A note's kind and body text come from `NoteContent`** (`WimmDomain`): a
   text note (`txt/md/markdown`) is its file, never a sidecar copy; never add a
   per-reader extension check. Notes with lost media are plain `.txt` notes with

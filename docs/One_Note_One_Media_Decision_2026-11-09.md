@@ -4,17 +4,15 @@ Status: **decided** by the user on 2026-11-09. Stages 1–2 implemented
 2026-11-09 (see "Implementation status"); `--apply` on the real library not
 run (needs the user's yes); stages 3–4 open.
 
-Dry run on the real library, 2026-11-21 (nothing changed): 8 319 sidecars,
-0 parse errors; 1 540 parents with attachments, 1 517 to change, 0 failed;
-320 empty lists. 4 713 attachments: split 4 338, promote 185, left in place
-190. An Evernote file saved without an extension is named by its first bytes
-(JPEG, PNG, GIF, PDF: 13 files). Left in place, all under Evernote text
-notes: 149 SVG images (97 `.svg`, 52 without an extension), 10 AMR voice
-clips, 11 saved web pages (HTML), one each of zip, webm and ics; 14 files
-missing on disk and 3 with an iPhone container path. 114 `_micro` files move
-with their notes. Those 190 stay in `attachments` after `--apply`, so "no
-sidecar has `attachments`" needs a decision on SVG/AMR/HTML notes and on
-entries whose file is gone.
+**Applied to the Mac library 2026-11-21** (user's yes; Studio closed,
+backups under `repair-backups/convert-*` and `split-attachments-*`). Before
+the split, `wimm-cli notes convert-attachments --apply` turned what the
+library could not list into files next to the originals (which stay): 149
+SVG -> PNG, 10 AMR + 1 WebM -> m4a, 11 web pages, 1 calendar and 1 zip ->
+text; 17 entries whose file was gone became texts under `Attachments/Lost/`.
+The split then made 4 528 notes and promoted 185 parent files; 0 failures.
+No Mac sidecar has `attachments` now. The read paths (stage 4) stay until
+the iPhone's own copies are checked after sync.
 
 ## Decision
 
