@@ -239,7 +239,7 @@ struct ResponsiveHUDView: View {
                     .frame(maxWidth: .infinity, minHeight: layout.controlBarHeight, maxHeight: layout.controlBarHeight)
             }
 
-            streamList
+            streamList(reservesCorner: collapsesFromListCorner(layout))
                 .frame(maxWidth: .infinity, minHeight: layout.listHeight, maxHeight: layout.listHeight)
                 .clipped()
                 .opacity(layout.listOpacity)
@@ -294,7 +294,9 @@ struct ResponsiveHUDView: View {
         return .afterNotes
     }
 
-    private var streamList: some View {
+    /// `reservesCorner`: the collapse button floats in the top-right corner, so the
+    /// rows keep clear of that column instead of running under it.
+    private func streamList(reservesCorner: Bool) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 5) {
@@ -343,7 +345,8 @@ struct ResponsiveHUDView: View {
                         .frame(height: 1)
                         .id(Self.bottomAnchorID)
                 }
-                .padding(.horizontal, 10)
+                .padding(.leading, 10)
+                .padding(.trailing, reservesCorner ? 34 : 10)
                 .padding(.top, 8)
                 .padding(.bottom, 4)
             }
@@ -867,6 +870,8 @@ private struct HUDNoteRow: View {
                                     .foregroundStyle(note.hasFileTranscript ? Color.green.opacity(0.9) : Color.orange.opacity(0.9))
                             }
                         }
+                        // Reserved line height for the actions, so hover never reflows the row.
+                        .frame(minHeight: 18)
                     }
 
                     Spacer(minLength: 4)
@@ -876,33 +881,40 @@ private struct HUDNoteRow: View {
             .buttonStyle(.plain)
             .help(showsTooltip ? "Открыть заметку" : "")
             .accessibilityLabel("Открыть заметку: \(note.studioTitle)")
-
-            if isHovered {
-                HStack(spacing: 4) {
-                    Button {
-                        onCopy(note.refinedText ?? note.text)
-                    } label: {
-                        Image(systemName: "doc.on.doc")
-                            .font(.system(size: 10, weight: .semibold))
-                            .frame(width: 20, height: 20)
-                    }
-                    .buttonStyle(.plain)
-                    .focusEffectDisabled()
-                    .help("Copy note text")
-
-                    Button {
-                        NSWorkspace.shared.activateFileViewerSelecting([note.fileURL])
-                    } label: {
-                        Image(systemName: "folder")
-                            .font(.system(size: 10, weight: .semibold))
-                            .frame(width: 20, height: 20)
-                    }
-                    .buttonStyle(.plain)
-                    .focusEffectDisabled()
-                    .help("Reveal in Finder")
+        }
+        // Actions sit on the date line and only fade in: showing them never
+        // narrows the text (which made it rewrap and jump) and keeps them out
+        // of the list's top corner, where the collapse button lives.
+        .overlay(alignment: .bottomTrailing) {
+            HStack(spacing: 4) {
+                Button {
+                    onCopy(note.refinedText ?? note.text)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 20, height: 18)
+                        .contentShape(Rectangle())
                 }
-                .foregroundStyle(.secondary)
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .help("Copy note text")
+
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([note.fileURL])
+                } label: {
+                    Image(systemName: "folder")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 20, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled()
+                .help("Reveal in Finder")
             }
+            .foregroundStyle(.secondary)
+            .opacity(isHovered ? 1 : 0)
+            .allowsHitTesting(isHovered)
+            .accessibilityHidden(!isHovered)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
