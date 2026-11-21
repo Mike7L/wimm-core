@@ -29,6 +29,7 @@ import {
 } from './types';
 import { BlockBodyRenderer, InlineMarkdown, toVisiblePlainText } from './markdownRender';
 import { ShouldersPanel } from './ShouldersPanel';
+import { EyesClosedPanel } from './EyesClosedPanel';
 import { QuestionCard, loadQuestionReader, saveQuestionReader, type QuestionReaderName } from './QuestionCard';
 import { DocumentChangesPanel } from './DocumentChangesPanel';
 import { FeedApp } from './feed/FeedApp';
@@ -58,6 +59,21 @@ export function App() {
 
   // Screens: feed + document, dashboard, dialog
   const [view, setView] = useState<View>(() => viewFromPath(window.location.pathname));
+  const [dialogMode, setDialogMode] = useState<'shoulders' | 'eyes'>(() => {
+    try {
+      return localStorage.getItem('WimmStudioWeb.dialogMode') === 'eyes' ? 'eyes' : 'shoulders';
+    } catch {
+      return 'shoulders';
+    }
+  });
+  const chooseDialogMode = (mode: 'shoulders' | 'eyes') => {
+    setDialogMode(mode);
+    try {
+      localStorage.setItem('WimmStudioWeb.dialogMode', mode);
+    } catch {
+      // Private window: the choice lasts this visit.
+    }
+  };
   const previousView = useRef<View>('doc');
   const inWorkspace = view === 'feed' || view === 'doc';
   const isWide = useIsWide();
@@ -1525,28 +1541,57 @@ export function App() {
           />
         )}
 
-        {/* Screen 3: dialog — Angel and Demon argue over the document's dossier. */}
-        <div className={`absolute inset-0 bg-zinc-950 ${view === 'dialog' ? '' : 'invisible'}`}>
-          <ShouldersPanel
-            variant="page"
-            open={view === 'dialog'}
-            onClose={() => go(previousView.current)}
-            activeContext={activeShouldersContext}
-            onSaveInsight={async ({ speaker, text, section, heading }) => {
-              await fetch('/api/threads', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  action: 'add',
-                  section,
-                  heading,
-                  reaction: speaker === 'angel' ? '😇' : '😈',
-                  text: `${speaker === 'angel' ? 'Ангел' : 'Демон'}: ${text}`,
-                }),
-              });
-              await loadDocument();
-            }}
-          />
+        {/* Screen 3: dialog — Angel and Demon argue over the document's dossier, or «Закрытые глаза». */}
+        <div className={`absolute inset-0 flex flex-col bg-zinc-950 ${view === 'dialog' ? '' : 'invisible'}`}>
+          <div role="tablist" aria-label="Режим диалога" className="mx-auto flex w-full max-w-3xl shrink-0 gap-1 border-b border-zinc-800/80 px-3 py-1.5 md:border-x md:border-zinc-800/90">
+            {(
+              [
+                ['shoulders', 'Ангел и Демон'],
+                ['eyes', 'Закрытые глаза'],
+              ] as const
+            ).map(([mode, label]) => (
+              <button
+                key={mode}
+                type="button"
+                role="tab"
+                aria-selected={dialogMode === mode}
+                onClick={() => chooseDialogMode(mode)}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                  dialogMode === mode ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-200'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="relative min-h-0 flex-1">
+            {/* Both stay mounted, so switching keeps each conversation; only the shown one is open. */}
+            <div className={`absolute inset-0 ${dialogMode === 'eyes' ? '' : 'hidden'}`}>
+              <EyesClosedPanel open={view === 'dialog' && dialogMode === 'eyes'} />
+            </div>
+            <div className={`absolute inset-0 ${dialogMode === 'shoulders' ? '' : 'hidden'}`}>
+              <ShouldersPanel
+                variant="page"
+                open={view === 'dialog' && dialogMode === 'shoulders'}
+                onClose={() => go(previousView.current)}
+                activeContext={activeShouldersContext}
+                onSaveInsight={async ({ speaker, text, section, heading }) => {
+                  await fetch('/api/threads', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      action: 'add',
+                      section,
+                      heading,
+                      reaction: speaker === 'angel' ? '😇' : '😈',
+                      text: `${speaker === 'angel' ? 'Ангел' : 'Демон'}: ${text}`,
+                    }),
+                  });
+                  await loadDocument();
+                }}
+              />
+            </div>
+          </div>
         </div>
       </div>
 

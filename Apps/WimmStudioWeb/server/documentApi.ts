@@ -32,6 +32,7 @@ import {
   triggerWimmCapture,
   resolveWimmCliBinary,
 } from './shouldersApi.ts';
+import { getEyesStatus, handleEyesSave, handleEyesTurn } from './eyesClosedApi.ts';
 import { sendStudioVoiceCommand, startStudioVoiceEvents } from './studioVoice.ts';
 import { createZonosVoice } from './zonosVoice.ts';
 
@@ -1630,6 +1631,30 @@ export function createStudioApi(): StudioApi {
 
           if (req.method === 'POST' && url.pathname === '/api/question/rate') {
             handleQuestionRating(res, await readJsonBody(req));
+            return;
+          }
+
+          if (req.method === 'GET' && url.pathname === '/api/eyes/status') {
+            res.setHeader('Cache-Control', 'no-store');
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
+            res.end(JSON.stringify(getEyesStatus()));
+            return;
+          }
+
+          if (req.method === 'POST' && url.pathname === '/api/eyes/save') {
+            handleEyesSave(res, await readJsonBody(req));
+            return;
+          }
+
+          if (req.method === 'POST' && url.pathname === '/api/eyes/turn') {
+            const body = await readJsonBody(req);
+            const abort = new AbortController();
+            res.once('close', () => {
+              if (!res.writableEnded) abort.abort();
+            });
+            // The question is seconds away: Studio's voice goes cold after a long quiet stretch.
+            void sendStudioVoiceCommand({ action: 'prepare' }, { waitForAck: false });
+            await handleEyesTurn(res, body, abort.signal);
             return;
           }
 

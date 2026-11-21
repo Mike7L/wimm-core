@@ -40,6 +40,10 @@ reasons behind the rules are in `docs/` (index: `docs/README.md`).
   `GeminiChatStream` (through `LLMTransport`, refuses in private mode); the
   agent-driven "Друг" path is `friend.md` + the `wimm-conversation` skill's
   `wait_answer.sh`.
+- Studio web «Закрытые глаза» (Диалог → вкладка) sends the model only the
+  session itself — never the dossier or document — and keeps questions short
+  and non-leading; his answers stay ordinary voice notes, no model summary
+  (`docs/Studio_Eyes_Closed.md`).
 - Studio «Алёна» (code keeps `Vik*` names) handles «Алёна» (optional «Эй»)
   inside live capture: close/save audio before speaking, wait for a successful
   final live receipt (bounded, cancelable), resume only its unchanged capture

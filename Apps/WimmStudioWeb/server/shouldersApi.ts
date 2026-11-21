@@ -949,11 +949,11 @@ export function parseStreamedLine(
 
 // --- Thinking config & per-model fallback (mirrors GeminiChatStream.swift) ---
 
-type InternalThinkingForm = 'minimalLevel' | 'zeroBudget' | 'lowLevel' | 'mediumLevel' | 'modelDefault';
+export type InternalThinkingForm = 'minimalLevel' | 'zeroBudget' | 'lowLevel' | 'mediumLevel' | 'modelDefault';
 
-const acceptedLeastThinkingByModel = new Map<string, InternalThinkingForm>();
+export const acceptedLeastThinkingByModel = new Map<string, InternalThinkingForm>();
 
-function getInitialThinkingForm(
+export function getInitialThinkingForm(
   thinking: ShouldersThinkingId,
   model: string
 ): InternalThinkingForm {
@@ -970,7 +970,7 @@ function getInitialThinkingForm(
   }
 }
 
-function getThinkingConfigObject(form: InternalThinkingForm): Record<string, unknown> | undefined {
+export function getThinkingConfigObject(form: InternalThinkingForm): Record<string, unknown> | undefined {
   switch (form) {
     case 'minimalLevel':
       return { thinkingLevel: 'minimal' };
@@ -985,7 +985,7 @@ function getThinkingConfigObject(form: InternalThinkingForm): Record<string, unk
   }
 }
 
-function getFallbackThinkingForm(form: InternalThinkingForm): InternalThinkingForm | null {
+export function getFallbackThinkingForm(form: InternalThinkingForm): InternalThinkingForm | null {
   switch (form) {
     case 'minimalLevel':
       return 'zeroBudget';
