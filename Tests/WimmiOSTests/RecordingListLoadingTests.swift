@@ -61,7 +61,7 @@ final class RecordingListLoadingTests: XCTestCase {
         await fulfillment(of: [state.paused], timeout: 2)
         try FileManager.default.removeItem(at: old)
         let replacement = try writeNote("replacement")
-        await state.repository.invalidateCache()
+        await state.fileRepository.invalidateCache()
         await state.loadRecordings()
         state.resume()
         await load.value
@@ -89,7 +89,7 @@ final class RecordingListLoadingTests: XCTestCase {
         await state.loadRecordings()
         XCTAssertEqual(state.listItemBuilds, 30)
 
-        await state.repository.invalidateCache()
+        await state.fileRepository.invalidateCache()
         await state.loadRecordings()
         XCTAssertEqual(state.listItemBuilds, 30, "nothing changed, nothing rebuilt")
 
@@ -97,7 +97,7 @@ final class RecordingListLoadingTests: XCTestCase {
         try "edited body text".write(to: edited, atomically: true, encoding: .utf8)
         let added = try writeNote("added")
         try FileManager.default.removeItem(at: FileStore.recordingsDirectory().appendingPathComponent("note-3.txt"))
-        await state.repository.invalidateCache()
+        await state.fileRepository.invalidateCache()
         await state.loadRecordings()
         XCTAssertEqual(state.listItemBuilds, 32, "only the edited and the added note")
         XCTAssertEqual(state.recordings.count, 30)
@@ -106,7 +106,7 @@ final class RecordingListLoadingTests: XCTestCase {
 
         let sidecar = FileStore.metadataURL(forRecordingURL: added)
         try #"{"duration": 12.5}"#.write(to: sidecar, atomically: true, encoding: .utf8)
-        await state.repository.invalidateCache()
+        await state.fileRepository.invalidateCache()
         await state.loadRecordings()
         XCTAssertEqual(state.listItemBuilds, 33, "a sidecar change rebuilds its row")
         XCTAssertEqual(state.recordings.first { $0.fileURL == added }?.durationSeconds, 12.5)

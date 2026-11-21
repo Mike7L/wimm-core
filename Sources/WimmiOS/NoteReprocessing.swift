@@ -127,7 +127,7 @@ extension AppState {
 
     func needsTranscription(for url: URL) async -> Bool {
         guard FileStore.isAudioFile(url) else { return false }
-        let run = await repository.metadata(for: url)[MetadataKey.transcription.rawValue] as? [String: Any]
+        let run = await MetadataRepository().metadata(for: url)[MetadataKey.transcription.rawValue] as? [String: Any]
         let provider = (run?["provider"] as? String)?.lowercased() ?? ""
         return Self.isOnDeviceProvider(provider)
     }

@@ -68,7 +68,6 @@ final class SidecarWriterTests: XCTestCase {
         let recording = tempDir.appendingPathComponent("race.m4a")
         try Data().write(to: recording)
         let metaURL = FileStore.metadataURL(forRecordingURL: recording)
-        let repo = IOSRecordingRepository()
         let writers = 60
 
         DispatchQueue.concurrentPerform(iterations: writers * 3) { i in
@@ -77,7 +76,7 @@ final class SidecarWriterTests: XCTestCase {
             case 0:
                 FileStore.upsertMetadata(for: recording, updates: ["upsert_\(n)": n])
             case 1:
-                repo.upsertMetadata(file: recording, updates: ["ios_\(n)": n])
+                FileStore.upsertMetadata(for: recording, updates: ["ios_\(n)": n])
             default:
                 try? FileStore.mutateSidecar(at: metaURL) { json in
                     json["direct_\(n)"] = n

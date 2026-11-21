@@ -21,11 +21,13 @@ final class RecordingCompletionTests: XCTestCase {
         XCTAssertFalse(state.showCapture)
         XCTAssertFalse(recorder.isRecording)
         XCTAssertEqual(state.recordings.map(\.fileURL), [firstURL])
-        XCTAssertEqual(state.recordings.first?.note?.summary, "Первая заметка. Продолжение.")
+        // Labels come from the note text, never a per-note card (AGENTS.md).
+        XCTAssertNil(state.recordings.first?.note)
         XCTAssertTrue(try RecordingMetadata.load(for: firstURL).isComplete)
         XCTAssertEqual(state.uploadedURLs, [firstURL])
         XCTAssertEqual(state.recordings.first?.durationSeconds, 12)
-        XCTAssertEqual(state.recordings.first?.note?.title, "Первая заметка")
+        XCTAssertTrue(state.recordings.first?.titlePreview.hasPrefix("Первая заметка") == true,
+                      state.recordings.first?.titlePreview ?? "nil")
         await state.finishRecording()
         XCTAssertEqual(state.uploadedURLs, [firstURL], "Repeated stop must not schedule another upload")
 
@@ -40,7 +42,7 @@ final class RecordingCompletionTests: XCTestCase {
         XCTAssertTrue(state.showCapture, "The old upload must not close a newer capture")
         XCTAssertTrue(recorder.isRecording)
         XCTAssertEqual(recorder.transcribedText, "Вторая заметка")
-        XCTAssertEqual(state.recordings.first?.note?.refined_text, "Первая заметка. Продолжение.")
+        XCTAssertEqual(state.recordings.map(\.fileURL), [firstURL])
     }
 
     func testRemoteStopUsesTheSameNonblockingCompletion() async throws {
@@ -51,12 +53,15 @@ final class RecordingCompletionTests: XCTestCase {
         let recorder = StubRecorder()
         let state = SuspendedSyncAppState(audioRecorder: recorder, startServices: false)
         recorder.begin(at: url, transcript: "Системная кнопка")
-        state.showCapture = true
+        // With the capture screen hidden the system button closes the note;
+        // with it shown it sends and keeps recording (as in Studio).
+        state.showCapture = false
 
         await state.handleGlobalPlayPause()
         await fulfillment(of: [state.syncStarted], timeout: 2)
         XCTAssertFalse(state.showCapture)
-        XCTAssertEqual(state.recordings.first?.note?.summary, "Системная кнопка")
+        XCTAssertFalse(recorder.isRecording)
+        XCTAssertEqual(state.recordings.map(\.fileURL), [url])
         state.releaseSync()
         await fulfillment(of: [state.syncFinished], timeout: 2)
     }

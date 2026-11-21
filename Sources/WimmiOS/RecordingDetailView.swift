@@ -265,10 +265,12 @@ struct RecordingDetailView: View {
     // MARK: - Re-run with external models
 
     private func reloadNote() async {
-        let repository = IOSRecordingRepository()
+        let repository = MetadataRepository()
         card = await repository.existingNoteCard(for: recording.fileURL) ?? recording.note
-        attachments = await repository.attachments(for: recording.fileURL)
-        if let meta = try? await repository.loadMetadata(for: recording.fileURL) {
+        // Reading never rewrites the sidecar (legacy keys are decoded in place).
+        attachments = await AttachmentRepository(metadataRepository: repository)
+            .attachments(for: recording.fileURL, migrateLegacyKeys: false)
+        if let meta = try? RecordingMetadata.load(for: recording.fileURL) {
             transcription = meta.transcription
         }
         let metadata = await repository.metadata(for: recording.fileURL)
@@ -383,8 +385,7 @@ struct RecordingDetailView: View {
             )
         }
 
-        let repository = IOSRecordingRepository()
-        await repository.upsertNoteCard(for: recording.fileURL, card: newCard, lang: newCard.lang)
+        NoteMeta.upsertNoteCard(for: recording.fileURL, card: newCard, lang: newCard.lang)
         card = newCard
         isEditing = false
 

@@ -121,9 +121,8 @@ class AppState: ObservableObject, ProcessingPerformer {
     private var recordingPublicationVersions: [String: Int] = [:]
     private var recordingsLoadGeneration = 0
     
-    let repository = IOSRecordingRepository()
     /// The note list: same listing and grouping rules as the Mac.
-    private let fileRepository = FileRepository()
+    let fileRepository = FileRepository()
     private let displayMetadata = MetadataRepository()
     private let displayTranscripts = TranscriptRepository()
 
@@ -339,7 +338,7 @@ class AppState: ObservableObject, ProcessingPerformer {
     /// while the processing queue published one note after another.
     func publishRecording(at url: URL) async {
         await fileRepository.invalidateCache()
-        let card = await repository.existingNoteCard(for: url)
+        let card = await MetadataRepository().existingNoteCard(for: url)
         let displayNote = await displayNote(for: url)
         let id = url.lastPathComponent
         recordingPublicationGeneration += 1
@@ -356,7 +355,7 @@ class AppState: ObservableObject, ProcessingPerformer {
             )
             return
         }
-        let metadata = try? await repository.loadMetadata(for: url)
+        let metadata = try? RecordingMetadata.load(for: url)
         let recording = Recording(
             id: id,
             fileURL: url,
@@ -546,7 +545,7 @@ class AppState: ObservableObject, ProcessingPerformer {
     func recoverIncompleteRecordings() async {
         print("[RecoveryStartup] Scanning for incomplete recordings...")
         
-        let incompleteURLs = await repository.findIncompleteRecordings()
+        let incompleteURLs = RecordingRecovery.incompleteRecordings()
         
         guard !incompleteURLs.isEmpty else {
             print("[RecoveryStartup] No incomplete recordings found")
@@ -559,7 +558,7 @@ class AppState: ObservableObject, ProcessingPerformer {
         for url in incompleteURLs {
             do {
                 // Load the metadata to get the partial transcription and duration
-                let metadata = try await repository.loadMetadata(for: url)
+                let metadata = try RecordingMetadata.load(for: url)
                 
                 print("[RecoveryStartup] Recovering: \(url.lastPathComponent)")
                 print("  - Partial transcription: \(metadata.transcription.prefix(50))...")
@@ -567,7 +566,7 @@ class AppState: ObservableObject, ProcessingPerformer {
                 print("  - Last saved: \(metadata.lastSaved)")
                 
                 // Mark as complete to prevent re-recovery on next launch
-                try await repository.markAsComplete(url)
+                try RecordingRecovery.markAsComplete(url)
                 
                 recoveredCount += 1
             } catch {

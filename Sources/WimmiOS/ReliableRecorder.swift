@@ -61,7 +61,6 @@ class ReliableRecorder: ObservableObject {
     
     private let baseRecorder = IOSAudioRecorder()
     private var metadataTimer: Timer?
-    private let repository = IOSRecordingRepository.shared
     private var cancellables = Set<AnyCancellable>()
     private var bindings = Set<AnyCancellable>()
     private var currentRecordingURL: URL?
@@ -211,7 +210,7 @@ class ReliableRecorder: ObservableObject {
                 lastSaved: Date()
             )
             do {
-                try await repository.saveMetadata(for: url, metadata: metadata)
+                try metadata.save()
                 FileStore.storeLiveText(finalTranscription, for: url)
                 print("ReliableRecorder: Split completed segment metadata saved for \(url.lastPathComponent)")
             } catch {
@@ -350,7 +349,7 @@ class ReliableRecorder: ObservableObject {
         
         // Save to disk
         do {
-            try await repository.saveMetadata(for: recordingURL, metadata: metadata)
+            try metadata.save()
             // Live text in the shape Studio writes (`localTranscript` plus a
             // copy in `transcript`), so every device reads it as live text.
             FileStore.storeLiveText(liveText, for: recordingURL)

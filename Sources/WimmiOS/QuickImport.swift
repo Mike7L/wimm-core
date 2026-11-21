@@ -44,11 +44,11 @@ extension AppState {
                 refined_text: body,
                 refined_edited_at: Date()
             )
-            await IOSRecordingRepository.shared.upsertNoteCard(for: url, card: card, lang: nil)
+            NoteMeta.upsertNoteCard(for: url, card: card, lang: nil)
             await publishRecording(at: url)
             scheduleRecordingSync(for: url)
         } catch {
-            _ = await IOSRecordingRepository.shared.moveToTrash(file: url)
+            await TrashRepository().moveToTrash(file: url)
             throw error
         }
     }
@@ -313,7 +313,7 @@ extension AppState {
             summary: summary,
             refined_text: summary.isEmpty ? nil : summary
         )
-        await IOSRecordingRepository.shared.upsertNoteCard(for: fileURL, card: card, lang: nil)
+        NoteMeta.upsertNoteCard(for: fileURL, card: card, lang: nil)
         // Upload in the background so the journal list refreshes as soon as
         // the file is on disk instead of waiting for the network round-trip.
         Task { await self.enqueueSync(for: fileURL) }

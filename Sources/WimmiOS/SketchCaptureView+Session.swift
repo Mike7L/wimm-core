@@ -44,7 +44,7 @@ extension SketchCaptureView {
         
         if let finalizedURL = await audioRecorder.splitRecording() {
             do {
-                let meta = try await IOSRecordingRepository.shared.loadMetadata(for: finalizedURL)
+                let meta = try RecordingMetadata.load(for: finalizedURL)
                 let segment = IOSRecordingSegment(
                     fileURL: finalizedURL,
                     transcription: meta.transcription,
@@ -79,7 +79,7 @@ extension SketchCaptureView {
     func upsertFallbackNoteCard(for url: URL, transcript: String) async {
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        let repository = IOSRecordingRepository.shared
+        let repository = MetadataRepository()
         guard await repository.existingNoteCard(for: url) == nil else { return }
         let card = NoteCard(
             note_file: url.lastPathComponent,
@@ -114,7 +114,7 @@ extension SketchCaptureView {
             let url = audioRecorder.recordingURL
             await audioRecorder.stopRecording()
             if let url {
-                _ = await IOSRecordingRepository.shared.moveToTrash(file: url)
+                await TrashRepository().moveToTrash(file: url)
             }
         }
 

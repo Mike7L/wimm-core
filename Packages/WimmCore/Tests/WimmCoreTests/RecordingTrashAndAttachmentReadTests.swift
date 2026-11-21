@@ -1,7 +1,8 @@
 import XCTest
 @testable import WimmDomain
+@testable import WimmInfrastructure
 
-final class IOSRecordingRepositoryTests: XCTestCase {
+final class RecordingTrashAndAttachmentReadTests: XCTestCase {
     private func makeEnvIsolatedBase() throws -> URL {
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("wimm-ios-rec-tests-" + UUID().uuidString, isDirectory: true)
@@ -34,8 +35,7 @@ final class IOSRecordingRepositoryTests: XCTestCase {
         let attachmentURL = recordingsDir.appendingPathComponent("legacy-ios.txt")
         FileManager.default.createFile(atPath: attachmentURL.path, contents: Data("hello".utf8))
 
-        let repo = IOSRecordingRepository()
-        await repo.upsertMetadata(file: recording, updates: [
+        FileStore.upsertMetadata(for: recording, updates: [
             "attachments": [[
                 "id": UUID().uuidString,
                 "url": attachmentURL.absoluteString,
@@ -46,7 +46,8 @@ final class IOSRecordingRepositoryTests: XCTestCase {
             ]]
         ])
 
-        let attachments = await repo.attachments(for: recording)
+        let attachments = await AttachmentRepository(metadataRepository: MetadataRepository())
+            .attachments(for: recording, migrateLegacyKeys: false)
         XCTAssertEqual(attachments.count, 1)
         XCTAssertEqual(attachments.first?.extractedText, "legacy text")
         XCTAssertEqual(attachments.first?.extractionProvider, "legacy-provider")
@@ -74,8 +75,7 @@ final class IOSRecordingRepositoryTests: XCTestCase {
         FileManager.default.createFile(atPath: recording.path, contents: Data())
         FileManager.default.createFile(atPath: attachmentURL.path, contents: Data("hello".utf8))
 
-        let repo = IOSRecordingRepository()
-        await repo.upsertMetadata(file: recording, updates: [
+        FileStore.upsertMetadata(for: recording, updates: [
             "attachments": [[
                 "id": UUID().uuidString,
                 "url": attachmentURL.absoluteString,
@@ -85,7 +85,7 @@ final class IOSRecordingRepositoryTests: XCTestCase {
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: metadataURL.path))
 
-        let maybeTrashedURL = await repo.moveToTrash(file: recording)
+        let maybeTrashedURL = await TrashRepository().moveToTrash(file: recording)
         let trashedURL = try XCTUnwrap(maybeTrashedURL)
         let trashedAttachmentURL = FileStore.trashDirectory().appendingPathComponent(attachmentURL.lastPathComponent)
 
@@ -110,7 +110,7 @@ final class IOSRecordingRepositoryTests: XCTestCase {
         try FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
         let recording = recordingsDir.appendingPathComponent("marker.m4a")
         FileManager.default.createFile(atPath: recording.path, contents: Data("orig".utf8))
-        await IOSRecordingRepository().upsertMetadata(file: recording, updates: ["recordingId": "R1"])
+        FileStore.upsertMetadata(for: recording, updates: ["recordingId": "R1"])
 
         let trashed = try XCTUnwrap(RecordingTrashSupport.moveToTrash(file: recording))
         let marked = try loadMeta(for: trashed)
@@ -148,5 +148,29 @@ final class IOSRecordingRepositoryTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: recording.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: micro.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: trashedMicro.path))
+    }
+
+    func testRecoveryFindsOnlyIncompleteAudioOriginals() throws {
+        let base = try makeEnvIsolatedBase()
+        defer {
+            unsetenv("WIMM_BASE_DIR")
+            try? FileManager.default.removeItem(at: base)
+        }
+        let dir = FileStore.recordingsDirectory()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let open = dir.appendingPathComponent("Wimm_2026-11-21_10-00-00_aaaaaaaa.m4a")
+        let done = dir.appendingPathComponent("Wimm_2026-11-21_11-00-00_bbbbbbbb.m4a")
+        for url in [open, done] { FileManager.default.createFile(atPath: url.path, contents: Data("a".utf8)) }
+        FileManager.default.createFile(atPath: FileStore.microURL(forRecordingURL: open).path, contents: Data("m".utf8))
+        var openMeta = RecordingMetadata(recordingURL: open)
+        openMeta.isComplete = false
+        try openMeta.save()
+        var doneMeta = RecordingMetadata(recordingURL: done)
+        doneMeta.isComplete = true
+        try doneMeta.save()
+
+        XCTAssertEqual(RecordingRecovery.incompleteRecordings().map(\.lastPathComponent), [open.lastPathComponent])
+        try RecordingRecovery.markAsComplete(open)
+        XCTAssertTrue(RecordingRecovery.incompleteRecordings().isEmpty)
     }
 }
