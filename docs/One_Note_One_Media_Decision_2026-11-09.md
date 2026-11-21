@@ -4,6 +4,15 @@ Status: **decided** by the user on 2026-11-09. Stages 1–2 implemented
 2026-11-09 (see "Implementation status"); `--apply` on the real library not
 run (needs the user's yes); stages 3–4 open.
 
+Dry run on the real library, 2026-11-21 (nothing changed): 8 319 sidecars,
+0 parse errors; 1 540 parents with attachments, 1 514 to change, 0 failed;
+320 empty lists. 4 713 attachments: split 4 325, promote 185, left in place
+203 — 186 unsupported (97 `.svg`, 89 Evernote files without an extension,
+named like `26.04.2015_09:15:29`), 14 missing on disk, 3 with an iPhone
+container path. 114 `_micro` files move with their notes. After `--apply`
+those 203 still sit in `attachments`, so "no sidecar has `attachments`"
+needs a decision for them first.
+
 ## Decision
 
 A Wimm note is one media file (audio, image, PDF, text) plus its sidecar
