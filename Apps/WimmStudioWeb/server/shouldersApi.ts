@@ -180,15 +180,24 @@ export function isPrivateModeEnabled(opts: ReadDefaultsOptions = {}): boolean {
     if (envVal === '0' || envVal === 'false' || envVal === 'no') return false;
     return true;
   }
-  for (const domain of [SHARED_DEFAULTS_DOMAIN, APP_DEFAULTS_DOMAIN]) {
-    const res = readDefaultsEntry(domain, 'privateMode', opts);
-    if (res.status === 'error') return true;
-    if (res.status === 'missing') continue;
-    const raw = res.value.toLowerCase();
-    if (raw === '0' || raw === 'false' || raw === 'no') continue;
-    return true;
-  }
-  return false;
+  // Same source as PrivateMode.swift: the shared suite only, so the web
+  // panel and Studio never disagree about whether the switch is on.
+  const res = readDefaultsEntry(SHARED_DEFAULTS_DOMAIN, 'privateMode', opts);
+  if (res.status === 'error') return true;
+  if (res.status === 'missing') return false;
+  const raw = res.value.toLowerCase();
+  return !(raw === '0' || raw === 'false' || raw === 'no');
+}
+
+export const PRIVATE_MODE_REFUSAL = 'Приватный режим: запрос не уходит в облако.';
+
+/**
+ * Called right before every cloud request (each round, retry and thinking
+ * fallback), not only when a turn starts: the switch can be turned on
+ * while a turn is running. Mirrors PrivateMode.checkCloudEgress.
+ */
+export function checkCloudEgress(opts: ReadDefaultsOptions = {}): void {
+  if (isPrivateModeEnabled(opts)) throw new Error(PRIVATE_MODE_REFUSAL);
 }
 
 export function resolveGeminiApiKey(): string | null {
@@ -996,27 +1005,42 @@ function getFallbackThinkingForm(form: InternalThinkingForm): InternalThinkingFo
  */
 export const shouldersTurnClock: { recordingStoppedAt?: number; noteTextAt?: number } = {};
 
-/** One line in Wimm's event log (same shape as questionApi's), so Studio and web timings sit together. */
+/**
+ * The event for one model call, in LLMLogger's shape (kind `llm`), so
+ * `wimm-cli cost` counts web turns like Studio's. A failed call is phase
+ * `error`; usage it may have consumed stays unknown, never zero.
+ */
+export function shouldersLlmEvent(attributes: Record<string, string>, timestamp = new Date()): Record<string, unknown> {
+  const ts = timestamp.toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const memory = attributes.operation === 'shoulders_memory';
+  const ok = memory ? attributes.status === 'updated' || attributes.status === 'empty' : attributes.status === 'answered';
+  return {
+    event_id: crypto.randomUUID(),
+    timestamp: ts,
+    v: 1,
+    origin: 'StudioWebShoulders',
+    source: 'WimmStudioWeb.shouldersApi',
+    kind: 'llm',
+    phase: ok ? 'response' : 'error',
+    provider: 'gemini',
+    model: attributes.model,
+    is_streaming: !memory,
+    ...(ok ? {} : { error: attributes.status }),
+    message: memory
+      ? `[ShouldersWeb] memory: ${attributes.status}, ${attributes.conversations} conversations, ${attributes.total_ms} ms`
+      : `[ShouldersWeb] turn: first line ${attributes.first_line_ms ?? '?'} ms, total ${attributes.total_ms} ms`,
+    attributes,
+  };
+}
+
+/** One line in Wimm's event log, next to Studio's own calls. */
 function logShouldersTurn(attributes: Record<string, string>): void {
   try {
     const dir = path.join(WIMM_APP_SUPPORT, 'logs', 'events');
     fs.mkdirSync(dir, { recursive: true });
-    const ts = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-    const line = JSON.stringify({
-      event_id: crypto.randomUUID(),
-      timestamp: ts,
-      v: 1,
-      origin: 'StudioWebShoulders',
-      source: 'WimmStudioWeb.shouldersApi',
-      kind: 'log',
-      phase: 'info',
-      message:
-        attributes.operation === 'shoulders_memory'
-          ? `[ShouldersWeb] memory: ${attributes.status}, ${attributes.conversations} conversations, ${attributes.total_ms} ms`
-          : `[ShouldersWeb] turn: first line ${attributes.first_line_ms ?? '?'} ms, total ${attributes.total_ms} ms`,
-      attributes,
-    });
-    fs.appendFileSync(path.join(dir, `events_${ts.slice(0, 10)}.jsonl`), line + '\n');
+    const event = shouldersLlmEvent(attributes);
+    const day = String(event.timestamp).slice(0, 10);
+    fs.appendFileSync(path.join(dir, `events_${day}.jsonl`), JSON.stringify(event) + '\n');
   } catch (e) {
     console.warn('[shoulders] event log write failed:', (e as Error)?.message);
   }
@@ -1051,6 +1075,7 @@ async function rememberEarlierConversations(
     )}:generateContent`;
     let parsed: Record<string, any> | undefined;
     for (;;) {
+      checkCloudEgress();
       const thinkingCfg = getThinkingConfigObject(form);
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -1321,6 +1346,7 @@ export async function handleShouldersTurnSse(
     // timeout, DNS, reset), so nothing was streamed and a retry is safe.
     let upstreamRes: Response | undefined;
     for (let attempt = 1; ; attempt++) {
+      checkCloudEgress();
       try {
         upstreamRes = await fetch(endpoint, {
           method: 'POST',

@@ -6,6 +6,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { DocumentBlock } from '../src/types.ts';
 import {
   isPrivateModeEnabled,
+  checkCloudEgress,
   resolveGeminiApiKey,
   resolveUnderstandGeminiModel,
 } from './shouldersApi.ts';
@@ -191,6 +192,7 @@ export async function handleQuestion(
         ...(temperature !== undefined ? { temperature } : {}),
         ...(thinkingConfig ? { thinkingConfig } : {}),
       };
+      checkCloudEgress();
       const callStarted = Date.now();
       const upstream = await fetch(endpoint, {
         method: 'POST',
