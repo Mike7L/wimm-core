@@ -91,7 +91,7 @@ public actor SystemHealthService {
 
         if !report.unindexedSessions.isEmpty {
             output += "## Pending Metadata (Unindexed) - \(report.unindexedSessions.count) sessions:\n"
-            output += "(These files have content but no .meta.json. Run 'wimm-cli queue --process' to fix.)\n"
+            output += "(These files have content but no .meta.json. Open them in Studio or run 'wimm-cli meta' to inspect.)\n"
             for session in report.unindexedSessions.sorted() {
                 output += "- \(session)\n"
             }

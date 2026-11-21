@@ -73,16 +73,11 @@ var targetDefinitions: [Target] = [
             .linkedFramework("Speech"),
         ]
     ),
-    .systemLibrary(
-        name: "CNcurses"
-    ),
     .executableTarget(
         name: "WimmCLI",
         dependencies: [
             "WimmTranscription",
-            "CNcurses",
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
-            .product(name: "WimmTUI", package: "WimmCore"),
             .product(name: "WimmSecretary", package: "WimmCore"),
         ],
         path: "Sources/WimmCLI",
@@ -102,7 +97,6 @@ var targetDefinitions: [Target] = [
             .product(name: "WimmDomain", package: "WimmCore"),
             .product(name: "WimmInfrastructure", package: "WimmCore"),
             .product(name: "WimmSecretary", package: "WimmCore"),
-            .product(name: "WimmTUI", package: "WimmCore"),
         ],
         path: "Packages/WimmCore/Tests/WimmCoreTests",
         exclude: ["Fixtures/sample.enex"],

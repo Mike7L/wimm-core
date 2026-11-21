@@ -2,12 +2,6 @@ import Foundation
 
 // MARK: - Errors
 
-/// Storage layer errors propagated from infrastructure adapters.
-public enum StorageError: Error, Sendable {
-    case noteNotFound(String)
-    case writeFailed(String)
-}
-
 // MARK: - Core Entities
 
 /// Статус обработки задачи.
@@ -98,46 +92,3 @@ public struct AnalysisCard: Codable, Sendable {
     }
 }
 
-public struct NoteQuestionAnswer: Sendable, Equatable {
-    public let noteID: UUID
-    public let normalizedQuestion: String
-    public let answer: String
-    public let role: String?
-    public let outputLanguage: String?
-
-    public init(
-        noteID: UUID,
-        normalizedQuestion: String,
-        answer: String,
-        role: String? = nil,
-        outputLanguage: String? = nil
-    ) {
-        self.noteID = noteID
-        self.normalizedQuestion = normalizedQuestion
-        self.answer = answer
-        self.role = role
-        self.outputLanguage = outputLanguage
-    }
-}
-
-public struct NoteCollectionAnswer: Sendable, Equatable {
-    public let noteIDs: [UUID]
-    public let normalizedQuestion: String
-    public let answer: String
-    public let role: String?
-    public let outputLanguage: String?
-
-    public init(
-        noteIDs: [UUID],
-        normalizedQuestion: String,
-        answer: String,
-        role: String? = nil,
-        outputLanguage: String? = nil
-    ) {
-        self.noteIDs = noteIDs
-        self.normalizedQuestion = normalizedQuestion
-        self.answer = answer
-        self.role = role
-        self.outputLanguage = outputLanguage
-    }
-}

@@ -43,8 +43,7 @@ removed ~100 MB of clones, nothing more.
 - **Run WimmCore's tests from the root.** The root manifest declares `WimmCoreTests` over
   `Packages/WimmCore/Tests/WimmCoreTests`, so `swift test --filter WimmCoreTests` reuses the
   WimmCore modules the app build already has (377 tests, `@testable` imports work).
-  `scripts/test_wimm_fast.sh` does this and builds `wimm-tui` first for the TUI smoke
-  tests. `cd Packages/WimmCore && swift test` still works, but builds everything again.
+  `scripts/test_wimm_fast.sh` does this on a disposable library. `cd Packages/WimmCore && swift test` still works, but builds everything again.
 - **`scripts/clean_worktree_builds.sh [--apply]`** deletes the `.build` folders of worktrees
   whose HEAD is merged into `origin/main` and that nothing has built in for `MIN_AGE_HOURS`
   (12) — a fresh worktree is trivially "merged". Only build output goes.

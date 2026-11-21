@@ -13,7 +13,7 @@ This repository holds the current apps only:
 | Studio web view | `Apps/WimmStudioWeb` | Vite/React UI served by Studio (feed, inbox) |
 | iOS app | `Sources/WimmiOS`, `Sources/WimmShareExtension` | Recorder, notes, share extension (XcodeGen: `project.yml`) |
 | CLI + MCP server | `Sources/WimmCLI` | `wimm-cli`: library tools, secretary bookkeeping, MCP on stdio |
-| Core | `Packages/WimmCore` | `WimmDomain`, `WimmInfrastructure`, `WimmSecretary`, `WimmTUI` |
+| Core | `Packages/WimmCore` | `WimmDomain`, `WimmInfrastructure`, `WimmSecretary` |
 | Shared | `Sources/WimmTranscription`, `Sources/WimmDocumentUI` | Transcription routing, shared document UI |
 
 ## Build

@@ -12,7 +12,6 @@ let enableWhisperKit: Bool = {
 }()
 
 var packageDependencies: [Package.Dependency] = [
-    .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
     // On-device Parakeet ASR, including Ultra.
     .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.17.7"),
 ]
@@ -33,8 +32,6 @@ let package = Package(
         .iOS(.v17)
     ],
     products: [
-        .executable(name: "wimm-tui", targets: ["WimmTUIMain"]),
-        .library(name: "WimmTUI", targets: ["WimmTUI"]),
         .library(name: "WimmDomain", targets: ["WimmDomain"]),
         .library(name: "WimmInfrastructure", targets: ["WimmInfrastructure"]),
         .library(name: "WimmSecretary", targets: ["WimmSecretary"]),
@@ -69,34 +66,13 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
 
-        // MARK: - Presentation (TUI / Composition Root)
-        .target(
-            name: "WimmTUI",
-            dependencies: [
-                "WimmInfrastructure",
-                "WimmDomain",
-                .product(name: "ArgumentParser", package: "swift-argument-parser"),
-            ],
-            path: "Sources/WimmTUI",
-            swiftSettings: [.swiftLanguageMode(.v6)]
-        ),
-
-        // Thin executable wrapper; all logic lives in the WimmTUI library
-        // so WimmCLI can call commands in-process.
-        .executableTarget(
-            name: "WimmTUIMain",
-            dependencies: ["WimmTUI"],
-            path: "Sources/WimmTUIMain",
-            swiftSettings: [.swiftLanguageMode(.v6)]
-        ),
-
         // MARK: - Tests
         // The root package exposes the same tests as WimmCoreTests to share
         // its build cache. Xcode loads both packages in one graph and requires
         // target names to be unique, even for test-only targets.
         .testTarget(
             name: "WimmCorePackageTests",
-            dependencies: ["WimmDomain", "WimmInfrastructure", "WimmSecretary", "WimmTUI"],
+            dependencies: ["WimmDomain", "WimmInfrastructure", "WimmSecretary"],
             path: "Tests/WimmCoreTests",
             exclude: ["Fixtures/sample.enex"],
             swiftSettings: [.swiftLanguageMode(.v6)]

@@ -10,7 +10,7 @@ reasons behind the rules are in `docs/` (index: `docs/README.md`).
   `Apps/WimmStudioWeb`), the iOS app (`Sources/WimmiOS`,
   `Sources/WimmShareExtension`) and the CLI/MCP server (`Sources/WimmCLI`),
   on top of the shared packages in `Packages/WimmCore` (`WimmDomain`,
-  `WimmInfrastructure`, `WimmSecretary`, `WimmTUI`) plus
+  `WimmInfrastructure`, `WimmSecretary`) plus
   `Sources/WimmTranscription` and `Sources/WimmDocumentUI`. The old Wimm Mac
   app is not part of this repository; do not bring it back.
 - Core loop: **voice/file capture → durable note + attachments → analysis →

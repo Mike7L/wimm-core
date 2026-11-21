@@ -42,8 +42,6 @@ final class CLIOCRTests: XCTestCase {
         var env = ProcessInfo.processInfo.environment
         env["WIMM_BASE_DIR"] = tempDir.path
         env["WIMM_DISABLE_KEYCHAIN"] = "1"
-        let tuiBinary = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".build/arm64-apple-macosx/debug/wimm-tui").path
-        env["WIMM_TUI_EXECUTABLE"] = tuiBinary
         task.environment = env
 
         let stdout = Pipe()

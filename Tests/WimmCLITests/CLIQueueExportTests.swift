@@ -56,8 +56,6 @@ final class CLIQueueExportTests: XCTestCase {
         env["WIMM_BASE_DIR"] = tempDir.path
         env["WIMM_DEFAULTS_SUITE"] = defaultsSuiteName
         env["WIMM_DISABLE_KEYCHAIN"] = "1"
-        let tuiBinary = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".build/arm64-apple-macosx/debug/wimm-tui").path
-        env["WIMM_TUI_EXECUTABLE"] = tuiBinary
         task.environment = env
         
         let stdout = Pipe()
@@ -75,22 +73,6 @@ final class CLIQueueExportTests: XCTestCase {
     }
     
     // MARK: - Queue Tests
-    
-    func testQueueDetection() throws {
-        // Create a dummy audio file that needs processing
-        let audioFile = recordingsDir.appendingPathComponent("test_queue_audio.m4a")
-        FileManager.default.createFile(atPath: audioFile.path, contents: Data())
-        
-        // Run 'queue' command (default view mode)
-        let (out, _, status) = try runWimm(["queue"])
-        XCTAssertEqual(status, 0)
-        
-        // It should report pending transcription
-        XCTAssertTrue(out.contains("test_queue_audio.m4a"), "Queue output should list the pending audio file")
-        XCTAssertTrue(out.contains("Pending Transcription") || out.contains("Waiting"), "Should indicate pending status")
-    }
-    
-    // MARK: - Export Tests
     
     func testExportSingleFile() throws {
         // Create a dummy note for a specific month

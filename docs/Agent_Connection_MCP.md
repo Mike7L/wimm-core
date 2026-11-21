@@ -208,9 +208,9 @@ env block to point it at a scratch library.
 ## How it reads the library
 
 - `LibraryRecallSource` lists notes with the same `FileRepository` +
-  `NoteBuilder` the Reader uses — **not** the WimmTUI `FileSystemAdapter`
-  stack behind `wimm-cli search`, which never sees the real library.
-  Canceled notes are skipped.
+  `NoteBuilder` the Reader uses (the old WimmTUI `FileSystemAdapter` stack
+  and its `list`/`search` commands were removed 2026-11-21). Canceled notes
+  are skipped.
 - Changed notes are built by a **child process** (`wimm-cli mcp-build`,
   hidden): paths in on stdin; out on stdout a header with exact byte totals,
   then per note a JSON line with its position in the request and the byte
