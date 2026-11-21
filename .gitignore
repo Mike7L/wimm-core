@@ -84,3 +84,7 @@ build/
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Chrome extension builds: published as GitHub Release assets, never committed
+Apps/WimmBrowser/packages/*.zip
+Apps/WimmBrowser/dist/
