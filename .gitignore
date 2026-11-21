@@ -2,3 +2,7 @@
 __pycache__/
 *.pem
 .env
+
+# Built ZIPs are GitHub Release assets, never committed
+packages/*.zip
+dist/
