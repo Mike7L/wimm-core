@@ -18,26 +18,7 @@ final class IOSRecordingRepositoryTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
-    func testInvalidatingCacheIncludesNewRecordingImmediately() async throws {
-        let base = try makeEnvIsolatedBase()
-        defer {
-            unsetenv("WIMM_BASE_DIR")
-            try? FileManager.default.removeItem(at: base)
-        }
-        let directory = FileStore.recordingsDirectory()
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let repository = IOSRecordingRepository()
-        let initial = await repository.recordings()
-        XCTAssertTrue(initial.isEmpty)
-
-        let recording = directory.appendingPathComponent("new-recording.m4a")
-        try Data().write(to: recording)
-        await repository.invalidateCache()
-        let refreshed = await repository.recordings()
-        XCTAssertEqual(refreshed.map { $0.resolvingSymlinksInPath() }, [recording.resolvingSymlinksInPath()])
-    }
-
-    func testAttachments_MigratesLegacyAttachmentKeysToExtractedFields() async throws {
+    func testAttachments_ReadsLegacyKeysWithoutRewritingTheSidecar() async throws {
         let base = try makeEnvIsolatedBase()
         defer {
             unsetenv("WIMM_BASE_DIR")
@@ -71,19 +52,10 @@ final class IOSRecordingRepositoryTests: XCTestCase {
         XCTAssertEqual(attachments.first?.extractionProvider, "legacy-provider")
         XCTAssertEqual(attachments.first?.extractionModel, "legacy-model")
 
-        let metaAfter = try loadMeta(for: recording)
-        guard let list = metaAfter["attachments"] as? [[String: Any]],
-              let first = list.first else {
-            XCTFail("Missing migrated attachment metadata")
-            return
-        }
-
-        XCTAssertEqual(first["extractedText"] as? String, "legacy text")
-        XCTAssertEqual(first["extractionProvider"] as? String, "legacy-provider")
-        XCTAssertEqual(first["extractionModel"] as? String, "legacy-model")
-        XCTAssertNil(first["ocrText"])
-        XCTAssertNil(first["ocrProvider"])
-        XCTAssertNil(first["ocrModel"])
+        // Opening a note never writes its sidecar (no read-then-write).
+        let first = try XCTUnwrap((try loadMeta(for: recording)["attachments"] as? [[String: Any]])?.first)
+        XCTAssertEqual(first["ocrText"] as? String, "legacy text")
+        XCTAssertNil(first["extractedText"])
     }
 
     func testMoveToTrash_MovesReferencedAttachmentsAndRewritesMetadata() async throws {

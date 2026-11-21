@@ -121,8 +121,9 @@ class AppState: ObservableObject, ProcessingPerformer {
     private var recordingPublicationVersions: [String: Int] = [:]
     private var recordingsLoadGeneration = 0
     
-    // Use IOSRecordingRepository from WimmDomain
     let repository = IOSRecordingRepository()
+    /// The note list: same listing and grouping rules as the Mac.
+    private let fileRepository = FileRepository()
     private let displayMetadata = MetadataRepository()
     private let displayTranscripts = TranscriptRepository()
 
@@ -337,7 +338,7 @@ class AppState: ObservableObject, ProcessingPerformer {
     /// what crashed UICollectionView ("invalid number of items in section")
     /// while the processing queue published one note after another.
     func publishRecording(at url: URL) async {
-        await repository.invalidateCache()
+        await fileRepository.invalidateCache()
         let card = await repository.existingNoteCard(for: url)
         let displayNote = await displayNote(for: url)
         let id = url.lastPathComponent
@@ -431,7 +432,7 @@ class AppState: ObservableObject, ProcessingPerformer {
         }
         
         // Fetch URLs
-        let urls = await repository.recordings(order: .descending)
+        let urls = await fileRepository.recordings(order: .descending)
         guard loadGeneration == recordingsLoadGeneration else { return }
         let directories = Array(Set(urls.map { $0.deletingLastPathComponent().standardizedFileURL }))
         listDirectoryIndex = RecordingsDirectoryIndex(directories: directories)
@@ -537,7 +538,7 @@ class AppState: ObservableObject, ProcessingPerformer {
 
     func deleteRecording(_ recording: Recording) async {
         await NoteTrash.moveToTrash(recording.fileURL, cloudSync: cloudSyncService)
-        await repository.invalidateCache()
+        await fileRepository.invalidateCache()
         await loadRecordings()
     }
     
