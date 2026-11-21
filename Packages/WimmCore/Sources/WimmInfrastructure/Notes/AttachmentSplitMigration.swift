@@ -216,6 +216,7 @@ public enum AttachmentSplitMigration {
         var targetURL: URL?
         var journalPrompt: String?
         var relativeSource: String?
+        var library: URL? = nil
     }
 
     static func splitParent(sidecar: URL, json: [String: Any], options: Options,
@@ -269,7 +270,7 @@ public enum AttachmentSplitMigration {
             let relative = relativePath(local, library: context.library)
             item.source = relative
             var plan = Planned(item: item, entry: entry, sourceURL: local, journalPrompt: entry["journalPrompt"] as? String,
-                               relativeSource: relative)
+                               relativeSource: relative, library: context.library)
 
             if let promoted, (promoted["attachmentID"] as? String)?.uppercased() == rawID, let file = promoted["file"] as? String {
                 plan.item.action = "promote"
@@ -623,6 +624,16 @@ public enum AttachmentSplitMigration {
             targets += [relative, relative.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? relative]
         }
         targets += [source.path, source.absoluteString, plan.entry["url"] as? String ?? ""]
+        // A converted attachment (AttachmentConversion): the body still names the original file.
+        if let original = plan.entry[AttachmentConversion.convertedFromKey] as? String,
+           let url = resolve(original, library: plan.library ?? URL(fileURLWithPath: "/")) {
+            targets.append(original)
+            if let library = plan.library, let local = localize(url, library: library) {
+                let relative = relativePath(local, library: library)
+                targets += [relative, relative.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? relative,
+                            local.path, local.absoluteString]
+            }
+        }
         var seen = Set<String>()
         return targets.filter { !$0.isEmpty && seen.insert($0).inserted }
     }
