@@ -149,6 +149,8 @@ final class VikAssistant {
     @ObservationIgnored private var leaseRevision: UInt64 = 0
     @ObservationIgnored private var sourceFile: URL?
     @ObservationIgnored private var resumeAfterReply = false
+    /// True while Алёна reopens the capture she closed: the host plays her cue, not the start cue.
+    @ObservationIgnored private(set) var isResumingCapture = false
     @ObservationIgnored private var streamFinished = false
     @ObservationIgnored private var voiceBusy = false
     /// Lines handed to the voice and not yet started, in order (acknowledgements included).
@@ -726,6 +728,8 @@ final class VikAssistant {
         guard resume else { return }
         Task { [weak self] in
             guard let self, self.serial == token, self.enabled, !self.isPrivate(), self.ownsCapture else { return }
+            self.isResumingCapture = true
+            defer { self.isResumingCapture = false }
             await self.capture.start(ifUnchangedSince: revision)
         }
     }

@@ -148,7 +148,10 @@ struct WimmStudioApp: App {
                 // Kill switch: while on, every cloud request refuses (LLMTransport).
                 Toggle("Приватный режим — ничего в облако", isOn: Binding(
                     get: { PrivateMode.isEnabled },
-                    set: { PrivateMode.setStored($0) }
+                    set: {
+                        PrivateMode.setStored($0)
+                        appDelegate.playCue(PrivateMode.isEnabled ? .lockOn : .lockOff)
+                    }
                 ))
 
                 Button(appDelegate.cloudSync?.isAvailable == false ? "Sync Unavailable (no CloudKit entitlement)" : "Sync Now") {
@@ -229,6 +232,7 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
     @ObservationIgnored private var secretaryOfferedBytes: Int?
     @ObservationIgnored private var secretaryOfferedAfterRun: Date?
     @ObservationIgnored private var vikFailureShown = false
+    @ObservationIgnored private var cueTracker = HUDCueTracker()
     @ObservationIgnored private var hotKeyTokens: [HotKeyCenter.Token] = []
     @ObservationIgnored private var captureCommandObserver: NSObjectProtocol?
     /// Reads the web panel's angel-and-demon lines aloud (the model stays loaded here).
@@ -329,6 +333,22 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Headphones mode (`keepMicOpen`) is the user's word that cues cannot reach the microphone.
+    func playCue(_ cue: HUDSound.Cue) {
+        HUDSound.play(cue, recording: capture.isRecording, headphones: vik.keepMicOpen)
+    }
+
+    private func trackSoundCues() {
+        withObservationTracking {
+            let snapshot = HUDCueTracker.Snapshot(
+                recording: capture.isRecording, sendCount: capture.sendCount,
+                inputTrouble: capture.inputTrouble, vik: vik.phase, headphones: vik.keepMicOpen)
+            cueTracker.cues(for: snapshot).forEach(playCue)
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.trackSoundCues() }
+        }
+    }
+
     private func startSecretaryPassFromVoice() -> String? {
         let model = documentModel
         guard model.hasSecretaryWorkspace else { return "Документ не в рабочей папке секретаря." }
@@ -386,7 +406,10 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
                 capture.errorMessage = nil
                 noteChanged(files)
                 imageTextCatchUp.recognize(files)
-                if !files.isEmpty { saveConfirmation.show(count: files.count) }
+                if !files.isEmpty {
+                    saveConfirmation.show(count: files.count)
+                    playCue(.saved)
+                }
             } catch {
                 capture.errorMessage = error.localizedDescription
                 showHUD()
@@ -410,11 +433,16 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        CaptureSoundFeedback.preload()
-        capture.onRecordingChanged = { recording in
-            if recording { CaptureSoundFeedback.start() }
-            else { CaptureSoundFeedback.finish() }
+        HUDSound.preload()
+        capture.onRecordingStarting = { [weak self] in
+            guard let self else { return }
+            self.playCue(HUDCueTracker.startCue(vikResuming: self.vik.isResumingCapture))
         }
+        capture.onRecordingChanged = { [weak self] recording in
+            guard let self, !recording else { return }
+            self.playCue(HUDCueTracker.stopCue(vik: self.vik.phase, headphones: self.vik.keepMicOpen))
+        }
+        trackSoundCues()
         if !DocumentProfile.enabled { SecretaryLibraryWarmup.shared.start() }
 
         capture.onUserAction = { [weak self] in self?.vik.captureWillAct($0) }

@@ -198,6 +198,9 @@ public final class CaptureSession {
     @ObservationIgnored public var onUserAction: (@MainActor (UserAction) -> Void)?
     /// Actual microphone lifecycle, excluding note rollovers and failed starts.
     @ObservationIgnored public var onRecordingChanged: (@MainActor (Bool) -> Void)?
+    /// A start began and the microphone is still opening: a cue played here
+    /// finishes mostly before the first buffer reaches the note.
+    @ObservationIgnored public var onRecordingStarting: (@MainActor () -> Void)?
     /// Returning true consumes this existing silence event (the host closes
     /// the note instead of rolling it over). No second silence detector.
     @ObservationIgnored public var onSilenceDetected: (@MainActor (UInt64) -> Bool)?
@@ -263,6 +266,7 @@ public final class CaptureSession {
         guard phase == .idle else { return }
         let revision = actionRevision
         phase = .starting
+        onRecordingStarting?()
         errorMessage = nil
         liveText = ""
         anchors = []

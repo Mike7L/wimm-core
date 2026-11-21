@@ -27,7 +27,6 @@ enum QuickNotes {
     /// the HUD for the shot.
     static func screenshot() async throws -> URL {
         let url = try newNoteURL(extension: "heic")
-        CaptureSoundFeedback.start()
         let temporary = FileManager.default.temporaryDirectory
             .appendingPathComponent("wimm-screenshot-\(UUID().uuidString).png")
         defer { try? FileManager.default.removeItem(at: temporary) }
@@ -53,7 +52,6 @@ enum QuickNotes {
         }
         FileStore.upsertMetadata(for: url, updates: ["title": "Screenshot", "origin": ["source": "studio-screenshot"]])
         DeviceLocation.stampCurrent(for: url)
-        CaptureSoundFeedback.finish()
         return url
     }
 
