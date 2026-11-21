@@ -268,10 +268,12 @@ public final class CaptureSession {
         anchors = []
         store = SampleStore()
         let identity = RecordingIdentity()
+        var pendingURL: URL?
         do {
             try FileStore.ensureDirectoryExists()
             try FileManager.default.createDirectory(at: FileStore.recordingsDirectory(), withIntermediateDirectories: true)
             let url = FileStore.newRecordingURL(identity: identity, extension: AudioFileSink.fileExtension)
+            pendingURL = url
             identity.persist(for: url)
             let source = makeSource()
             try await source.requestAccess()
@@ -299,6 +301,11 @@ public final class CaptureSession {
             startGateLoop(gate)
             onRecordingChanged?(true)
         } catch {
+            // No audio was opened: drop the identity sidecar so no empty note remains.
+            if let pendingURL, recordingURL != pendingURL,
+               !FileManager.default.fileExists(atPath: pendingURL.path) {
+                try? FileManager.default.removeItem(at: FileStore.metadataURL(forRecordingURL: pendingURL))
+            }
             source?.stop()
             source = nil
             activeInputDevice = nil
@@ -705,6 +712,7 @@ public final class CaptureSession {
 
     private func startLevel() {
         // The meter needs more than the 1 s text refresh to look alive.
+        levelMeter.resetSilence()
         levelLoop = Task { [weak self] in
             var failingSince: ContinuousClock.Instant?
             var silentRestarts = 0
@@ -714,10 +722,15 @@ public final class CaptureSession {
                 guard !Task.isCancelled, let self else { return }
                 self.refreshMicrophoneModes()
                 if self.isSwitchingInput { continue }
-                let stopped = (self.source as? MicrophoneAudioSource).map { !$0.isRunning } ?? false
+                let microphone = self.source as? MicrophoneAudioSource
+                let stopped = microphone.map { !$0.isRunning } ?? false
+                let limit = Self.silenceLimit(afterSilentRestarts: silentRestarts)
                 let silence = self.levelMeter.digitalSilenceSeconds
-                let silent = !stopped && silence >= Self.silenceLimit(afterSilentRestarts: silentRestarts)
-                if stopped || silent {
+                let silent = !stopped && silence >= limit
+                // A running engine whose tap gets nothing writes an empty note.
+                let starvedFor = self.levelMeter.secondsWithoutBuffers
+                let starved = !stopped && !silent && microphone != nil && starvedFor >= limit
+                if stopped || silent || starved {
                     self.level = 0
                     if !self.inputTrouble { self.inputTrouble = true }
                     if self.isSpeech { self.isSpeech = false }
@@ -726,6 +739,9 @@ public final class CaptureSession {
                     if silent {
                         log(String(format: "[Capture] %@ gave %.1f s of digital silence, restarting microphone (attempt %d)",
                                    device, silence, silentRestarts + 1))
+                    } else if starved {
+                        log(String(format: "[Capture] %@ delivered no audio for %.1f s, restarting microphone (attempt %d)",
+                                   device, starvedFor, silentRestarts + 1))
                     }
                     self.source?.stop()
                     self.levelMeter.resetSilence()
@@ -739,7 +755,7 @@ public final class CaptureSession {
                             log("[Capture] \(self.inputDeviceName ?? device) restarted after a failed restart")
                             failingSince = nil
                         }
-                        if silent {
+                        if silent || starved {
                             silentRestarts += 1
                             if silentRestarts == Self.silentRestartsBeforeWarning {
                                 let warning = "Микрофон «\(self.inputDeviceName ?? device)» передаёт тишину. Проверьте устройство ввода."
@@ -763,7 +779,7 @@ public final class CaptureSession {
                     }
                     continue
                 }
-                if silence == 0, silentRestarts > 0 {
+                if silence == 0, silentRestarts > 0, self.levelMeter.hasSignal {
                     log("[Capture] \(self.inputDeviceName ?? "input") delivers sound again after \(silentRestarts) restart(s)")
                     silentRestarts = 0
                     if let warning = silenceWarning, self.errorMessage == warning { self.errorMessage = nil }
@@ -955,15 +971,33 @@ public final class AudioFileSink: @unchecked Sendable {
     private var converter: AVAudioConverter?
     private let lock = NSLock()
 
+    /// The AAC encoder refuses 96 kbps below 44.1 kHz (a Bluetooth headset mic
+    /// runs at 8/16/24 kHz) and leaves an empty file, so such input is written
+    /// at 48 kHz through the converter below.
+    public static func fileSampleRate(forInput rate: Double) -> Double {
+        rate >= 44_100 ? rate : 48_000
+    }
+
     public init(url: URL, format: AVAudioFormat) throws {
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVSampleRateKey: format.sampleRate,
+            AVSampleRateKey: Self.fileSampleRate(forInput: format.sampleRate),
             AVNumberOfChannelsKey: min(format.channelCount, 2),
             AVEncoderBitRateKey: 96_000,
         ]
-        file = try AVAudioFile(forWriting: url, settings: settings,
-                               commonFormat: format.commonFormat, interleaved: format.isInterleaved)
+        do {
+            file = try AVAudioFile(forWriting: url, settings: settings,
+                                   commonFormat: format.commonFormat, interleaved: format.isInterleaved)
+        } catch {
+            Self.removeIfEmpty(url)
+            throw error
+        }
+    }
+
+    /// A refused writer leaves a 0-byte file behind; it holds no audio.
+    static func removeIfEmpty(_ url: URL) {
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? nil
+        if size == 0 { try? FileManager.default.removeItem(at: url) }
     }
 
     public func write(_ buffer: AVAudioPCMBuffer) {
@@ -1011,16 +1045,28 @@ public final class LevelMeter: @unchecked Sendable {
     private var signal = false
     public init() {}
 
+    private var lastBuffer = ContinuousClock.now
+
     public var value: Float { lock.lock(); defer { lock.unlock() }; return current }
+    /// Seconds since the input last delivered any buffer (or since `resetSilence()`):
+    /// an engine can report running while its tap receives nothing.
+    public var secondsWithoutBuffers: Double {
+        lock.lock(); let since = ContinuousClock.now - lastBuffer; lock.unlock()
+        let parts = since.components
+        return Double(parts.seconds) + Double(parts.attoseconds) / 1e18
+    }
     /// How long the input has delivered nothing but exact zeros, in seconds.
     public var digitalSilenceSeconds: Double { lock.lock(); defer { lock.unlock() }; return zeroSeconds }
 
     /// A non-zero buffer has arrived since the last `resetSilence()`.
     public var hasSignal: Bool { lock.lock(); defer { lock.unlock() }; return signal }
 
-    public func resetSilence() { lock.lock(); zeroSeconds = 0; signal = false; lock.unlock() }
+    public func resetSilence() {
+        lock.lock(); zeroSeconds = 0; signal = false; lastBuffer = .now; lock.unlock()
+    }
 
     public func update(_ buffer: AVAudioPCMBuffer) {
+        lock.lock(); lastBuffer = .now; lock.unlock()
         guard let channels = buffer.floatChannelData, buffer.frameLength > 0 else { return }
         let count = Int(buffer.frameLength)
         let channelCount = Int(buffer.format.channelCount)
