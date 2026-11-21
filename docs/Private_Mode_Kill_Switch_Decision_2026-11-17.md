@@ -27,3 +27,9 @@ written; a new analysis clears it. Archived maps under
 **Bringing it back.** The full design is in `Pseudonymization_Design.md` and
 `Secretary_Masked_Workspace.md` (history); the code is in git before this
 decision. Re-add only with a real use case.
+
+**Switch (2026-11-21).** Studio's menu has «Приватный режим — ничего в
+облако»; it writes `privateMode` to the shared suite `group.com.wimm.app`
+(`PrivateMode.setStored`), the one key Studio, the CLI, MCP and the web
+server read. `WIMM_PRIVATE_MODE` still overrides it. The iPhone keeps its
+own settings and has no switch yet.

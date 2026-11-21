@@ -145,6 +145,12 @@ struct WimmStudioApp: App {
 
                 Divider()
 
+                // Kill switch: while on, every cloud request refuses (LLMTransport).
+                Toggle("Приватный режим — ничего в облако", isOn: Binding(
+                    get: { PrivateMode.isEnabled },
+                    set: { PrivateMode.setStored($0) }
+                ))
+
                 Button(appDelegate.cloudSync?.isAvailable == false ? "Sync Unavailable (no CloudKit entitlement)" : "Sync Now") {
                     Task { await appDelegate.cloudSync?.syncRequested() }
                 }

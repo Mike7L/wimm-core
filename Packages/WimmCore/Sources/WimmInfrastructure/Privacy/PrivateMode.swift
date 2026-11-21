@@ -18,6 +18,13 @@ public enum PrivateMode {
         return SharedUserDefaults.store.bool(forKey: DefaultsKey.privateMode)
     }
 
+    /// The stored switch (Studio's menu). `WIMM_PRIVATE_MODE` still wins when set.
+    /// Written to the shared suite, the one place every reader looks
+    /// (Studio, CLI, MCP, the web server).
+    public static func setStored(_ enabled: Bool) {
+        SharedUserDefaults.store.set(enabled, forKey: DefaultsKey.privateMode)
+    }
+
     /// Called before any cloud request is built.
     public static func checkCloudEgress(provider: String) throws {
         guard isEnabled else { return }
