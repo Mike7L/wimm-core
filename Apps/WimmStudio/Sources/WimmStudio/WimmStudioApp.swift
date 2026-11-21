@@ -25,17 +25,29 @@ struct WimmStudioApp: App {
     @NSApplicationDelegateAdaptor(StudioAppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        Window("Personal Document", id: "personal-document") {
-            Group { if !DocumentProfile.enabled { StudioDocumentView(
-                model: appDelegate.documentModel,
+        Window("Wimm Studio", id: "personal-document") {
+            Group { if !DocumentProfile.enabled { StudioMainView(
+                panels: appDelegate.panels,
+                documentModel: appDelegate.documentModel,
                 capture: appDelegate.capture,
                 recentNotes: appDelegate.recentNotes,
-                cloudSync: appDelegate.cloudSync
+                cloudSync: appDelegate.cloudSync,
+                onPrivateModeChanged: { appDelegate.playCue($0 ? .lockOn : .lockOff) }
             )
-            .frame(minWidth: 680, minHeight: 460) } }
+            .frame(minWidth: 480, minHeight: 460) } }
         }
-        .defaultSize(width: 1040, height: 740)
+        .defaultSize(width: 1440, height: 880)
         .commands {
+            CommandGroup(before: .toolbar) {
+                ForEach(StudioPanel.allCases) { panel in
+                    Toggle(panel.title, isOn: Binding(
+                        get: { appDelegate.panels.isVisible(panel) },
+                        set: { appDelegate.panels.setVisible(panel, $0) }
+                    ))
+                    .keyboardShortcut(KeyEquivalent(panel.shortcut), modifiers: [.command])
+                }
+                Divider()
+            }
             CommandMenu("Studio") {
                 Button(appDelegate.capture.isRecording ? "Stop Recording" : "Start Recording") {
                     appDelegate.capture.toggle()
@@ -149,7 +161,7 @@ struct WimmStudioApp: App {
                 Toggle("Приватный режим — ничего в облако", isOn: Binding(
                     get: { PrivateMode.isEnabled },
                     set: {
-                        PrivateMode.setStored($0)
+                        appDelegate.panels.setPrivateMode($0)
                         appDelegate.playCue(PrivateMode.isEnabled ? .lockOn : .lockOff)
                     }
                 ))
@@ -202,6 +214,7 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
     let capture = CaptureSession()
     let documentModel = DocumentModel(url: DocumentProfile.enabled ? DocumentProfile.documentURL : nil)
     let recentNotes = RecentNotes(limit: 60)
+    let panels = StudioWindowModel()
     private var hudPanel: ResponsiveHUDPanel?
     private let webLauncher = StudioWebLauncher()
     private let notePresenter = StudioNotePresenter()
@@ -489,7 +502,8 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
                         "hud_search_utf8_bytes": self.recentNotes.notes.reduce(0) { $0 + $1.metadataSearchText.utf8.count },
                         "hud_notes": self.recentNotes.notes.count]
             }, makeDocument: {
-                AnyView(StudioDocumentView(model: self.documentModel, capture: self.capture, recentNotes: self.recentNotes))
+                AnyView(StudioDocumentView(model: self.documentModel, capture: self.capture, recentNotes: self.recentNotes,
+                                           panels: self.panels))
             })
             return
         }
@@ -675,8 +689,7 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
                 onOpenNote: { [weak self] in self?.openHUDNote($0) },
                 onOpenWeb: { [weak self] in self?.webLauncher.open() },
                 onOpenList: { [weak self] in
-                    // Same key as the document window's timeline toggle.
-                    UserDefaults.standard.set(true, forKey: "WimmStudio.showsTimeline")
+                    self?.panels.setVisible(.timeline, true)
                     self?.focusDocumentWindow()
                 },
                 island: island,

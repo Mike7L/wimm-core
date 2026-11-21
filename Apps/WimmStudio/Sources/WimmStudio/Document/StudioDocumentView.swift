@@ -69,8 +69,9 @@ struct StudioDocumentView: View {
     let capture: CaptureSession
     let recentNotes: RecentNotes
     var cloudSync: StudioCloudSync? = nil
+    /// Opens notes and receives block reveals from the other panels.
+    let panels: StudioWindowModel
 
-    @AppStorage("WimmStudio.showsTimeline") private var showsTimeline = true
     @AppStorage("WimmStudio.textScale") private var textScale = 1.0
     @AppStorage("WimmStudio.showsResolved") private var showsResolved = false
     @AppStorage("WimmStudio.showsInbox") private var showsInbox = true
@@ -87,8 +88,6 @@ struct StudioDocumentView: View {
     @State private var didSeedExpansion = false
     @State private var editingBlockID: Int?
     @State private var editDraft = ""
-    @State private var selectedNote: StudioLibraryNote?
-    @State private var timelineNoteID: UUID?
     @State private var revealBlockID: Int?
     @State private var highlightedBlockID: Int?
     @State private var focusedThreadID: String?
@@ -119,34 +118,12 @@ struct StudioDocumentView: View {
                 Divider()
             }
             mainColumn
-            if showsTimeline {
-                Divider()
-                StudioTimelineView(notes: recentNotes.allNotes, revision: recentNotes.revision,
-                                   document: model.document,
-                                   revealNoteID: timelineNoteID,
-                                   onOpenNote: { openNote($0) })
-                .frame(width: 320)
-            }
         }
-        .sheet(item: $selectedNote) { entry in
-            StudioNotePreview(entry: entry, onSelectBlock: citingBlockAction(for: entry),
-                              onSave: { recentNotes.reload(changedFiles: [$0]) },
-                              onTrash: { file in
-                                  guard await StudioNoteTrash.move(file) else { return false }
-                                  recentNotes.reload()
-                                  return true
-                              })
-        }
-        .onChange(of: model.secretary.showsPanel) { _, shows in
-            guard shows else { return }
-            model.secretary.showsPanel = false
-            let model = model
-            SecretaryWindow.show(model.secretary, actions: SecretaryWindowActions(
-                document: { model.fileURL },
-                pendingThreads: { model.threads.filter { $0.status == .open }.count },
-                canStart: { !model.isEditing },
-                answerComments: { model.runSecretary(.comments) },
-                runPass: { model.runSecretary(.pass) }))
+        .onChange(of: panels.revealBlockID, initial: true) { _, id in
+            guard let id else { return }
+            panels.revealBlockID = nil
+            showsReader = false
+            revealBlockID = id
         }
         .environment(\.openURL, OpenURLAction { url in
             guard let document = model.document else { return .systemAction }
@@ -282,14 +259,6 @@ struct StudioDocumentView: View {
 
     private var toolbar: some View {
         HStack(spacing: 10) {
-            Button {
-                showsTimeline.toggle()
-            } label: {
-                Image(systemName: "sidebar.right")
-            }
-            .buttonStyle(.borderless)
-            .help("Toggle library timeline")
-
             if model.hasSecretaryWorkspace {
                 Button {
                     showsInbox.toggle()
@@ -757,12 +726,6 @@ struct StudioDocumentView: View {
         }
     }
 
-    private func citingBlockAction(for note: StudioLibraryNote) -> (() -> Void)? {
-        guard let document = model.document,
-              let block = StudioTimeline.citingBlock(for: note, in: document) else { return nil }
-        return { revealBlockID = block.id }
-    }
-
     private func afterParagraphNoteControl(block: PersonalDocument.Block, plainText: String) -> some View {
         DocumentParagraphNoteControl(capture: capture, plainText: plainText, scale: scale,
             target: { model.target(for: block, selector: $0) },
@@ -872,11 +835,6 @@ struct StudioDocumentView: View {
     }
 
     private func openNote(_ note: StudioLibraryNote) {
-        timelineNoteID = nil
-        Task { @MainActor in
-            await Task.yield()
-            timelineNoteID = note.id
-        }
-        selectedNote = note
+        panels.open(note)
     }
 }
