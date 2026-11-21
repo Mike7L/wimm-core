@@ -76,16 +76,66 @@ final class GeminiChatToolTests: XCTestCase {
 
     func testUnknownToolNeverExecutesAndLoopIsBounded() async throws {
         let requests = OSAllocatedUnfairLock(initialState: 0)
-        ChatFixtureProtocol.handler = { _ in
-            requests.withLock { $0 += 1 }
+        let forbidden = OSAllocatedUnfairLock(initialState: [Int]())
+        ChatFixtureProtocol.handler = { request in
+            let step = requests.withLock { $0 += 1; return $0 }
+            if let config = try Self.body(request)["toolConfig"] as? [String: Any],
+               (config["functionCallingConfig"] as? [String: String])?["mode"] == "NONE" {
+                forbidden.withLock { $0.append(step) }
+            }
             return try Self.sse(parts: [["functionCall": ["name": "read", "args": [:]]]])
         }
-        let tool = GeminiChatStream.Tool(name: "read", description: "Read", parametersJSON: "{\"type\":\"object\"}") { _ in "evidence" }
+        let executed = OSAllocatedUnfairLock(initialState: 0)
+        let tool = GeminiChatStream.Tool(name: "read", description: "Read", parametersJSON: "{\"type\":\"object\"}") { _ in
+            executed.withLock { $0 += 1 }; return "evidence"
+        }
         do { _ = try await Self.collect(chat().stream(system: "", messages: [], temperature: 0, tools: [tool])); XCTFail("must stop") }
         catch { XCTAssertTrue(error.localizedDescription.contains("предел")) }
         XCTAssertEqual(requests.withLock { $0 }, 8)
+        XCTAssertEqual(executed.withLock { $0 }, 7, "The last round may not read")
+        XCTAssertEqual(forbidden.withLock { $0 }, [8], "Only the last round forbids new calls")
         do { _ = try await Self.collect(chat().stream(system: "", messages: [], temperature: 0)); XCTFail("must reject") }
         catch { XCTAssertTrue(error.localizedDescription.contains("недоступный")) }
+    }
+
+    func testUnknownToolNameIsReportedToTheModelWithoutExecuting() async throws {
+        let requests = OSAllocatedUnfairLock(initialState: 0)
+        ChatFixtureProtocol.handler = { request in
+            let step = requests.withLock { $0 += 1; return $0 }
+            if step == 1 { return try Self.sse(parts: [["functionCall": ["name": "raed", "args": [:], "id": "c1"]]]) }
+            let contents = try XCTUnwrap(try Self.body(request)["contents"] as? [[String: Any]])
+            let parts = try XCTUnwrap(contents.last?["parts"] as? [[String: Any]])
+            let response = try XCTUnwrap(parts.first?["functionResponse"] as? [String: Any])
+            let result = try XCTUnwrap((response["response"] as? [String: String])?["result"])
+            XCTAssertTrue(result.contains("no tool named raed") && result.contains("read"), result)
+            return try Self.sse(parts: [["text": "Ответ."]])
+        }
+        let tool = GeminiChatStream.Tool(name: "read", description: "Read", parametersJSON: "{\"type\":\"object\"}") { _ in
+            XCTFail("a misspelled name must not run another tool"); return ""
+        }
+        let output = try await Self.collect(chat().stream(system: "", messages: [], temperature: 0, tools: [tool]))
+        XCTAssertEqual(output, "Ответ.")
+    }
+
+    /// Spending the read budget ends with an answer from what was read, not an error.
+    func testSpentReadBudgetAsksForAnAnswerWithoutTools() async throws {
+        let requests = OSAllocatedUnfairLock(initialState: 0)
+        ChatFixtureProtocol.handler = { request in
+            let step = requests.withLock { $0 += 1; return $0 }
+            let mode = ((try Self.body(request)["toolConfig"] as? [String: Any])?["functionCallingConfig"] as? [String: String])?["mode"]
+            if mode == "NONE" { return try Self.sse(parts: [["text": "По прочитанному: да."]]) }
+            XCTAssertLessThanOrEqual(step, 2)
+            let calls = (0..<10).map { ["functionCall": ["name": "read", "args": [:], "id": "c\(step)-\($0)"]] }
+            return try Self.sse(parts: calls)
+        }
+        let executed = OSAllocatedUnfairLock(initialState: 0)
+        let tool = GeminiChatStream.Tool(name: "read", description: "Read", parametersJSON: "{\"type\":\"object\"}") { _ in
+            executed.withLock { $0 += 1 }; return "evidence"
+        }
+        let output = try await Self.collect(chat().stream(system: "", messages: [], temperature: 0, tools: [tool]))
+        XCTAssertEqual(output, "По прочитанному: да.")
+        XCTAssertEqual(executed.withLock { $0 }, 16, "Calls past the budget are answered with an error, not run")
+        XCTAssertEqual(requests.withLock { $0 }, 3)
     }
 
     func testCancellationDuringReadDoesNotSendLateEvidence() async throws {

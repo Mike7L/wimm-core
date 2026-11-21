@@ -210,6 +210,11 @@ final class StudioAppDelegate: NSObject, NSApplicationDelegate {
         runSecretary: { [weak self] in
             guard let self else { return "Секретарь недоступен." }
             return self.startSecretaryPassFromVoice()
+        },
+        library: VikLibrary(),
+        reviewQueue: { [weak self] in
+            (self?.documentModel.fileURL).flatMap(SecretaryWorkspace.init(document:))?
+                .root.appendingPathComponent("secretary/review_queue.md")
         }
     )
     @ObservationIgnored private var secretaryOfferTask: Task<Void, Never>?

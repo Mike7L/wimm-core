@@ -65,6 +65,25 @@ final class VikRequestTests: XCTestCase {
         XCTAssertEqual(tail.append("Встреча переносится на следующую пятницу, вот. "),
                        ["Встреча переносится на следующую пятницу, вот."])
     }
+
+    func testSpokenTextDropsGroupedAndBareUUIDCitations() {
+        let id = "6EFDD3A2-1B2C-4D5E-8F90-0123456789AB"
+        XCTAssertEqual(VikAssistant.withoutCitations("В Киле [N:\(id), b12]."), "В Киле.")
+        XCTAssertEqual(VikAssistant.withoutCitations("Так ты сказал (\(id)) вчера."), "Так ты сказал вчера.")
+        XCTAssertEqual(VikAssistant.withoutCitations("Да [b3] и [D2]."), "Да и.")
+    }
+
+    @MainActor
+    func testFirstRequestCarriesTheClockAndLabelsDataSections() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/Berlin"))
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 21, hour: 14, minute: 5)))
+        let message = VikAssistant.message(note: "мысль. Алёна, что вчера?", context: "outline", query: "что вчера?",
+                                           now: now, calendar: calendar)
+        XCTAssertTrue(message.contains("суббота, 21 ноября 2026, 14:05 (Europe/Berlin); ISO 2026-11-21"), message)
+        XCTAssertTrue(message.contains("<current_note>") && message.contains("<question>\nчто вчера?\n</question>"))
+        XCTAssertTrue(VikAssistant.prompt.contains("search_notes") && VikAssistant.prompt.contains("my_recent_replies"))
+    }
 }
 
 @MainActor

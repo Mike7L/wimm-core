@@ -127,32 +127,45 @@ public struct GeminiChatStream: Sendable {
         let deadline = Date().addingTimeInterval(timeout)
         var calls = 0
         var nextThinking = thinking
-        for _ in 0..<8 {
+        for step in 0..<Self.maxRounds {
             try Task.checkCancellation()
             let remaining = deadline.timeIntervalSinceNow
             guard remaining > 0 else { throw URLError(.timedOut) }
+            // The last round, or one after the read budget is spent, may not call
+            // tools: the model answers from what it has read instead of the
+            // exchange dying with nothing said.
+            let final = step == Self.maxRounds - 1 || calls >= Self.maxCalls
             let result = try await round(system: system, contents: contents, lastUser: lastUser,
                                          temperature: temperature, timeout: remaining,
-                                         thinking: nextThinking, tools: tools, yield: yield)
+                                         thinking: nextThinking, tools: tools, allowCalls: !final, yield: yield)
             // Keep both the caller's explicit level and any provider fallback
             // for the entire exchange, including every tool continuation.
             nextThinking = result.thinking
             let parts = result.parts
             let requested = parts.compactMap { $0["functionCall"] as? [String: Any] }
             guard !requested.isEmpty else { return }
-            calls += requested.count
-            guard calls <= 16 else { throw Self.toolLimitError }
+            guard !tools.isEmpty else {
+                throw NSError(domain: "GeminiChatStream", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "Модель запросила недоступный инструмент чтения."])
+            }
+            guard !final else { throw Self.toolLimitError }
             contents.append(["role": "model", "parts": parts])
             var responses: [[String: Any]] = []
             for call in requested {
                 try Task.checkCancellation()
-                guard let name = call["name"] as? String,
-                      let tool = tools.first(where: { $0.name == name }) else {
-                    throw NSError(domain: "GeminiChatStream", code: 1,
-                                  userInfo: [NSLocalizedDescriptionKey: "Модель запросила недоступный инструмент чтения."])
+                calls += 1
+                let name = call["name"] as? String ?? ""
+                let result: String
+                if calls > Self.maxCalls {
+                    // Every call still gets its response, so the history stays well formed.
+                    result = "error: the read limit of this exchange is reached; answer from what you have already read and say what is missing"
+                } else if let tool = tools.first(where: { $0.name == name }) {
+                    let args = try JSONSerialization.data(withJSONObject: call["args"] as? [String: Any] ?? [:])
+                    result = try await tool.call(String(decoding: args, as: UTF8.self))
+                } else {
+                    // Never executed; the model can correct itself (a misspelled name).
+                    result = "error: no tool named \(name); available: \(tools.map(\.name).joined(separator: ", "))"
                 }
-                let args = try JSONSerialization.data(withJSONObject: call["args"] as? [String: Any] ?? [:])
-                let result = try await tool.call(String(decoding: args, as: UTF8.self))
                 try Task.checkCancellation()
                 // The transport checks again before the next cloud request.
                 try PrivateMode.checkCloudEgress(provider: "gemini")
@@ -164,6 +177,10 @@ public struct GeminiChatStream: Sendable {
         }
         throw Self.toolLimitError
     }
+
+    /// Model requests per exchange and tool calls across them.
+    static let maxRounds = 8
+    static let maxCalls = 16
 
     private static var toolLimitError: NSError {
         NSError(domain: "GeminiChatStream", code: 2,
@@ -177,7 +194,7 @@ public struct GeminiChatStream: Sendable {
 
     private func round(
         system: String, contents: [[String: Any]], lastUser: String, temperature: Double?, timeout: TimeInterval,
-        thinking: Thinking, tools: [Tool], yield: (String) -> Void
+        thinking: Thinking, tools: [Tool], allowCalls: Bool = true, yield: (String) -> Void
     ) async throws -> RoundResult {
         var request = try await transport.makeGeminiRequest(model: model, timeout: timeout, endpoint: "streamGenerateContent")
         if var components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false) {
@@ -197,6 +214,8 @@ public struct GeminiChatStream: Sendable {
                 ["name": tool.name, "description": tool.description,
                  "parameters": try JSONSerialization.jsonObject(with: Data(tool.parametersJSON.utf8))] as [String: Any]
             }]]
+            // The history holds function calls, so the declarations stay; NONE forbids new ones.
+            if !allowCalls { body["toolConfig"] = ["functionCallingConfig": ["mode": "NONE"]] }
         }
         try Task.checkCancellation()
         request.httpBody = try JSONSerialization.data(withJSONObject: body)

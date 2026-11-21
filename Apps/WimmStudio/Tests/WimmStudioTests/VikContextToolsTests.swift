@@ -79,6 +79,125 @@ final class VikContextToolsTests: XCTestCase {
         do { _ = try await tools.read("document_outline", arguments: "{}"); XCTFail("must refuse") } catch {}
     }
 
+    // MARK: - Whole-library search, document search, follow-ups, secretary questions
+
+    private func libraryNote(_ id: String, _ text: String, at date: Date, file: String? = nil) -> RecallNote {
+        RecallNote(id: id, date: date, kind: "text", title: nil, summary: nil, text: text,
+                   filePath: file ?? "/fixture/\(id).txt")
+    }
+
+    func testSearchNotesFindsOlderNotesExcludesCurrentAndReadsThem() async throws {
+        let asked = try XCTUnwrap(FileStore.recordingDateFromFileName(current))
+        let library = RecallLibrary([
+            libraryNote("old-kiel", "Тётя Роза переехала в Киль весной.", at: asked.addingTimeInterval(-40 * 86400)),
+            libraryNote("other", "Купить хлеб.", at: asked.addingTimeInterval(-86400)),
+            libraryNote("self", "Алёна, где живёт тётя Роза? Киль?", at: asked, file: current.path),
+        ])
+        let tools = VikContextTools(document: "", source: current, asOf: asked.addingTimeInterval(5),
+                                    isAllowed: { true }, files: { [] }, library: { library })
+        let found = try object(await tools.read("search_notes", arguments: "{\"query\":\"Киль\"}"))
+        let items = try XCTUnwrap(found["items"] as? [[String: Any]])
+        XCTAssertEqual(items.compactMap { $0["id"] as? String }, ["old-kiel"], "The asking note is not its own evidence")
+        XCTAssertEqual(found["total"] as? Int, 1)
+        let read = try object(await tools.read("read_note", arguments: "{\"id\":\"old-kiel\"}"))
+        XCTAssertTrue((read["text"] as? String)?.contains("Тётя Роза") == true)
+        let none = try await tools.read("search_notes", arguments: "{\"query\":\"Марсель\"}")
+        XCTAssertTrue(none.hasPrefix("not_found"), none)
+    }
+
+    func testSearchNotesListsAPeriodWithoutQueryAndRejectsBadDates() async throws {
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = .current
+        let asked = try XCTUnwrap(FileStore.recordingDateFromFileName(current))
+        let yesterday = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: asked)))
+        let library = RecallLibrary([
+            libraryNote("y1", "Утро вчера", at: yesterday.addingTimeInterval(9 * 3600)),
+            libraryNote("y2", "Вечер вчера", at: yesterday.addingTimeInterval(22 * 3600)),
+            libraryNote("before", "Позавчера", at: yesterday.addingTimeInterval(-3600)),
+        ])
+        let tools = VikContextTools(document: "", source: current, isAllowed: { true }, files: { [] }, library: { library })
+        let day = DateFormatter(); day.locale = Locale(identifier: "en_US_POSIX"); day.dateFormat = "yyyy-MM-dd"
+        let text = day.string(from: yesterday)
+        let listed = try object(await tools.read("search_notes", arguments: "{\"since\":\"\(text)\",\"until\":\"\(text)\"}"))
+        XCTAssertEqual((listed["items"] as? [[String: Any]])?.compactMap { $0["id"] as? String }, ["y2", "y1"])
+        let bad = try await tools.read("search_notes", arguments: "{\"since\":\"вчера\"}")
+        XCTAssertTrue(bad.hasPrefix("error:"), "A bad date is the model's to fix, not the exchange's end")
+        let empty = try await tools.read("search_notes", arguments: "{}")
+        XCTAssertTrue(empty.hasPrefix("error:"))
+    }
+
+    func testSearchWithoutLibrarySaysWhatToUseInstead() async throws {
+        let tools = VikContextTools(document: "", source: current, isAllowed: { true }, files: { [] })
+        let result = try await tools.read("search_notes", arguments: "{\"query\":\"Киль\"}")
+        XCTAssertTrue(result.contains("notes_last_hour"), result)
+    }
+
+    func testDocumentFindReturnsBlocksWithHeadingPath() async throws {
+        let tools = VikContextTools(document: document, source: current, isAllowed: { true }, files: { [] })
+        let found = try object(await tools.read("document_find", arguments: "{\"queries\":[\"Киле\"]}"))
+        let blocks = try XCTUnwrap(found["blocks"] as? [[String: Any]])
+        let hit = try XCTUnwrap(blocks.first { ($0["text"] as? String)?.contains("Киле") == true })
+        XCTAssertTrue((hit["path"] as? String)?.contains("Семья") == true)
+        let bad = try await tools.read("document_find", arguments: "{\"queries\":[]}")
+        XCTAssertTrue(bad.hasPrefix("error:"))
+    }
+
+    func testRecentRepliesAreReadOnlyOnRequest() async throws {
+        let asked = Date()
+        let entry = VikReplyLog.Entry(date: asked.addingTimeInterval(-60), request: "где живёт Роза", answer: "В Киле [N:old-kiel].")
+        let tools = VikContextTools(document: "", source: current, asOf: asked, isAllowed: { true }, files: { [] },
+                                    replies: { _ in [entry] })
+        let context = try await tools.preloaded()
+        XCTAssertFalse(context.contains("Роза"), "No implicit history: the first request carries no earlier exchange")
+        let read = try await tools.read("my_recent_replies", arguments: "{}")
+        XCTAssertTrue(read.contains("В Киле"))
+    }
+
+    func testReplyLogRoundTripsAndKeepsOnlyTheWindow() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("vik-replies-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let now = Date()
+        let fresh = VikReplyLog.text(date: now.addingTimeInterval(-600), source: "a.m4a", request: "вопрос", answer: "ответ\n\nвторой абзац",
+                                     note: "заметка **Алёна:** в тексте", context: "")
+        try Data(fresh.utf8).write(to: dir.appendingPathComponent("1.md"))
+        let stale = VikReplyLog.text(date: now.addingTimeInterval(-3 * 3600), source: "b.m4a", request: "старый", answer: "старый ответ",
+                                     note: "", context: "")
+        try Data(stale.utf8).write(to: dir.appendingPathComponent("2.md"))
+        try Data("# Чужой файл".utf8).write(to: dir.appendingPathComponent("3.md"))
+        let entries = VikReplyLog.recent(before: now, directory: dir)
+        XCTAssertEqual(entries.map(\.request), ["вопрос"])
+        XCTAssertEqual(entries.first?.answer, "ответ\n\nвторой абзац")
+    }
+
+    func testSecretaryQuestionsListsOpenQuestionsWithOptions() async throws {
+        let queue = """
+        # Очередь
+
+        ## Открытые вопросы
+
+        - **Q12.** Когда переезд Розы? [S3]
+          - A) Весной
+          - B) Летом
+
+        ## Закрытые
+
+        - **Q3.** Старый вопрос.
+        """
+        let tools = VikContextTools(document: "", source: current, isAllowed: { true }, files: { [] }, reviewQueue: { queue })
+        let listed = try object(await tools.read("secretary_questions", arguments: "{}"))
+        let items = try XCTUnwrap(listed["items"] as? [[String: Any]])
+        XCTAssertEqual(items.compactMap { $0["number"] as? Int }, [12])
+        let missing = try await VikContextTools(document: "", source: current, isAllowed: { true }, files: { [] })
+            .read("secretary_questions", arguments: "{}")
+        XCTAssertTrue(missing.hasPrefix("not_found"))
+    }
+
+    func testDeniedAccessNeverLoadsTheLibrary() async {
+        let tools = VikContextTools(document: "", source: current, isAllowed: { false }, files: { [] },
+                                    library: { XCTFail("must not load"); return nil })
+        do { _ = try await tools.read("search_notes", arguments: "{\"query\":\"x\"}"); XCTFail("must refuse") } catch {}
+    }
+
     private func object(_ text: String) throws -> [String: Any] {
         try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
     }

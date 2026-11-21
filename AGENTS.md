@@ -45,8 +45,11 @@ reasons behind the rules are in `docs/` (index: `docs/README.md`).
   final live receipt (bounded, cancelable), resume only its unchanged capture
   lease, refuse in private mode. Explicit capture commands revoke old work
   before opening the mic. Reuse the existing silence event; read-only
-  note/document tools reuse the secretary/MCP readers; no implicit
-  conversation history, file edits or command tools. One exception (trial):
+  note/document tools reuse the secretary/MCP readers (whole-library search
+  via `VikLibrary`: `mcp-build` child process, own cache, released when idle);
+  no implicit conversation history (her past replies are only the
+  on-demand `my_recent_replies` read, never attached by code), file edits or
+  command tools. One exception (trial):
   «задача для кода» (short form «идея …» for the `idea-review` skill) opens
   a Claude Code draft by deep link, no model call; it
   must never auto-submit without a new user decision. Second exception: when

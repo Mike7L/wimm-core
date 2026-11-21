@@ -56,7 +56,7 @@ final class VikVoice: NSObject, VikVoicePlaying, AVSpeechSynthesizerDelegate {
     func enqueue(_ text: String) {
         if useNeural == nil { useNeural = neural.isReady }
         // Citations stay visible in the HUD and saved reply, but aren't read aloud.
-        let spoken = text.replacingOccurrences(of: #"\[(?:D\d+|b\d+|N:[A-Za-z0-9-]+)\]"#, with: "", options: .regularExpression)
+        let spoken = VikAssistant.withoutCitations(text)
         if useNeural == true {
             neural.enqueue(spoken, speaker: .demon, index: index,
                            voice: .init(Self.selectedVoice), speed: 1.16)
