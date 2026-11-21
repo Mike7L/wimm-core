@@ -282,18 +282,25 @@ public enum AttachmentSplitMigration {
                 plan.targetURL = context.recordings.appendingPathComponent(earlier)
             } else if !fm.fileExists(atPath: local.path) {
                 plan.item.action = "missing"
-            } else if !FileStore.isSupportedRecordingFile(local) || FileStore.isDerivedAudioFile(local) {
+            } else if FileStore.isDerivedAudioFile(local) {
                 plan.item.action = "unsupported"
-            } else if needsPromotion {
-                needsPromotion = false
-                plan.item.action = "promote"
-                plan.targetURL = context.recordings.appendingPathComponent(base + "." + local.pathExtension)
+            } else if let ext = targetExtension(for: local) {
+                if !FileStore.isSupportedRecordingFile(local) {
+                    plan.item.kind = kind(of: local.deletingPathExtension().appendingPathExtension(ext))
+                }
+                if needsPromotion {
+                    needsPromotion = false
+                    plan.item.action = "promote"
+                    plan.targetURL = context.recordings.appendingPathComponent(base + "." + ext)
+                } else {
+                    position += 1
+                    plan.item.action = "split"
+                    plan.targetURL = childURL(parentSidecar: sidecarName, attachmentID: rawID,
+                                              date: parentDate.addingTimeInterval(TimeInterval(position)),
+                                              extension: ext, in: context.recordings)
+                }
             } else {
-                position += 1
-                plan.item.action = "split"
-                plan.targetURL = childURL(parentSidecar: sidecarName, attachmentID: rawID,
-                                          date: parentDate.addingTimeInterval(TimeInterval(position)),
-                                          extension: local.pathExtension, in: context.recordings)
+                plan.item.action = "unsupported"
             }
             if let target = plan.targetURL {
                 plan.item.target = relativePath(target, library: context.library)
@@ -646,6 +653,23 @@ public enum AttachmentSplitMigration {
     }
 
     /// The shared kind table (`NoteContent`); this report spells `document` as `other`.
+    /// The extension the new note gets: the file's own when the library lists
+    /// it, else one read from the first bytes. Evernote saved some attachments
+    /// without an extension (`26.04.2015_09:15:29`); a JPEG, PNG, GIF or PDF
+    /// among them is still that file. Anything else stays unsupported.
+    static func targetExtension(for url: URL) -> String? {
+        if FileStore.isSupportedRecordingFile(url) { return url.pathExtension }
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        let head = [UInt8]((try? handle.read(upToCount: 8)) ?? Data())
+        func starts(_ magic: [UInt8]) -> Bool { head.count >= magic.count && Array(head.prefix(magic.count)) == magic }
+        if starts([0xFF, 0xD8, 0xFF]) { return "jpg" }
+        if starts([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) { return "png" }
+        if starts(Array("GIF8".utf8)) { return "gif" }
+        if starts(Array("%PDF-".utf8)) { return "pdf" }
+        return nil
+    }
+
     static func kind(of url: URL) -> String {
         let kind = NoteContent.kind(of: url)
         return kind == .document ? "other" : kind.rawValue

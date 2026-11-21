@@ -263,6 +263,36 @@ final class AttachmentSplitMigrationTests: XCTestCase {
         XCTAssertEqual(report.totals.emptyLists, 1)
     }
 
+    func testExtensionlessEvernoteFileIsNamedByItsContent() throws {
+        let folder = library.appendingPathComponent("Attachments/Evernote/E2", isDirectory: true)
+        let jpeg = folder.appendingPathComponent("26.04.2015_09:15:29")
+        let amr = folder.appendingPathComponent("26.04.2015_09:19:50")
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]).write(to: jpeg)
+        try Data("#!AMR\n".utf8).write(to: amr)
+        let txt = recordings.appendingPathComponent("Wimm_2015-04-26_09-00-00_bbbbbbbb.txt")
+        try write("Note\n", to: txt)
+        let jpegID = "66666666-6666-6666-6666-666666666666", amrID = "77777777-7777-7777-7777-777777777777"
+        try writeJSON([
+            "importSource": "Evernote", "schema": "WimmMeta@v1",
+            "attachments": [
+                ["id": jpegID, "url": jpeg.absoluteString, "type": "file"],
+                ["id": amrID, "url": amr.absoluteString, "type": "file"],
+            ],
+        ], to: FileStore.metadataURL(forRecordingURL: txt))
+
+        let items = try XCTUnwrap(try run(apply: true).parents.first?.items)
+        XCTAssertEqual(items.map(\.action), ["split", "unsupported"])
+        XCTAssertEqual(items[0].kind, "image")
+        let target = try XCTUnwrap(items[0].target)
+        XCTAssertEqual((target as NSString).pathExtension, "jpg")
+        XCTAssertEqual(try Data(contentsOf: library.appendingPathComponent(target)).prefix(3), Data([0xFF, 0xD8, 0xFF]))
+        XCTAssertFalse(fm.fileExists(atPath: jpeg.path), "media is moved, not copied")
+        XCTAssertTrue(fm.fileExists(atPath: amr.path), "an unknown type stays where it is")
+        let left = try XCTUnwrap(try readJSON(FileStore.metadataURL(forRecordingURL: txt))["attachments"] as? [[String: Any]])
+        XCTAssertEqual(left.compactMap { $0["id"] as? String }, [amrID])
+    }
+
     func testApplyWithoutBackupIsRefused() {
         XCTAssertThrowsError(try AttachmentSplitMigration.run(.init(apply: true, library: library)))
     }

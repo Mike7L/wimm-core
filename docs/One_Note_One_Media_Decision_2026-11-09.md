@@ -5,13 +5,16 @@ Status: **decided** by the user on 2026-11-09. Stages 1–2 implemented
 run (needs the user's yes); stages 3–4 open.
 
 Dry run on the real library, 2026-11-21 (nothing changed): 8 319 sidecars,
-0 parse errors; 1 540 parents with attachments, 1 514 to change, 0 failed;
-320 empty lists. 4 713 attachments: split 4 325, promote 185, left in place
-203 — 186 unsupported (97 `.svg`, 89 Evernote files without an extension,
-named like `26.04.2015_09:15:29`), 14 missing on disk, 3 with an iPhone
-container path. 114 `_micro` files move with their notes. After `--apply`
-those 203 still sit in `attachments`, so "no sidecar has `attachments`"
-needs a decision for them first.
+0 parse errors; 1 540 parents with attachments, 1 517 to change, 0 failed;
+320 empty lists. 4 713 attachments: split 4 338, promote 185, left in place
+190. An Evernote file saved without an extension is named by its first bytes
+(JPEG, PNG, GIF, PDF: 13 files). Left in place, all under Evernote text
+notes: 149 SVG images (97 `.svg`, 52 without an extension), 10 AMR voice
+clips, 11 saved web pages (HTML), one each of zip, webm and ics; 14 files
+missing on disk and 3 with an iPhone container path. 114 `_micro` files move
+with their notes. Those 190 stay in `attachments` after `--apply`, so "no
+sidecar has `attachments`" needs a decision on SVG/AMR/HTML notes and on
+entries whose file is gone.
 
 ## Decision
 
