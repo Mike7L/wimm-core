@@ -412,6 +412,16 @@ final class WimmStudioTests: XCTestCase {
         XCTAssertFalse(panel.isInResizeCorner(at: NSPoint(x: 28, y: 2)))
     }
 
+    /// Window animations run on WindowServer time: under load (a parallel
+    /// build) a 0.16 s frame animation can outlast a fixed sleep. Poll for the
+    /// settled state, bounded, after the minimum wait the test already makes.
+    @MainActor
+    private func settle(timeout: Duration = .seconds(2), _ done: () -> Bool) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while !done(), clock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+    }
+
     @MainActor
     func testHUDIslandAnimatedMorphIsNonBlockingAndInterruptible() async throws {
         let defaults = UserDefaults.standard
@@ -438,6 +448,7 @@ final class WimmStudioTests: XCTestCase {
 
         // Wait for expand animation + settle to complete.
         try await Task.sleep(for: .milliseconds(320))
+        try await settle { !island.isMorphing }
         XCTAssertFalse(island.isMorphing)
         XCTAssertEqual(island.morphFraction, 1, accuracy: 0.001)
         XCTAssertTrue(panel.hasShadow)
@@ -454,6 +465,7 @@ final class WimmStudioTests: XCTestCase {
 
         // Wait past collapse duration: interrupted collapse must NOT shrink the panel.
         try await Task.sleep(for: .milliseconds(320))
+        try await settle { !island.isMorphing }
         XCTAssertTrue(island.isExpanded)
         XCTAssertFalse(island.isMorphing)
         XCTAssertEqual(panel.frame.size, NSSize(width: 360, height: 220))
@@ -461,6 +473,7 @@ final class WimmStudioTests: XCTestCase {
         // Uninterrupted collapse settles to collapsed pill size and alpha.
         panel.setIslandExpanded(false, animated: true)
         try await Task.sleep(for: .milliseconds(280))
+        try await settle { !island.isMorphing && panel.frame.size == NSSize(width: 56, height: 18) }
         XCTAssertFalse(island.isExpanded)
         XCTAssertFalse(island.isMorphing)
         XCTAssertEqual(panel.frame.size, NSSize(width: 56, height: 18))
@@ -470,6 +483,7 @@ final class WimmStudioTests: XCTestCase {
         // Animated frame snap on a visible panel (uses animator().setFrame) must not crash or lose edge alignment.
         panel.setIslandEdge(.left, animated: true)
         try await Task.sleep(for: .milliseconds(250))
+        try await settle { panel.frame.size == NSSize(width: 18, height: 56) }
         XCTAssertEqual(island.edge, .left)
         XCTAssertEqual(panel.frame.size, NSSize(width: 18, height: 56))
         XCTAssertEqual(panel.frame.minX, bounds.minX, accuracy: 0.5)
