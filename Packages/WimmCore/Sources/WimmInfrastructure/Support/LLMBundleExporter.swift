@@ -7,12 +7,8 @@ public actor LLMBundleExporter {
     public static let shared = LLMBundleExporter()
 
     private let metadataRepository = MetadataRepository()
-    private lazy var attachmentRepository = AttachmentRepository(
-        metadataRepository: metadataRepository)
 
     public struct ExportOptions {
-        /// Include OCR text from images and documents
-        public var includeAttachmentsOCR: Bool = true
         /// Skip notes that haven't been processed by LLM yet
         public var filterUnprocessed: Bool = true
         /// Minimum content length to be included (to avoid "noisy" short recordings)
@@ -55,7 +51,6 @@ public actor LLMBundleExporter {
             "originalNoteCount": noteURLs.count,
             "options": [
                 "filterUnprocessed": options.filterUnprocessed,
-                "includeOCR": options.includeAttachmentsOCR,
             ],
         ]
         let manifestData = try JSONSerialization.data(
@@ -145,8 +140,6 @@ public actor LLMBundleExporter {
                 continue
             }
 
-            let attachments = await attachmentRepository.attachments(for: url)
-
             entries.append(
                 ChronicleEntry(
                     timestamp: finalTimestamp,
@@ -155,8 +148,7 @@ public actor LLMBundleExporter {
                     summary: card?.summary ?? "",
                     content: finalContent,
                     isArtifact: card?.is_artifact ?? false,
-                    isInsight: card?.is_insight ?? false,
-                    attachments: attachments
+                    isInsight: card?.is_insight ?? false
                 ))
         }
         return entries.sorted { $0.timestamp < $1.timestamp }
@@ -173,8 +165,7 @@ public actor LLMBundleExporter {
                 summary: note.summary ?? "",
                 content: note.refinedText ?? note.text,
                 isArtifact: note.isArtifact,
-                isInsight: note.isInsight,
-                attachments: note.attachments
+                isInsight: note.isInsight
             )
         }
         .sorted { $0.timestamp < $1.timestamp }
@@ -199,30 +190,6 @@ public actor LLMBundleExporter {
 
             // Main Content (Direct, no label for better flow)
             md += "\(entry.content)\n\n"
-
-            // Context/Attachments block
-            if options.includeAttachmentsOCR && !entry.attachments.isEmpty {
-                let ocrs = entry.attachments.compactMap { a -> String? in
-                    guard let text = a.extractedText, !text.isEmpty else { return nil }
-                    let fileName = a.url.lastPathComponent
-
-                    // Try to copy asset if baseURL is provided
-                    if let baseURL = assetsURL {
-                        let target = baseURL.appendingPathComponent(fileName)
-                        if !FileManager.default.fileExists(atPath: target.path) {
-                            try? FileManager.default.copyItem(at: a.url, to: target)
-                        }
-                    }
-
-                    var out = "> **[Attachment: \(fileName)]**\n"
-                    out += "> \(text.replacingOccurrences(of: "\n", with: "\n> "))\n"
-                    return out
-                }
-                if !ocrs.isEmpty {
-                    md += ocrs.joined(separator: "\n")
-                    md += "\n\n"
-                }
-            }
 
             md += "---\n\n"
         }
@@ -263,5 +230,4 @@ private struct ChronicleEntry {
     let content: String
     let isArtifact: Bool
     let isInsight: Bool
-    let attachments: [NoteAttachment]
 }

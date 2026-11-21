@@ -22,6 +22,6 @@ enum StudioNoteLink {
     static func referenceURL(_ via: String) -> URL? {
         guard let prefix = ["note:", "voice:"].first(where: { via.hasPrefix($0) }) else { return nil }
         let raw = String(via.dropFirst(prefix.count)).components(separatedBy: "#")[0]
-        return NoteAttachmentMedia.resolve(raw)
+        return FileStore.resolveStoredPath(raw)
     }
 }

@@ -11,7 +11,6 @@ struct RecordingDetailView: View {
     let recording: Recording
     @EnvironmentObject private var appState: AppState
     @State private var player = AudioPlayerController()
-    @State private var attachments: [NoteAttachment] = []
     @State private var transcription: String = ""
     @State private var detailImage: UIImage?
     @State private var showPhotoViewer = false
@@ -127,18 +126,6 @@ struct RecordingDetailView: View {
                                     Text(reason)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if !attachments.isEmpty {
-                    DetailCard(title: L10n.iOS.Recording.attachments, systemImage: "paperclip") {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 12) {
-                                ForEach(attachments) { attachment in
-                                    AttachmentThumb(attachment: attachment)
                                 }
                             }
                         }
@@ -267,9 +254,6 @@ struct RecordingDetailView: View {
     private func reloadNote() async {
         let repository = MetadataRepository()
         card = await repository.existingNoteCard(for: recording.fileURL) ?? recording.note
-        // Reading never rewrites the sidecar (legacy keys are decoded in place).
-        attachments = await AttachmentRepository(metadataRepository: repository)
-            .attachments(for: recording.fileURL, migrateLegacyKeys: false)
         if let meta = try? RecordingMetadata.load(for: recording.fileURL) {
             transcription = meta.transcription
         }
@@ -412,7 +396,7 @@ struct RecordingDetailView: View {
     }
 
     /// The raw material a note was built from: transcription, extracted
-    /// document text, OCR of attachments. Shown collapsed below the body,
+    /// document text. Shown collapsed below the body,
     /// and only when it actually differs from what the body already shows.
     private var sources: [NoteSource] {
         var result: [NoteSource] = []
@@ -442,21 +426,6 @@ struct RecordingDetailView: View {
             ))
         }
 
-        for attachment in attachments {
-            guard let extracted = attachment.extractedText?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-                !extracted.isEmpty
-            else { continue }
-            let exists = FileManager.default.fileExists(atPath: attachment.url.path)
-            result.append(NoteSource(
-                id: attachment.id.uuidString,
-                icon: "text.viewfinder",
-                title: L10n.iOS.Recording.sourceOCR,
-                fileName: attachment.url.lastPathComponent,
-                fileURL: exists ? attachment.url : nil,
-                text: extracted
-            ))
-        }
 
         return result
     }

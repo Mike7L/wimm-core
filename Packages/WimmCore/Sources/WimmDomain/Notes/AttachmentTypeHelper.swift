@@ -40,13 +40,6 @@ public enum AttachmentTypeHelper {
     
     // MARK: - Type Detection
     
-    /// Determine attachment type from NoteAttachment
-    public static func determineType(for attachment: NoteAttachment) -> AttachmentType {
-        let type = attachment.type.lowercased()
-        let ext = attachment.url.pathExtension.lowercased()
-        return determineType(type: type, extension: ext)
-    }
-    
     /// Determine attachment type from URL
     public static func determineType(for url: URL) -> AttachmentType {
         let ext = url.pathExtension.lowercased()

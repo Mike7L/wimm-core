@@ -50,13 +50,6 @@ public protocol TranscriptRepositoryProtocol: Sendable {
     @discardableResult func recordTranscriptionFailure(for file: URL, reason: CoreTranscriptionFailureReason, underlying: Error?) async -> String
 }
 
-public protocol AttachmentRepositoryProtocol: Sendable {
-    func attachments(for file: URL) async -> [NoteAttachment]
-    func saveOCR(for file: URL, text: String, provider: String, model: String, startedAt: Date) async
-    func findParentSessionFile(for attachmentFile: URL) async -> URL?
-    func upsertAttachments(for file: URL, attachments: [NoteAttachment]) async
-}
-
 public protocol TrashRepositoryProtocol: Sendable {
     func emptyTrash() async
 }

@@ -34,12 +34,9 @@ public enum NoteRetranscription {
         text.split(whereSeparator: \.isWhitespace).count
     }
 
-    /// `attachmentOf` + `attachmentID`: `file` is an audio attachment of that
-    /// note (an Evernote import). The transcription service still keeps the
-    /// attachment's own run history next to the file; the text the note shows,
-    /// searches and analyzes is the attachment entry in the note's sidecar,
-    /// set by `NoteAttachmentMedia.setText` (a no-speech verdict never replaces
-    /// it), and the analysis runs on the note.
+    /// `attachmentOf`/`attachmentID` come only from queue entries made before
+    /// the split migration (2026-11-21): every attachment is its own note now,
+    /// so such an entry is refused and the split note is retranscribed instead.
     public static func run(
         file: URL,
         model: String,
@@ -55,10 +52,8 @@ public enum NoteRetranscription {
         if let refusal = privateModeRefusal(model: model) {
             return Outcome(failed: true, summary: refusal)
         }
-        if let parent {
-            guard let attachmentID else { return Outcome(failed: true, summary: "attachment id missing") }
-            return await runAttachment(file: file, parent: parent, attachmentID: attachmentID, model: model,
-                                       language: language, analyze: analyze, requestContext: requestContext)
+        if parent != nil || attachmentID != nil {
+            return Outcome(failed: true, summary: "attachments are notes of their own since the split; retranscribe that note")
         }
         let oldWords = storedWordCount(file: file)
         // A model id with a slash is an OpenRouter one; everything else
@@ -91,60 +86,6 @@ public enum NoteRetranscription {
         }
     }
 }
-
-extension NoteRetranscription {
-    fileprivate static func runAttachment(
-        file: URL,
-        parent: URL,
-        attachmentID: UUID,
-        model: String,
-        language: String,
-        analyze: Bool,
-        requestContext: [String: String]
-    ) async -> Outcome {
-        guard let item = NoteAttachmentMedia.items(ofNote: parent).first(where: { $0.id == attachmentID }) else {
-            return Outcome(failed: true, summary: "attachment no longer listed on the note")
-        }
-        let oldWords = item.hasMeaningfulText ? wordCount(item.text ?? "") : 0
-        let engine: EngineID = model.contains("/") ? .openrouter : .gemini
-        let service = TranscriptionService(rotator: .shared, model: model, transport: .shared)
-        let result = await service.transcribe(file: file, engine: engine, model: model, language: language)
-        switch result {
-        case .success(let text):
-            let provider = ParakeetModel.isParakeet(model) ? "parakeet" : engine.rawValue
-            let written: NoteAttachmentMedia.WriteResult
-            do {
-                written = try NoteAttachmentMedia.setText(
-                    text, provider: provider, model: model, attachmentID: attachmentID, ofNote: parent)
-            } catch {
-                return Outcome(failed: true, summary: "could not write the note: \(error.localizedDescription)")
-            }
-            let words = wordCount(text)
-            switch written {
-            case .attachmentMissing:
-                return Outcome(failed: true, summary: "attachment no longer listed on the note")
-            case .keptExisting:
-                return Outcome(failed: false, summary: "no_speech — the earlier attachment transcript (\(oldWords) words) was kept")
-            case .written where words == 0:
-                return Outcome(failed: false, summary: "no_speech")
-            case .written:
-                var summary = "speech: \(oldWords) → \(words) words (\(text.count) chars)"
-                if analyze {
-                    do {
-                        _ = try await NoteProcessor.shared.reprocess(file: parent, requestContext: requestContext)
-                        summary += "; note analyzed"
-                    } catch {
-                        summary += "; analysis failed: \(error.localizedDescription)"
-                    }
-                }
-                return Outcome(failed: false, summary: summary)
-            }
-        case .failure(let reason, let underlying):
-            return Outcome(failed: true, summary: "\(reason)" + (underlying.map { ": \($0.localizedDescription)" } ?? ""))
-        }
-    }
-}
-
 
 /// Works off `RetranscriptionQueue` one entry at a time until it is empty.
 /// Shared by `wimm-cli transcript drain-queue` and Studio, which drains it in

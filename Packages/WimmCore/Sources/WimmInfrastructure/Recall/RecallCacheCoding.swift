@@ -107,8 +107,6 @@ extension RecallLibrary.Layout {
         out.optional(title) { $0.int($1) }
         out.optional(summary) { $0.int($1) }
         out.int(text)
-        out.int(attachments.count)
-        for attachment in attachments { out.int(attachment) }
         out.int(foldedID); out.int(foldedTitle); out.int(foldedSummary); out.int(foldedBody)
     }
 
@@ -133,13 +131,9 @@ extension RecallLibrary.Layout {
         let title = try input.optional { try $0.int() }
         let summary = try input.optional { try $0.int() }
         let text = try input.int()
-        let attachmentCount = try input.count(elementSize: 8)
-        var attachments: [Int] = []
-        attachments.reserveCapacity(attachmentCount)
-        for _ in 0..<attachmentCount { attachments.append(try input.int()) }
         return Self(date: date, updated: updated, fingerprintSnapshot: snapshot, kind: kind, duration: duration,
                     speech: speech, chars: chars, device: device, id: id, path: path, title: title,
-                    summary: summary, text: text, attachments: attachments,
+                    summary: summary, text: text,
                     foldedID: try input.int(), foldedTitle: try input.int(),
                     foldedSummary: try input.int(), foldedBody: try input.int())
     }
@@ -165,18 +159,13 @@ extension RecallLibrary {
             if let length = layout.title { guard let range = take(length, &rawOffset, limit: raw.count) else { return nil }; title = range }
             if let length = layout.summary { guard let range = take(length, &rawOffset, limit: raw.count) else { return nil }; summary = range }
             guard let text = take(layout.text, &rawOffset, limit: raw.count) else { return nil }
-            var attachments: [Range<Int>] = []
-            for length in layout.attachments {
-                guard let range = take(length, &rawOffset, limit: raw.count) else { return nil }
-                attachments.append(range)
-            }
             guard let foldedID = take(layout.foldedID, &foldedOffset, limit: folded.count),
                   let foldedTitle = take(layout.foldedTitle, &foldedOffset, limit: folded.count),
                   let foldedSummary = take(layout.foldedSummary, &foldedOffset, limit: folded.count),
                   let foldedBody = take(layout.foldedBody, &foldedOffset, limit: folded.count) else { return nil }
             entries.append(Entry(date: layout.date, updated: layout.updated, fingerprintSnapshot: layout.fingerprintSnapshot,
                 kind: layout.kind, duration: layout.duration, speech: layout.speech, chars: layout.chars, device: layout.device,
-                id: id, path: path, title: title, summary: summary, text: text, attachments: attachments,
+                id: id, path: path, title: title, summary: summary, text: text,
                 foldedID: foldedID, foldedTitle: foldedTitle, foldedSummary: foldedSummary, foldedBody: foldedBody))
         }
         guard rawOffset == raw.count, foldedOffset == folded.count else { return nil }

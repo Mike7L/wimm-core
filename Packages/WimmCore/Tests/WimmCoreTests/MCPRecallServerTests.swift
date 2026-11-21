@@ -36,8 +36,7 @@ final class MCPRecallServerTests: XCTestCase {
             kind: "pdf",
             title: "Invoice",
             summary: nil,
-            text: "",
-            attachmentTexts: ["Total due: 42 EUR, release fee"],
+            text: "Total due: 42 EUR, release fee",
             filePath: "/lib/c.pdf",
             updated: base.addingTimeInterval(-2 * 86_400)
         ),
@@ -265,7 +264,7 @@ final class MCPRecallServerTests: XCTestCase {
         let tricky = RecallNote(
             id: "EEEE5555-0000-0000-0000-000000000005", date: Self.base, kind: "text",
             title: "Строка\u{2028}разрыв", summary: "Ä\nÖ", text: "one\ntwo\u{2028}ТРИ",
-            attachmentTexts: ["", "Вложение"], filePath: "/lib/e.txt", updated: Self.base)
+            filePath: "/lib/e.txt", updated: Self.base)
         let notes: [RecallNote?] = Self.library + [nil, tricky]
         let records = notes.enumerated().map { LibraryRecallSource.BuildRecord.encode(position: $0, note: $1) }
         var output = try JSONEncoder().encode(LibraryRecallSource.BuildHeader(
@@ -444,9 +443,8 @@ final class MCPRecallServerTests: XCTestCase {
         // Same words, different case/punctuation: collapsed, not repeated.
         XCTAssertTrue(text.contains("--- realtime transcript (\(stamp), 7 words) --- = transcript"), text)
         XCTAssertTrue(text.contains("--- refined (model) ---\nВажная информация для разработки Рим"), text)
-        XCTAssertTrue(text.contains("--- attachment 1 (OCR, vision) ---\nСкриншот: план"), text)
-        // An evening-journal answer names the question it answers.
-        XCTAssertTrue(text.contains("--- attachment 2 (audio, parakeet, answer to «Что осталось недоделанным?») ---\nОтправить гирю"), text)
+        // Old `attachments` entries are not read since the split (2026-11-21).
+        XCTAssertFalse(text.contains("--- attachment"), text)
         // Raw sidecar fields are never handed out.
         XCTAssertFalse(text.contains("secret-token-123"))
         // 57 chars for 136 s of audio: flagged as partial.

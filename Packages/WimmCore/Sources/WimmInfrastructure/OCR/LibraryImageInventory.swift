@@ -18,9 +18,6 @@ public enum LibraryImageInventory {
     /// Resolve one note without loading the entire library or generated PDF previews.
     public static func targets(for note: URL) -> [Target] {
         guard FileManager.default.fileExists(atPath:note.path) else { return [] }
-        let root = (try? Data(contentsOf: FileStore.metadataURL(forRecordingURL: note))).flatMap {
-            try? JSONSerialization.jsonObject(with: $0) as? [String:Any]
-        } ?? [:]
         var result: [Target] = [], seen = Set<String>()
         func add(_ url: URL, _ kind: Target.Kind, _ id: UUID? = nil) {
             let source = url.standardizedFileURL.resolvingSymlinksInPath().path
@@ -28,7 +25,6 @@ public enum LibraryImageInventory {
             result.append(Target(note:note.path,image:source,kind:kind,attachmentID:id))
         }
         if isImage(note) { add(note, FileStore.isAttachmentFile(note) ? .attachment : .standalone, FileStore.isAttachmentFile(note) ? note.stableUUID : nil) }
-        for item in NoteAttachmentMedia.items(in: root) { add(item.url,.attachment,item.id) }
         // The directory holds the whole library (~17k files) and this runs once
         // per note: a session base is always a name prefix, so reject by name
         // before building URLs or sorting.
@@ -90,11 +86,7 @@ public enum LibraryImageInventory {
         var previews = 0, missing = 0, activeNotes = 0
         var missingTargets: [Target] = []
         for note in notes {
-            let root = (try? Data(contentsOf: FileStore.metadataURL(forRecordingURL: note))).flatMap {
-                try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
-            } ?? [:]
             let related = groups[note.deletingLastPathComponent().standardizedFileURL.path]?[sessionBase(note)] ?? []
-            let indexed = NoteAttachmentMedia.items(in: root).filter { isImage($0.url) }
             activeNotes += 1
             var local = Set<URL>()
             func add(_ image: URL, kind: Target.Kind, id: UUID? = nil) {
@@ -107,7 +99,6 @@ public enum LibraryImageInventory {
                 targets.insert(Target(note: note.path, image: image.path, kind: kind, attachmentID: id))
             }
             if isImage(note) && !FileStore.isAttachmentFile(note) { add(note, kind: .standalone) }
-            for item in indexed { add(item.url, kind: .attachment, id: item.id) }
             if isImage(note) && FileStore.isAttachmentFile(note) { add(note, kind: .attachment, id: note.stableUUID) }
             for image in related {
                 if local.contains(image) { continue }
@@ -132,8 +123,11 @@ public enum LibraryImageInventory {
                          notes: activeNotes, excludedPreviews: previews, missingAttachments: missing, missingTargets: missingTargets)
     }
 
-    static func isImage(_ url: URL) -> Bool {
-        NoteAttachmentMedia.imageExtensions.union(["tif"]).contains(url.pathExtension.lowercased())
+    /// Image types Vision can read. SVG is drawn, not photographed — skipped.
+    public static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "tif", "bmp"]
+
+    public static func isImage(_ url: URL) -> Bool {
+        Self.imageExtensions.contains(url.pathExtension.lowercased())
     }
     static func sessionBase(_ url: URL) -> String {
         let stem = url.deletingPathExtension().lastPathComponent

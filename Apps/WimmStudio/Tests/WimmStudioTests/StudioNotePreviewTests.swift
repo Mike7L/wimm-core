@@ -8,10 +8,9 @@ import WimmInfrastructure
 @testable import WimmStudio
 
 final class StudioNotePreviewTests: XCTestCase {
-    private func note(_ url: URL, text: String = "Текст", refined: String? = nil,
-                      attachments: [NoteAttachment] = []) -> Note {
+    private func note(_ url: URL, text: String = "Текст", refined: String? = nil) -> Note {
         Note(id: UUID(), index: 0, fileURL: url, fileCreated: Date(), start: 0, end: 0,
-             text: text, refinedText: refined, isFailed: false, hasRaw: false, attachments: attachments)
+             text: text, refinedText: refined, isFailed: false, hasRaw: false)
     }
 
     func testTextHasNoEmptySourceOrHistoryTabs() {
@@ -112,25 +111,14 @@ final class StudioNotePreviewTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: trashed, encoding: .utf8), "Ненужная заметка")
     }
 
-    func testAttachmentOriginalAndOCRSurviveAlongsideParentText() {
-        let image = URL(fileURLWithPath: "/tmp/photo.png")
-        let attachment = NoteAttachment(url: image, type: .image, extractedText: "Текст фотографии")
-        let content = StudioNoteContent(note: note(URL(fileURLWithPath: "/tmp/import.txt"), attachments: [attachment]),
-                                        metadata: [:], versions: [])
-        XCTAssertTrue(content.tabs.contains { if case .source(image) = $0.content { return true }; return false })
-        XCTAssertTrue(content.tabs.contains { if case .text("Текст фотографии", _) = $0.content { return true }; return false })
-        XCTAssertEqual(content.bodyText, "Текст")
-    }
-
     func testLegacyOCROnlyDeduplicatesExactCopiesOfTheSameSource() {
         let file = URL(fileURLWithPath: "/tmp/photo.png")
-        let attachment = NoteAttachment(url: file, type: .image, extractedText: "Текст фотографии")
         let metadata: [String: Any] = [
             "ocr": ["text": "Текст фотографии", "provider": "vision"],
             "transcription": ["transcript": "Текст фотографии", "provider": "vision",
                               "previousRuns": [["transcript": "Более раннее чтение", "provider": "vision"]]],
         ]
-        let content = StudioNoteContent(note: note(file, attachments: [attachment]), metadata: metadata, versions: [])
+        let content = StudioNoteContent(note: note(file), metadata: metadata, versions: [])
         let texts = content.tabs.compactMap { tab -> String? in
             if case .text(let text, _) = tab.content { return text }; return nil
         }

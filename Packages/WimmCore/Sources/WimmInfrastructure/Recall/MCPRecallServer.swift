@@ -819,20 +819,7 @@ public struct MCPRecallServer: Sendable {
         for (ref, note) in resolve(refs, in: await library()) {
             guard let note else { lines.append("\(ref): no single note matches"); continue }
             guard note.kind == "audio" else {
-                // An Evernote note is text whose audio sits in its attachments:
-                // each one becomes its own entry, written back onto the note.
-                let audio = NoteAttachmentMedia.audio(ofNote: URL(fileURLWithPath: note.filePath))
-                guard !audio.isEmpty else {
-                    lines.append("\(ref): not audio (\(note.kind)) and no audio attachments — nothing to transcribe")
-                    continue
-                }
-                for item in audio {
-                    // One analysis per note, after its last attachment.
-                    requests.append(.init(file: item.url.path, noteId: note.id, model: model,
-                                          analyze: analyze && item == audio.last,
-                                          reason: reason, requestedAt: requestedAt,
-                                          parentFile: note.filePath, attachmentID: item.id.uuidString))
-                }
+                lines.append("\(ref): not audio (\(note.kind)) — nothing to transcribe")
                 continue
             }
             guard FileManager.default.fileExists(atPath: note.filePath) else {
@@ -853,8 +840,7 @@ public struct MCPRecallServer: Sendable {
         let queuedCount = results.filter { $0 == .queued }.count
         if queuedCount > 0 { startRetranscriptionWorker() }
         let open = queue.entries().filter(\.isOpen).count
-        // A text note can add one request per audio attachment.
-        return "\(queuedCount) of \(max(refs.count, requests.count)) queued with \(model)\(analyze ? ", analysis after speech" : ", no analysis"); \(open) open in the queue.\n"
+        return "\(queuedCount) of \(refs.count) queued with \(model)\(analyze ? ", analysis after speech" : ", no analysis"); \(open) open in the queue.\n"
             + "Results show up in changed_notes (changes: transcript); a no-speech verdict leaves the note unchanged — retranscription_queue or get_note shows it.\n\n"
             + lines.joined(separator: "\n")
     }
@@ -1176,30 +1162,6 @@ public struct MCPRecallServer: Sendable {
                 label: "earlier OCR \(i + 1)" + (detail.isEmpty ? "" : " (\(detail))"),
                 text: run.text
             ))
-        }
-        let attachments = meta.attachments
-        if attachments.isEmpty {
-            for (i, extra) in note.attachmentTexts.enumerated() {
-                blocks.append(TextBlock(label: "attachment \(i + 1)", text: extra))
-            }
-        } else {
-            for a in attachments {
-                let i = a.index
-                let detail = [a.type == "image" ? "OCR" : a.type, a.source, a.prompt.map { "answer to «\($0)»" }]
-                    .compactMap { $0 }.joined(separator: ", ")
-                blocks.append(TextBlock(label: "attachment \(i + 1) (\(detail))", text: a.text))
-                for (j, prev) in a.previousRuns.enumerated() where !Self.isPlaceholder(prev.text) {
-                    let prevDetail = [
-                        a.type == "image" ? "OCR" : a.type,
-                        prev.source,
-                        prev.replacedAt.map { "replaced \(Self.iso($0))" }
-                    ].compactMap { $0 }.joined(separator: ", ")
-                    blocks.append(TextBlock(
-                        label: "earlier attachment \(i + 1) run \(j + 1) (\(prevDetail))",
-                        text: prev.text
-                    ))
-                }
-            }
         }
         for evidence in meta.imageEvidence {
             blocks.append(TextBlock(label:evidence.label,text:evidence.text))

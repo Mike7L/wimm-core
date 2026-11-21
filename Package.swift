@@ -99,7 +99,6 @@ var targetDefinitions: [Target] = [
             .product(name: "WimmSecretary", package: "WimmCore"),
         ],
         path: "Packages/WimmCore/Tests/WimmCoreTests",
-        exclude: ["Fixtures/sample.enex"],
         swiftSettings: [.swiftLanguageMode(.v6)]
     ),
     .testTarget(
@@ -110,9 +109,6 @@ var targetDefinitions: [Target] = [
             .product(name: "WimmInfrastructure", package: "WimmCore"),
         ],
         path: "Tests/WimmServicesTests",
-        exclude: [
-            "HeadlessImportServiceTests.swift",
-        ],
         resources: [
             .process("Resources")
         ],

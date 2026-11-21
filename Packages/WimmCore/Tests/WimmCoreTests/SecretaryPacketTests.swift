@@ -200,12 +200,12 @@ final class SecretaryPacketTests: XCTestCase {
         run.vision = VisionImageAnalysis(ocrText:"VISUAL_LITERAL",scene:"NATIVE_SCENE",sceneObservation:nil,
             codes:[.init(symbology:"QR",payload:"CODE_PAYLOAD",confidence:0.8)],detectedData:[],isDenseDocument:false,documentEngine:"test",issues:[])
         run.caption = try LocalPhotoModel.decode(Data(#"{"caption":"EARLIER_DESCRIPTION","seconds":1,"peak_memory_gb":1,"generation_tokens":1,"finish_reason":"stop"}"#.utf8))
-        var attachment: [String:Any] = ["id":UUID().uuidString,"type":"image"]
-        try ImageAnalysisHistory.store(run,in:&attachment)
+        var document: [String:Any] = [:]
+        try ImageAnalysisHistory.store(run,in:&document)
         run.caption = nil;run.engine = "vision"
-        try ImageAnalysisHistory.store(run,in:&attachment)
+        try ImageAnalysisHistory.store(run,in:&document)
         try FileStore.mutateSidecar(at:FileStore.metadataURL(forRecordingURL:media)) {
-            $0["attachments"] = [attachment];return true
+            $0["document"] = document;return true
         }
         let packet = try prepare(), input = try packet.prompt()
         for part in ["VISUAL_LITERAL","NATIVE_SCENE","CODE_PAYLOAD","EARLIER_DESCRIPTION","IMAGE_HASH","model draft; not literal text"] {

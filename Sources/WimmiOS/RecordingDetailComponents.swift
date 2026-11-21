@@ -104,59 +104,6 @@ struct DetailCard<Content: View>: View {
     }
 }
 
-struct AttachmentThumb: View {
-    let attachment: NoteAttachment
-
-    private var attachmentType: AttachmentTypeHelper.AttachmentType {
-        AttachmentTypeHelper.determineType(for: attachment)
-    }
-
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(.tertiarySystemGroupedBackground))
-
-            switch attachmentType {
-            case .image:
-                if let image = UIImage(contentsOfFile: attachment.url.path) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                }
-            case .pdf:
-                VStack(spacing: 6) {
-                    Image(systemName: "doc.richtext.fill")
-                        .font(.system(size: 24))
-                        .foregroundStyle(.red.opacity(0.8))
-                    Text(L10n.iOS.Recording.pdf)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            case .text:
-                VStack(spacing: 6) {
-                    Image(systemName: "doc.text.fill")
-                        .font(.system(size: 24))
-                        .foregroundStyle(.blue.opacity(0.8))
-                    Text(L10n.iOS.Recording.text)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            case .document:
-                VStack(spacing: 6) {
-                    Image(systemName: "doc.fill")
-                        .font(.system(size: 20))
-                        .foregroundStyle(.secondary)
-                    Text(attachment.url.pathExtension.uppercased())
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .frame(width: 100, height: 100)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-    }
-}
-
 /// Thin iOS wrapper around the shared `NoteAudioPlayer` that configures
 /// `AVAudioSession` for playback and persists the skip-silence toggle.
 @MainActor

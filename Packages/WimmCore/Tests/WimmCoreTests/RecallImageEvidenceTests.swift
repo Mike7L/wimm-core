@@ -131,16 +131,13 @@ final class RecallImageEvidenceTests: XCTestCase {
         XCTAssertTrue(NoteChangeKind.kinds(b,since:Date(timeIntervalSince1970:0)).contains(.transcript))
     }
 
-    func testScreenshotAndAttachmentEvidenceRetainDistinctIdentity() throws {
+    func testScreenshotEvidenceKeepsItsIdentity() throws {
         let a = try record(URL(fileURLWithPath:"/tmp/first.png"),caption:"First visible scene.")
-        let b = try record(URL(fileURLWithPath:"/tmp/second.png"),caption:"Second visible scene.")
         let row = try XCTUnwrap(JSONSerialization.jsonObject(with:JSONEncoder().encode(a)) as? [String:Any])
-        var attachment: [String:Any] = ["id":UUID().uuidString,"url":"file:///tmp/second.png","extractedText":"SECOND_ATTACHMENT_TEXT"]
-        try ImageAnalysisHistory.store(b,in:&attachment)
-        let meta = RecallSidecar(["ocr":["images":[row]],"attachments":[["type":"audio"],attachment]])
+        // Old `attachments` entries are no longer read (one note = one media, split 2026-11-21).
+        let meta = RecallSidecar(["ocr":["images":[row]],"attachments":[["type":"audio","extractedText":"IGNORED"]]])
         let evidence = meta.imageEvidence
         XCTAssertTrue(evidence.contains { $0.label.hasPrefix("screenshot 1") && $0.text.contains("First visible scene.") })
-        XCTAssertTrue(evidence.contains { $0.label.hasPrefix("attachment 2") && $0.text.contains("Second visible scene.") })
-        XCTAssertEqual(meta.attachments.first?.index,1) // An empty earlier attachment must not renumber this image.
+        XCTAssertFalse(evidence.contains { $0.label.hasPrefix("attachment") })
     }
 }

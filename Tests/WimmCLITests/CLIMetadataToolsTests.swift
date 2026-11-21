@@ -68,31 +68,6 @@ final class CLIMetadataToolsTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: meta.path))
     }
 
-    func testAttachmentsAuditReportsMissingAttachmentAndOCR() throws {
-        let note = recordingsDir.appendingPathComponent("attach_note.txt")
-        try "content".write(to: note, atomically: true, encoding: .utf8)
-
-        let missingAttachment = recordingsDir.appendingPathComponent("does_not_exist.png")
-        let meta = recordingsDir.appendingPathComponent("attach_note.meta.json")
-        let payload = """
-        {
-          "attachments": [
-            {
-              "id": "\(UUID().uuidString)",
-              "url": "\(missingAttachment.absoluteString)",
-              "type": "image"
-            }
-          ]
-        }
-        """
-        try payload.write(to: meta, atomically: true, encoding: .utf8)
-
-        let (out, _, status) = try runWimm(["attachments", "audit", "--json"])
-        XCTAssertEqual(status, 0)
-        XCTAssertTrue(out.contains("\"missingFiles\" : 1"))
-        XCTAssertTrue(out.contains("\"missingOCR\" : 1"))
-    }
-
     func testTranscriptRebuildNormalizesLegacyTranscription() throws {
         let audio = recordingsDir.appendingPathComponent("legacy_audio.m4a")
         FileManager.default.createFile(atPath: audio.path, contents: Data())

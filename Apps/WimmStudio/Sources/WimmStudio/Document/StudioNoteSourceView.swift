@@ -16,7 +16,7 @@ struct StudioNoteSourceView: View {
                 StudioNoteAudioPlayer(url: url)
             } else if url.pathExtension.lowercased() == "pdf" {
                 StudioNotePDF(url: url)
-            } else if NoteAttachmentMedia.imageExtensions.contains(url.pathExtension.lowercased()) {
+            } else if LibraryImageInventory.isImage(url) {
                 StudioNoteImage(url: url)
             } else {
                 StudioNoteQuickLook(url: url).frame(height: 460)

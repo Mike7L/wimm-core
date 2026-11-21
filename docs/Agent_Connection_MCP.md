@@ -325,18 +325,11 @@ mode may have been switched on since the request).
 Outcome of a run with speech: `speech: <old> → <new> words (<chars> chars)`,
 plus `; analyzed` when the analysis ran.
 
-**Audio attachments (2026-10-25).** An Evernote import is a `.txt` note
-whose recordings live under `Attachments/Evernote/<id>/` and are listed only in
-its sidecar's `attachments` array (`NoteAttachmentMedia`). Asked for such a
-note, `request_retranscription` queues **one entry per audio attachment**:
-`file` is the attachment, `parentFile` / `attachmentID` point back at the note,
-and only the last one carries `analyze` when it was asked for (one analysis per note). The worker
-transcribes the attachment (its own run history stays next to the file), then
-writes the text onto that attachment entry in the note's sidecar with
-`NoteAttachmentMedia.setText` — in place, under `mutateSidecar`, and a
-no-speech verdict never replaces earlier text — and, if asked, analyzes the note. Old
-queue files decode unchanged (both fields optional); `get_note` and
-`changed_notes` find an attachment request through `parentFile`.
+**Audio attachments (removed 2026-11-21).** Evernote audio that used to sit
+in a note's `attachments` became notes of its own in the split migration, so
+`request_retranscription` asks for those notes directly; a text note queues
+nothing ("not audio"). Old queue entries with `parentFile` / `attachmentID`
+still decode, and the worker refuses them.
 
 **The same run from a terminal**: `wimm-cli transcript retranscribe <id>
 [--model M] [--lang L] [--analyze] [--apply]` resolves the note exactly as

@@ -215,7 +215,7 @@ final class MCPAgentToolsTests: XCTestCase {
     /// An Evernote note is text with its recording as an attachment: each
     /// audio attachment is queued on its own, pointing back at the note, and
     /// the note's get_note shows the request.
-    func testRetranscriptionOfATextNoteQueuesItsAudioAttachments() async throws {
+    func testRetranscriptionOfATextNoteQueuesNothing() async throws {
         let folder = dir.appendingPathComponent("Attachments/Evernote/A86", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let text = dir.appendingPathComponent("Wimm_2019-04-09_19-04-15_a861814c.txt")
@@ -246,22 +246,12 @@ final class MCPAgentToolsTests: XCTestCase {
             return content.first?["text"] as? String ?? ""
         }
 
+        // Attachments are notes of their own since the split (2026-11-21): a text
+        // note with legacy attachment entries is not audio and queues nothing.
         let reply = try await call("request_retranscription", #"{"ids":["CCCC"],"analyze":true}"#)
-        XCTAssertTrue(reply.hasPrefix("2 of 2 queued"), reply)
-        XCTAssertTrue(reply.contains("Evernote_20190409_19:04:22.m4a (attachment): queued"))
-        let entries = RetranscriptionQueue(directory: state).entries()
-        XCTAssertEqual(entries.map(\.file), [first.path, second.path])
-        XCTAssertEqual(Set(entries.compactMap(\.parentFile)), [text.path])
-        XCTAssertEqual(entries.map(\.attachmentID), [firstID.uuidString, secondID.uuidString])
-        XCTAssertEqual(entries.map(\.analyze), [false, true], "one analysis per note, after its last attachment")
-
-        let note = try await call("get_note", #"{"id":"CCCC"}"#)
-        XCTAssertTrue(note.contains("retranscription: queued 2026-09-21"), note)
-
-        // A text note without audio is still refused.
-        try writeSidecar(for: text, ["importSource": "Evernote"])
-        let none = try await call("request_retranscription", #"{"ids":["CCCC"]}"#)
-        XCTAssertTrue(none.contains("not audio (text) and no audio attachments"), none)
+        XCTAssertTrue(reply.hasPrefix("0 of 1 queued"), reply)
+        XCTAssertTrue(reply.contains("not audio (text)"), reply)
+        XCTAssertTrue(RetranscriptionQueue(directory: state).entries().isEmpty)
     }
 
     /// Private mode: no audio may leave the Mac, so only on-device Parakeet is

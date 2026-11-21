@@ -183,22 +183,10 @@ public struct RecallSidecar {
         Self.archivedExtractionRuns((dict["ocr"] as? [String: Any])?["previousRuns"])
     }
 
-    /// Attachment text in sidecar order: (type, text, provider/model, previousRuns,
-    /// and the evening-journal question a spoken answer replies to).
-    var attachments: [(index: Int, type: String, text: String, source: String?, previousRuns: [(text: String, source: String?, replacedAt: String?)], prompt: String?)] {
-        (dict["attachments"] as? [[String: Any]] ?? []).enumerated().compactMap { index, a in
-            guard let text = Self.text(a["extractedText"]) ?? Self.text(a["ocrText"]) else { return nil }
-            let provider = Self.text(a["extractionProvider"]) ?? Self.text(a["ocrProvider"])
-            let model = Self.text(a["extractionModel"]) ?? Self.text(a["ocrModel"])
-            let previous = Self.archivedExtractionRuns(a["previousRuns"])
-            return (index, Self.text(a["type"]) ?? "file", text, Self.join(provider, model), previous, Self.text(a["journalPrompt"]))
-        }
-    }
-
     private static func archivedExtractionRuns(_ raw: Any?) -> [(text: String, source: String?, replacedAt: String?)] {
         (raw as? [[String: Any]] ?? []).compactMap { run in
             guard let text = Self.text(run["text"]) ?? Self.text(run["transcript"]),
-                  text != NoteAttachmentMedia.noSpeechText
+                  text != "[[NO_SPEECH]]"
             else { return nil }
             let source = Self.join(Self.text(run["provider"]), Self.text(run["model"]))
             return (text, source, Self.text(run["replacedAt"]))

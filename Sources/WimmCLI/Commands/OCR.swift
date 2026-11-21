@@ -77,8 +77,7 @@ struct OCR: AsyncParsableCommand {
             let text = extraction.text.trimmingCharacters(in: .whitespacesAndNewlines)
 
             if apply, !text.isEmpty {
-                let attachmentRepo = AttachmentRepository(metadataRepository: MetadataRepository())
-                await attachmentRepo.saveDocumentOCR(
+                await NoteOCRStore.saveDocumentOCR(
                     for: fileURL,
                     text: text,
                     provider: extraction.provider,
@@ -129,7 +128,6 @@ struct OCR: AsyncParsableCommand {
         enum Kind {
             case standaloneNote
             case screenshotOfAudio
-            case attachment(UUID)
         }
         let noteURL: URL
         let imageURL: URL
@@ -157,19 +155,10 @@ struct OCR: AsyncParsableCommand {
             var seenImagePaths = Set<String>()
             let ext = noteURL.pathExtension.lowercased()
 
-            if NoteAttachmentMedia.imageExtensions.contains(ext),
+            if LibraryImageInventory.isImage(noteURL),
                fm.fileExists(atPath: noteURL.path) {
                 targets.append(PhotoTarget(noteURL: noteURL, imageURL: noteURL, kind: .standaloneNote))
                 seenImagePaths.insert(noteURL.standardizedFileURL.path)
-            }
-
-            for item in NoteAttachmentMedia.items(in: root) where item.isImage {
-                let standardized = item.url.standardizedFileURL.path
-                guard !seenImagePaths.contains(standardized),
-                      fm.fileExists(atPath: item.url.path)
-                else { continue }
-                targets.append(PhotoTarget(noteURL: noteURL, imageURL: item.url, kind: .attachment(item.id)))
-                seenImagePaths.insert(standardized)
             }
 
             if FileStore.isAudioFile(noteURL) {
@@ -199,7 +188,6 @@ struct OCR: AsyncParsableCommand {
         print("Total photos across selected notes: \(totalImages)")
 
         let importer = DocumentImporter(ocrEngine: .vision)
-        let attachmentRepo = AttachmentRepository(metadataRepository: MetadataRepository())
         var succeeded = 0
         var empty = 0
         var failed = 0
@@ -230,17 +218,8 @@ struct OCR: AsyncParsableCommand {
 
                     if apply {
                         switch target.kind {
-                        case .attachment(let attachmentID):
-                            _ = try NoteAttachmentMedia.setText(
-                                trimmed,
-                                provider: TextExtractionProvider.vision,
-                                model: "VNRecognizeText",
-                                attachmentID: attachmentID,
-                                ofNote: candidate.noteURL,
-                                emptyIsNoSpeech: false
-                            )
                         case .standaloneNote:
-                            await attachmentRepo.saveDocumentOCR(
+                            await NoteOCRStore.saveDocumentOCR(
                                 for: candidate.noteURL,
                                 text: trimmed,
                                 provider: TextExtractionProvider.vision,
@@ -248,7 +227,7 @@ struct OCR: AsyncParsableCommand {
                                 startedAt: startedAt
                             )
                         case .screenshotOfAudio:
-                            await attachmentRepo.saveOCR(
+                            await NoteOCRStore.saveOCR(
                                 for: candidate.noteURL,
                                 text: trimmed,
                                 provider: TextExtractionProvider.vision,

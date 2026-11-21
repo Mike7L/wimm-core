@@ -38,7 +38,6 @@ struct StudioCitedImages: View {
                         var candidates: [URL] = []
                         if AttachmentType(fromExtension: note.fileURL.pathExtension) == .image { candidates.append(note.fileURL) }
                         if let screenshot = note.screenshotURL { candidates.append(screenshot) }
-                        candidates += note.attachments.filter { $0.typeEnum == .image }.map(\.url)
                         for url in candidates where seen.insert(url).inserted { images.append(.init(url: url, note: entry)) }
                         if images.count >= 12 { break }
                     }

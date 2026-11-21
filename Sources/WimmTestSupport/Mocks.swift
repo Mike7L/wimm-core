@@ -82,23 +82,3 @@ public actor MockTranscriptRepository: TranscriptRepositoryProtocol {
     }
 }
 
-public actor MockAttachmentRepository: AttachmentRepositoryProtocol {
-    public var attachmentsToReturn: [URL: [NoteAttachment]] = [:]
-    public var savedOCRs: [(file: URL, text: String, provider: String, model: String, start: Date)] = []
-    
-    public init() {}
-    public func attachments(for file: URL) -> [NoteAttachment] {
-        return attachmentsToReturn[file] ?? []
-    }
-    public func saveOCR(for file: URL, text: String, provider: String, model: String, startedAt: Date) {
-        savedOCRs.append((file, text, provider, model, startedAt))
-    }
-    public func upsertAttachments(for file: URL, attachments: [NoteAttachment]) async {
-        // Mock overwrite or append logic
-        attachmentsToReturn[file] = attachments
-    }
-    public func findParentSessionFile(for attachmentFile: URL) async -> URL? {
-        return nil
-    }
-}
-

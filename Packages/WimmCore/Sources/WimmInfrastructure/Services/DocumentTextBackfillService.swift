@@ -93,7 +93,6 @@ public struct DocumentTextBackfillService {
         self.transcriptRepository = transcriptRepository
         self.importer = importer ?? DocumentImporter(
             fileRepository: fileRepository,
-            attachmentRepository: AttachmentRepository(metadataRepository: metadataRepository),
             transcriptRepository: transcriptRepository,
             metadataRepository: metadataRepository
         )

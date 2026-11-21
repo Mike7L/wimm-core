@@ -7,7 +7,7 @@ struct Meta: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Metadata tools",
         subcommands: [
-            MetaValidate.self, MetaMigrateProcessed.self, MetaMigrateTxtStubs.self, MetaMigrateAttachments.self, MetaBackfillText.self, MetaLinkConversation.self,
+            MetaValidate.self, MetaMigrateProcessed.self, MetaBackfillText.self, MetaLinkConversation.self,
         ]
     )
 }

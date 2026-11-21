@@ -8,7 +8,6 @@ import WimmInfrastructure
 
 final class DocumentImporterTests: XCTestCase {
     var fileRepo: MockFileRepository!
-    var attachRepo: MockAttachmentRepository!
     var metaRepo: MockMetadataRepository!
     var transcriptRepo: MockTranscriptRepository!
     var importer: DocumentImporter!
@@ -16,14 +15,12 @@ final class DocumentImporterTests: XCTestCase {
     override func setUp() async throws {
         try await super.setUp()
         fileRepo = MockFileRepository()
-        attachRepo = MockAttachmentRepository()
         metaRepo = MockMetadataRepository()
         transcriptRepo = MockTranscriptRepository()
 
         importer = DocumentImporter(
             ocrEngine: .vision,  // Use Vision for testing (local, no API key needed)
             fileRepository: fileRepo,
-            attachmentRepository: attachRepo,
             transcriptRepository: transcriptRepo,
             metadataRepository: metaRepo
         )
@@ -78,7 +75,6 @@ final class DocumentImporterTests: XCTestCase {
             ocrEngine: .vision,
             ocrProvider: ocrProvider,
             fileRepository: fileRepo,
-            attachmentRepository: attachRepo,
             transcriptRepository: transcriptRepo,
             metadataRepository: metaRepo
         )
@@ -96,7 +92,6 @@ final class DocumentImporterTests: XCTestCase {
             ocrEngine: .vision,
             ocrProvider: clampedProvider,
             fileRepository: fileRepo,
-            attachmentRepository: attachRepo,
             transcriptRepository: transcriptRepo,
             metadataRepository: metaRepo
         )

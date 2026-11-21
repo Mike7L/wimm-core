@@ -86,9 +86,10 @@ reasons behind the rules are in `docs/` (index: `docs/README.md`).
 - **One note = one media.** New code never writes sidecar `attachments`; each
   captured file is its own note. Grouping is time + `[[links]]` + the
   document, never a group field. The split migration was applied to the Mac
-  library on 2026-11-21 (`notes convert-attachments`, then
-  `notes split-attachments`); until the iPhone's copies are verified, counts
-  and audits must still include `attachments` via `NoteAttachmentMedia`.
+  library on 2026-11-21 and the `attachments` read paths were removed the
+  same day (user's decision, before checking the iPhone's copies). Only
+  `notes convert-attachments` and `notes split-attachments` still read the
+  key: run them if old sidecars with `attachments` come back through sync.
 - **A note's kind and body text come from `NoteContent`** (`WimmDomain`): a
   text note (`txt/md/markdown`) is its file, never a sidecar copy; never add a
   per-reader extension check. Notes with lost media are plain `.txt` notes with
@@ -167,8 +168,6 @@ reasons behind the rules are in `docs/` (index: `docs/README.md`).
   `SpeakerTurnsBackfill`.
 - Glossary `2026-07-28.ab-v3` is spelling evidence for NoteCard extraction,
   stamped only on model-generated cards; the secretary cannot edit it.
-- Evernote imports are `.txt` notes with media in sidecar `attachments`; use
-  `NoteAttachmentMedia` to read/write them.
 - Apple Foundation Models refuse Russian; don't plan on-device analysis there.
 
 ## Secretary

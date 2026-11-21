@@ -61,7 +61,7 @@ struct StudioNoteContent: Sendable {
             }
         }
         let primaryType = AttachmentTypeHelper.determineType(for: note.fileURL)
-        let isImage = NoteAttachmentMedia.imageExtensions.contains(note.fileURL.pathExtension.lowercased())
+        let isImage = LibraryImageInventory.isImage(note.fileURL)
         let isVisual = audioURL == nil && (isImage || primaryType == .pdf || primaryType == .document)
         if isVisual {
             appendSource(note.fileURL, title: isImage ? "Картинка" : "Документ")
@@ -109,24 +109,6 @@ struct StudioNoteContent: Sendable {
             if variant.isCurrentRun { currentRunTabID = "transcript:\(variant.id)" }
             tabs.append(.init(id: "transcript:\(variant.id)", title: title,
                               content: .text(rendered.text, detail: detail), group: .texts, turns: turns))
-        }
-        for (index, attachment) in note.attachments.enumerated() {
-            let title = "\(index + 1) · \(attachment.url.lastPathComponent)"
-            let wasKnownSource = seenURLs.contains(attachment.url.standardizedFileURL)
-            appendSource(attachment.url, title: title)
-            if let text = attachment.extractedText, !text.isEmpty, text != NoteAttachmentMedia.noSpeechText {
-                if wasKnownSource, alreadyHasText(text) { continue }
-                tabs.append(.init(id: "attachment-text:\(attachment.id)", title: "Текст · \(title)",
-                                  content: .text(text, detail: attachment.extractionModel ?? "Текст вложения")))
-            }
-        }
-        // Earlier attachment extractions are evidence too; never drop them from the reader.
-        for item in NoteAttachmentMedia.items(in: metadata) {
-            for (index, run) in item.previousRuns.enumerated() {
-                tabs.append(.init(id: "attachment-history:\(item.id):\(index)",
-                                  title: "Ранее · \(item.url.lastPathComponent) · \(index + 1)",
-                                  content: .text(run.text, detail: run.model ?? "Прежний текст вложения")))
-            }
         }
         if isVisual, let index = tabs.firstIndex(where: { $0.id == "source:\(note.fileURL.path)" }) {
             let original = tabs.remove(at: index)

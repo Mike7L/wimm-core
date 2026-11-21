@@ -56,13 +56,6 @@ public actor TranscriptRepository: TranscriptRepositoryProtocol {
             return text
         }
 
-        let attachmentText = attachments(for: file)
-            .compactMap { $0.extractedText?.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        if !attachmentText.isEmpty {
-            return attachmentText.joined(separator: "\n\n")
-        }
-
         let fallback = transcriptText(for: file)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return (fallback?.isEmpty == false) ? fallback : nil
     }
@@ -108,26 +101,6 @@ public actor TranscriptRepository: TranscriptRepositoryProtocol {
             return [:]
         }
         return obj
-    }
-
-    private func attachments(for file: URL) -> [NoteAttachment] {
-        let meta = metadata(for: file)
-        guard let list = meta["attachments"] as? [[String: Any]] else { return [] }
-        return list.compactMap { dict -> NoteAttachment? in
-            guard let idStr = dict["id"] as? String,
-                  let id = UUID(uuidString: idStr),
-                  let urlStr = dict["url"] as? String,
-                  let url = URL(string: urlStr),
-                  let type = dict["type"] as? String else { return nil }
-            return NoteAttachment(
-                id: id,
-                url: url,
-                type: type,
-                extractedText: dict["extractedText"] as? String ?? dict["ocrText"] as? String,
-                extractionProvider: dict["extractionProvider"] as? String ?? dict["ocrProvider"] as? String,
-                extractionModel: dict["extractionModel"] as? String ?? dict["ocrModel"] as? String
-            )
-        }
     }
 
     private func upsertTranscript(

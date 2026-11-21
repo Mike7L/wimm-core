@@ -11,8 +11,17 @@ library could not list into files next to the originals (which stay): 149
 SVG -> PNG, 10 AMR + 1 WebM -> m4a, 11 web pages, 1 calendar and 1 zip ->
 text; 17 entries whose file was gone became texts under `Attachments/Lost/`.
 The split then made 4 528 notes and promoted 185 parent files; 0 failures.
-No Mac sidecar has `attachments` now. The read paths (stage 4) stay until
-the iPhone's own copies are checked after sync.
+No Mac sidecar has `attachments` now.
+
+**Stage 4 done 2026-11-21** (user's decision, without waiting for the iPhone
+check): `NoteAttachmentMedia`, `AttachmentRepository`, `NoteAttachment`,
+`Note.attachments`, the reader/iPhone attachment cards, attachment OCR and
+retranscription, the evening journal's legacy answers and the
+`attachments`/`meta migrate-attachments`/`meta migrate-txt-stubs` commands are
+gone; recall no longer prints attachment text (`cacheBuilderVersion` 2). A
+note's own OCR goes through `NoteOCRStore`. If an iPhone copy still carries
+`attachments`, its media is not shown until `notes convert-attachments` and
+`notes split-attachments` run on the Mac after sync.
 
 ## Decision
 

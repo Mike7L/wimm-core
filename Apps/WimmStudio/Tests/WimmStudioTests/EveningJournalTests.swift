@@ -150,36 +150,6 @@ final class EveningJournalTests: XCTestCase {
         XCTAssertNil(eveningMeta["attachments"], "the evening note never lists answers as attachments")
     }
 
-    func testLegacyAnswerAudioMovesOutOfTheNotesSession() throws {
-        let day = EveningJournal.day(containing: Date())
-        let created = try EveningJournalStore.create(day: day)
-        let base = created.file.deletingPathExtension().lastPathComponent
-        let legacy = created.file.deletingLastPathComponent().appendingPathComponent(base + "_Attach_20261101-195705_1.m4a")
-        try Data("audio".utf8).write(to: legacy)
-        defer {
-            for url in [created.file, FileStore.metadataURL(forRecordingURL: created.file), legacy,
-                        EveningJournalStore.answerDirectory(for: created.file)] {
-                try? FileManager.default.removeItem(at: url)
-            }
-        }
-        // A sidecar as written before 2026-11-09.
-        try FileStore.mutateSidecar(at: FileStore.metadataURL(forRecordingURL: created.file)) { metadata in
-            metadata["attachments"] = [["id": UUID().uuidString, "url": StoragePaths.relativePath(for: legacy),
-                                        "type": "audio", "journalPrompt": "Мысли"]]
-            return true
-        }
-
-        XCTAssertEqual(EveningJournalStore.relocateLegacyAnswerAudio(of: created.file), 1)
-        let moved = try XCTUnwrap(EveningJournalStore.legacyAnswerAudio(of: created.file).first?.url)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: legacy.path))
-        XCTAssertEqual(moved.lastPathComponent, "answer-20261101-195705_1.m4a")
-        XCTAssertEqual(try Data(contentsOf: moved), Data("audio".utf8))
-        XCTAssertEqual(EveningJournalStore.relocateLegacyAnswerAudio(of: created.file), 0)
-        // Old answers still play until the split migration turns them into notes.
-        XCTAssertEqual(EveningJournalStore.answerAudio(of: created.file, in: EveningJournal.Document(markdown: created.body))
-            .map(\.prompt), ["Мысли"])
-    }
-
     func testWizardWalkSkipsPhotosWhenThereAreNone() {
         XCTAssertEqual(EveningStep.walk(hasPhotos: false, promptCount: 2),
                        [.day, .prompt(0), .prompt(1), .thoughts, .done])

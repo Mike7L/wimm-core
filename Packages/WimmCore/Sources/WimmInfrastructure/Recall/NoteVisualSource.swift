@@ -17,7 +17,6 @@ enum NoteVisualSource {
     }
     static func assets(for note: URL) -> [Asset] {
         guard FileManager.default.fileExists(atPath:note.path) else { return [] }
-        let meta = RecallSidecar.load(forRecordingURL:note)?.sidecar.dict ?? [:]
         var assets: [Asset] = [], seen = Set<String>()
         func add(_ url: URL, _ role: String) {
             guard LibraryImageInventory.isImage(url) || url.pathExtension.lowercased() == "pdf" else { return }
@@ -26,7 +25,6 @@ enum NoteVisualSource {
             assets.append(.init(url:canonical,role:role))
         }
         add(note,"primary")
-        for (i,item) in NoteAttachmentMedia.items(in:meta).enumerated() { add(item.url,"attachment \(i+1)") }
         for target in LibraryImageInventory.targets(for:note) { add(URL(fileURLWithPath:target.image),target.kind.rawValue) }
         return assets
     }

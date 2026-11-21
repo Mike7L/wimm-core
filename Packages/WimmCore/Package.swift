@@ -74,7 +74,6 @@ let package = Package(
             name: "WimmCorePackageTests",
             dependencies: ["WimmDomain", "WimmInfrastructure", "WimmSecretary"],
             path: "Tests/WimmCoreTests",
-            exclude: ["Fixtures/sample.enex"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]

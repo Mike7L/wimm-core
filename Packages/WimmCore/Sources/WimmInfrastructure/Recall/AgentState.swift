@@ -294,8 +294,6 @@ public struct NoteFingerprint: Sendable, Equatable, Codable {
         text += meta.previousRuns.map(\.transcript)
         text += meta.previousDocumentRuns.map(\.text)
         text += meta.previousOCRRuns.map(\.text)
-        text += meta.attachments.map(\.text)
-        text += meta.attachments.flatMap { $0.previousRuns.map(\.text) }
         text += meta.imageEvidence.map { Optional($0.text) }
         text.append(edited ? meta.refined : nil)
         let analysis: [String?] = [

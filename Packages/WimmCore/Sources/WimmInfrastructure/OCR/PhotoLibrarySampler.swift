@@ -31,8 +31,8 @@ public enum PhotoLibrarySampler {
                 stamp = (try? note.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
                 basis = "file_creation_fallback"
             }
-            var images = NoteAttachmentMedia.items(in: root).filter(\.isImage).map(\.url)
-            if NoteAttachmentMedia.imageExtensions.contains(note.pathExtension.lowercased()) { images.insert(note, at: 0) }
+            var images: [URL] = []
+            if LibraryImageInventory.isImage(note) { images.append(note) }
             if FileStore.isAudioFile(note) {
                 let screen = FileStore.screenshotURL(forRecordingURL: note)
                 if FileManager.default.fileExists(atPath: screen.path) { images.append(screen) }

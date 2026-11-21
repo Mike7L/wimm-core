@@ -6,7 +6,7 @@ import WimmInfrastructure
 /// picture) with on-device Vision, one at a time, right after the note is
 /// saved and for recent ones at launch. Nothing leaves the Mac, so private
 /// mode does not stop it. The result goes through
-/// `AttachmentRepository.saveDocumentOCR`, as `wimm-cli ocr --apply` does; a
+/// `NoteOCRStore.saveDocumentOCR`, as `wimm-cli ocr --apply` does; a
 /// picture with no text gets an empty `ocr` entry, so it is not read again.
 @MainActor
 final class StudioImageTextCatchUp {
@@ -81,7 +81,7 @@ final class StudioImageTextCatchUp {
         do {
             let extraction = try await DocumentImporter(ocrEngine: .vision).extractDocumentText(for: file)
             let text = (extraction?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            await AttachmentRepository(metadataRepository: MetadataRepository()).saveDocumentOCR(
+            await NoteOCRStore.saveDocumentOCR(
                 for: file, text: text,
                 provider: extraction?.provider ?? TextExtractionProvider.vision,
                 model: extraction?.model ?? "VNRecognizeText",

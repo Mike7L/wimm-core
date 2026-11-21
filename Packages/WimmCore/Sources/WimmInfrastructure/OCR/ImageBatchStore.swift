@@ -27,7 +27,7 @@ public enum ImageBatchStore {
                 case .attachment:
                     var attachments = meta["attachments"] as? [[String: Any]] ?? []
                     let index = attachments.firstIndex { item in
-                        if let raw = item["url"] as? String, let url = NoteAttachmentMedia.resolve(raw) {
+                        if let raw = item["url"] as? String, let url = FileStore.resolveStoredPath(raw) {
                             return url.standardizedFileURL.resolvingSymlinksInPath().path == target.image
                         }
                         return (item["id"] as? String).flatMap(UUID.init(uuidString:)) == target.attachmentID
@@ -64,7 +64,7 @@ public enum ImageBatchStore {
                     rootRecord = record; changed += 1
                 case .screenshot:
                     let i = screenshots.firstIndex { value in
-                        guard let raw = value["source"] as? String, let url = NoteAttachmentMedia.resolve(raw) else { return false }
+                        guard let raw = value["source"] as? String, let url = FileStore.resolveStoredPath(raw) else { return false }
                         return url.standardizedFileURL.resolvingSymlinksInPath().path == target.image
                     }
                     if let i {

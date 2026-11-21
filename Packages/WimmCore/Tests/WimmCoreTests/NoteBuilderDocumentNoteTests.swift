@@ -37,8 +37,7 @@ final class NoteBuilderDocumentNoteTests: XCTestCase {
             "document": ["text": "Old body"],
             "title": "Keep title",
         ])
-        let repository = AttachmentRepository(metadataRepository: MetadataRepository())
-        await repository.saveDocumentOCR(for: file, text: " New OCR ", provider: "vision",
+        await NoteOCRStore.saveDocumentOCR(for: file, text: " New OCR ", provider: "vision",
                                          model: "VNRecognizeText", startedAt: Date())
         let note = await buildNote(for: file)
         XCTAssertEqual(note.text, "New OCR")
@@ -49,7 +48,7 @@ final class NoteBuilderDocumentNoteTests: XCTestCase {
         XCTAssertEqual((metadata["document"] as? [String: Any])?["text"] as? String, "New OCR")
         XCTAssertEqual(metadata["title"] as? String, "Keep title")
 
-        await repository.saveDocumentOCR(for: file, text: "  ", provider: "vision",
+        await NoteOCRStore.saveDocumentOCR(for: file, text: "  ", provider: "vision",
                                          model: "VNRecognizeText", startedAt: Date())
         let afterEmpty = await buildNote(for: file)
         XCTAssertEqual(afterEmpty.text, "New OCR")
@@ -59,8 +58,7 @@ final class NoteBuilderDocumentNoteTests: XCTestCase {
         let file = tempDir.appendingPathComponent("recording.m4a")
         try Data([1]).write(to: file)
         FileStore.upsertMetadata(for: file, updates: ["transcription": ["transcript": "Spoken text"]])
-        let repository = AttachmentRepository(metadataRepository: MetadataRepository())
-        await repository.saveDocumentOCR(for: file, text: "Screen text", provider: "vision",
+        await NoteOCRStore.saveDocumentOCR(for: file, text: "Screen text", provider: "vision",
                                          model: "VNRecognizeText", startedAt: Date())
         let note = await buildNote(for: file)
         XCTAssertEqual(note.text, "Spoken text")

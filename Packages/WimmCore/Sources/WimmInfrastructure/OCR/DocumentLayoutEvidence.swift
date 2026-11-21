@@ -69,17 +69,11 @@ public struct DocumentPageEvidence: Codable, Sendable {
         document["pages"] = value;document["pagesSchema"] = 1;document["sourceSHA256"] = sourceSHA256
         document["pagesExtractedAt"] = ISO8601.string(from:Date())
     }
-    public static func save(_ pages: [DocumentPageEvidence], sourceSHA256: String?, to note: URL, attachmentID: UUID? = nil) throws {
+    public static func save(_ pages: [DocumentPageEvidence], sourceSHA256: String?, to note: URL) throws {
         guard FileManager.default.fileExists(atPath:note.path) else { throw CocoaError(.fileNoSuchFile) }
         try FileStore.mutateSidecar(at:FileStore.metadataURL(forRecordingURL:note)) { meta in
-            if let attachmentID {
-                var list = meta["attachments"] as? [[String:Any]] ?? []
-                guard let index = list.firstIndex(where:{ ($0["id"] as? String).flatMap(UUID.init(uuidString:)) == attachmentID }) else { throw CocoaError(.fileNoSuchFile) }
-                try store(pages,sourceSHA256:sourceSHA256,in:&list[index]);meta["attachments"] = list
-            } else {
-                var document = meta["document"] as? [String:Any] ?? [:]
-                try store(pages,sourceSHA256:sourceSHA256,in:&document);meta["document"] = document
-            }
+            var document = meta["document"] as? [String:Any] ?? [:]
+            try store(pages,sourceSHA256:sourceSHA256,in:&document);meta["document"] = document
             return true
         }
     }

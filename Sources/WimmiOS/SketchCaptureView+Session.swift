@@ -131,7 +131,7 @@ extension SketchCaptureView {
         guard !images.isEmpty else { return }
         let saved = await appState.importImages(images, quality: quality, originals: originals)
         await MainActor.run {
-            savedAttachments.append(contentsOf: saved.map { NoteAttachment(url: $0, type: "image") })
+            savedAttachments.append(contentsOf: saved)
         }
     }
 

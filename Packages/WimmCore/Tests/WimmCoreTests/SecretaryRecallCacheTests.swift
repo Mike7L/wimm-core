@@ -187,7 +187,7 @@ final class SecretaryRecallCacheTests: XCTestCase {
             let fingerprint = n.fingerprintSnapshot?.fingerprint
             lines.append([
                 URL(fileURLWithPath: n.filePath).lastPathComponent, day.string(from: n.date), n.kind,
-                n.title ?? "-", n.summary ?? "-", n.text, n.attachmentTexts.joined(separator: "\u{1F}"),
+                n.title ?? "-", n.summary ?? "-", n.text,
                 n.duration.map { "\($0)" } ?? "-", n.speech ?? "-", n.chars.map { "\($0)" } ?? "-", n.device ?? "-",
                 folded.title, folded.summary, folded.body,
                 fingerprint?.text ?? "-", fingerprint?.analysis ?? "-", fingerprint?.wording ?? "-",
@@ -196,7 +196,7 @@ final class SecretaryRecallCacheTests: XCTestCase {
         XCTAssertEqual(lines.count, 2)
         let built = lines.sorted().joined(separator: "\n")
         let hash = SHA256.hash(data: Data(built.utf8)).map { String(format: "%02x", $0) }.joined()
-        let pinned = (builder: 1, hash: "2b22bf2826dec390052868ab44d0b8d87c4ebd03138367bc80376a3af2ef1b8d")
+        let pinned = (builder: 2, hash: "66a99de1e28045032f3717eabdfae3aa47d3b6cb21b87cb03e2722dbeaa30eb6")
         XCTAssertEqual(LibraryRecallSource.cacheBuilderVersion, pinned.builder)
         XCTAssertEqual(hash, pinned.hash, "Built notes changed; raise cacheBuilderVersion and pin the new form:\n\(built)")
     }

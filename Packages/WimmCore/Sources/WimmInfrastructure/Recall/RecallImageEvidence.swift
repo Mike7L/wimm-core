@@ -9,7 +9,7 @@ extension RecallSidecar {
                 if let date = previous["completedAt"] as? String { dates.append(date) }
             }
         }
-        let containers = [dict["ocr"],dict["document"]].compactMap { $0 } + (dict["attachments"] as? [Any] ?? [])
+        let containers = [dict["ocr"],dict["document"]].compactMap { $0 }
         for value in containers {
             guard let container = value as? [String:Any] else { continue }
             if let date = container["pagesExtractedAt"] as? String { dates.append(date) }
@@ -89,14 +89,6 @@ extension RecallSidecar {
                 record(image,"screenshot \(i+1)")
                 for (j,previous) in (image["previousImageAnalyses"] as? [[String:Any]] ?? []).enumerated() { record(previous,"screenshot \(i+1) earlier run \(j+1)") }
                 if let empty = image["lastEmptyAttempt"] as? [String:Any] { record(empty,"screenshot \(i+1) latest empty attempt") }
-            }
-        }
-        for (i,attachment) in (dict["attachments"] as? [[String:Any]] ?? []).enumerated() {
-            container(attachment,"attachment \(i+1) image")
-            if let hash = attachment["sourceSHA256"] as? String { blocks.append(("attachment \(i+1) source SHA256",hash)) }
-            pages(attachment["pages"] as? [[String:Any]] ?? [],"attachment \(i+1)")
-            for (j,run) in (attachment["previousPageRuns"] as? [[String:Any]] ?? []).enumerated() {
-                pages(run["pages"] as? [[String:Any]] ?? [],"attachment \(i+1) earlier PDF run \(j+1)")
             }
         }
         return blocks

@@ -153,7 +153,7 @@ final class EveningPhotos {
         let started = Date()
         guard let text = try? await VisionOCRProvider().performOCR(on: image),
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        await AttachmentRepository(metadataRepository: MetadataRepository()).saveDocumentOCR(
+        await NoteOCRStore.saveDocumentOCR(
             for: url, text: text, provider: TextExtractionProvider.vision, model: "VNRecognizeText", startedAt: started)
     }
 

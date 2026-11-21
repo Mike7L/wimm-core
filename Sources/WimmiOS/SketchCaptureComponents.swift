@@ -98,18 +98,18 @@ struct CameraPicker: UIViewControllerRepresentable {
 
 // MARK: - AttachmentCard
 struct AttachmentCard: View {
-    let attachment: NoteAttachment
+    let url: URL
     var onRemove: (() -> Void)? = nil
     
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Group {
-                if attachment.url.pathExtension.lowercased() == "pdf" {
+                if url.pathExtension.lowercased() == "pdf" {
                     VStack(spacing: 6) {
                         Image(systemName: "doc.richtext.fill")
                             .font(.system(size: 24))
                             .foregroundColor(.orange)
-                        Text(attachment.url.lastPathComponent)
+                        Text(url.lastPathComponent)
                             .font(.system(size: 9, weight: .semibold, design: .rounded))
                             .foregroundColor(.secondary)
                             .lineLimit(1)
@@ -118,7 +118,7 @@ struct AttachmentCard: View {
                     .frame(width: 72, height: 72)
                     .background(Color.primary.opacity(0.06))
                 } else {
-                    AsyncImage(url: attachment.url) { phase in
+                    AsyncImage(url: url) { phase in
                         switch phase {
                         case .success(let image):
                             image

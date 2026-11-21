@@ -20,7 +20,6 @@ public struct DocumentImporter: @unchecked Sendable {
     private let provider: OCRProvider
     private let transport: LLMTransport
     private let fileRepository: any FileRepositoryProtocol
-    private let attachmentRepository: any AttachmentRepositoryProtocol
     private let transcriptRepository: any TranscriptRepositoryProtocol
     private let metadataRepository: any MetadataRepositoryProtocol
 
@@ -33,15 +32,12 @@ public struct DocumentImporter: @unchecked Sendable {
         ocrProvider: OCRProvider? = nil,
         transport: LLMTransport = .shared,
         fileRepository: any FileRepositoryProtocol = FileRepository(),
-        attachmentRepository: any AttachmentRepositoryProtocol = AttachmentRepository(
-            metadataRepository: MetadataRepository()),
         transcriptRepository: any TranscriptRepositoryProtocol = TranscriptRepository(),
         metadataRepository: any MetadataRepositoryProtocol = MetadataRepository()
     ) {
         self.ocrEngine = ocrEngine
         self.transport = transport
         self.fileRepository = fileRepository
-        self.attachmentRepository = attachmentRepository
         self.transcriptRepository = transcriptRepository
         self.metadataRepository = metadataRepository
 

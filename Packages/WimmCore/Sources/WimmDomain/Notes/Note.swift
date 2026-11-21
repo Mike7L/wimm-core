@@ -36,7 +36,6 @@ public struct Note: Identifiable, Hashable, Codable, Sendable {
     /// Unified extraction metadata: OCR, document text, or any other extraction
     public let extractionProvider: String?
     public let extractionModel: String?
-    public let attachments: [NoteAttachment]
     public let fileModified: Date
     public let isFailed: Bool
     /// True when the note entered the library through an import flow rather
@@ -112,7 +111,6 @@ public struct Note: Identifiable, Hashable, Codable, Sendable {
         case ocrModel
         case documentTextProvider
         case documentTextModel
-        case attachments
         case title, summary, isArtifact, isLiked, isDraft, isInsight, processedAt, isUnprocessed,
             isCanceled, connectedNoteIds, fileModified, suspectedNoSpeech
         case agentRecommendation, agentReason
@@ -174,7 +172,6 @@ public struct Note: Identifiable, Hashable, Codable, Sendable {
             ?? container.decodeIfPresent(String.self, forKey: .ocrModel)
             ?? container.decodeIfPresent(String.self, forKey: .documentTextModel)
 
-        attachments = try container.decode([NoteAttachment].self, forKey: .attachments)
         title = try container.decodeIfPresent(String.self, forKey: .title)
         summary = try container.decodeIfPresent(String.self, forKey: .summary)
         agentRecommendation = try container.decodeIfPresent(
@@ -237,7 +234,6 @@ public struct Note: Identifiable, Hashable, Codable, Sendable {
         try container.encodeIfPresent(origin, forKey: .origin)
         try container.encodeIfPresent(extractionProvider, forKey: .extractionProvider)
         try container.encodeIfPresent(extractionModel, forKey: .extractionModel)
-        try container.encode(attachments, forKey: .attachments)
         try container.encode(title, forKey: .title)
         try container.encode(summary, forKey: .summary)
         try container.encode(agentRecommendation, forKey: .agentRecommendation)
@@ -281,7 +277,6 @@ public struct Note: Identifiable, Hashable, Codable, Sendable {
         projectWhy: String? = nil,
         extractionProvider: String? = nil,
         extractionModel: String? = nil,
-        attachments: [NoteAttachment] = [],
         title: String? = nil,
         summary: String? = nil,
         agentRecommendation: String? = nil,
@@ -324,7 +319,6 @@ public struct Note: Identifiable, Hashable, Codable, Sendable {
         self.projectWhy = projectWhy
         self.extractionProvider = extractionProvider
         self.extractionModel = extractionModel
-        self.attachments = attachments
         self.title = title
         self.summary = summary
         self.agentRecommendation = agentRecommendation

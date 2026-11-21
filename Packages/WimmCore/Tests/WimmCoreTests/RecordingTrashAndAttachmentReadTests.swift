@@ -19,46 +19,6 @@ final class RecordingTrashAndAttachmentReadTests: XCTestCase {
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
-    func testAttachments_ReadsLegacyKeysWithoutRewritingTheSidecar() async throws {
-        let base = try makeEnvIsolatedBase()
-        defer {
-            unsetenv("WIMM_BASE_DIR")
-            try? FileManager.default.removeItem(at: base)
-        }
-
-        let recordingsDir = FileStore.recordingsDirectory()
-        try FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
-
-        let recording = recordingsDir.appendingPathComponent("legacy-ios.m4a")
-        FileManager.default.createFile(atPath: recording.path, contents: Data())
-
-        let attachmentURL = recordingsDir.appendingPathComponent("legacy-ios.txt")
-        FileManager.default.createFile(atPath: attachmentURL.path, contents: Data("hello".utf8))
-
-        FileStore.upsertMetadata(for: recording, updates: [
-            "attachments": [[
-                "id": UUID().uuidString,
-                "url": attachmentURL.absoluteString,
-                "type": "text",
-                "ocrText": "legacy text",
-                "ocrProvider": "legacy-provider",
-                "ocrModel": "legacy-model"
-            ]]
-        ])
-
-        let attachments = await AttachmentRepository(metadataRepository: MetadataRepository())
-            .attachments(for: recording, migrateLegacyKeys: false)
-        XCTAssertEqual(attachments.count, 1)
-        XCTAssertEqual(attachments.first?.extractedText, "legacy text")
-        XCTAssertEqual(attachments.first?.extractionProvider, "legacy-provider")
-        XCTAssertEqual(attachments.first?.extractionModel, "legacy-model")
-
-        // Opening a note never writes its sidecar (no read-then-write).
-        let first = try XCTUnwrap((try loadMeta(for: recording)["attachments"] as? [[String: Any]])?.first)
-        XCTAssertEqual(first["ocrText"] as? String, "legacy text")
-        XCTAssertNil(first["extractedText"])
-    }
-
     func testMoveToTrash_MovesReferencedAttachmentsAndRewritesMetadata() async throws {
         let base = try makeEnvIsolatedBase()
         defer {

@@ -8,15 +8,4 @@ import WimmDomain
 extension Note {
     public var timeLabel: String { FileStore.timeStr(absoluteDate) }
 
-    public var llmContext: String {
-        NoteProcessor.buildContext(
-            text: text,
-            fileURL: fileURL,
-            transcriptionProvider: transcriptionProvider,
-            transcriptionModel: transcriptionModel,
-            extractionProvider: extractionProvider,
-            extractionModel: extractionModel,
-            attachments: attachments
-        )
-    }
 }

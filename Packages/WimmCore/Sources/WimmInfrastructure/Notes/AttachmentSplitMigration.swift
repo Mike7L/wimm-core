@@ -31,6 +31,8 @@ public enum AttachmentSplitMigration {
     public static let splitFromKey = "splitFrom"
     /// Parent sidecar key when its first attachment became its own file.
     public static let promotedKey = "splitPromoted"
+    /// The model's "nothing said" verdict as stored on an old attachment.
+    static let noSpeechText = "[[NO_SPEECH]]"
 
     public struct Options: Sendable {
         public var apply: Bool
@@ -493,7 +495,7 @@ public enum AttachmentSplitMigration {
         switch kind {
         case "audio":
             guard let text else { return [:] }
-            let noSpeech = text.isEmpty || text == NoteAttachmentMedia.noSpeechText
+            let noSpeech = text.isEmpty || text == noSpeechText
             var transcription: [String: Any] = [
                 "transcript": noSpeech ? "" : text,
                 "speechStatus": noSpeech ? TranscriptionSpeechStatus.noSpeech.rawValue
@@ -689,7 +691,7 @@ public enum AttachmentSplitMigration {
     private static func textKind(_ entry: [String: Any]) -> String {
         let text = (entry["extractedText"] as? String ?? entry["ocrText"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return text.isEmpty || text == NoteAttachmentMedia.noSpeechText ? "none" : "text"
+        return text.isEmpty || text == noSpeechText ? "none" : "text"
     }
 
     private static func parentSource(_ json: [String: Any]) -> String {

@@ -84,18 +84,6 @@ public enum NoteBuilder {
         let ocrMeta = docMeta["ocr"] as? [String: Any]
         let ocrProvider = ocrMeta?["provider"] as? String
         let ocrModel = ocrMeta?["model"] as? String
-        let ocrText = ocrMeta?["text"] as? String
-
-        // ── Attachments: inline parse from dict (no actor hop) ──
-        var attachments = parseAttachments(from: docMeta)
-        // LEGACY: Virtual attachment for old OCR format
-        if attachments.isEmpty, let ocrText = ocrText, !ocrText.isEmpty,
-           let screenshot = screenshotURL {
-            attachments.append(NoteAttachment(
-                id: UUID(), url: screenshot, type: "image",
-                extractedText: ocrText, extractionProvider: ocrProvider,
-                extractionModel: ocrModel))
-        }
 
         // ── NoteCard fields ──
         let title = noteCard?.title ?? docInfo?["title"] as? String
@@ -192,7 +180,6 @@ public enum NoteBuilder {
             projectWhy: nil,
             extractionProvider: docTextProvider ?? ocrProvider,
             extractionModel: docTextModel ?? ocrModel,
-            attachments: attachments,
             title: title,
             summary: summary,
             agentRecommendation: agentRecommendation,
@@ -250,24 +237,6 @@ public enum NoteBuilder {
                 return true
             }
             return false
-        }
-    }
-
-    /// Parse attachments from metadata dict (no actor hop).
-    public static func parseAttachments(from meta: [String: Any]) -> [NoteAttachment] {
-        guard let list = meta["attachments"] as? [[String: Any]] else { return [] }
-        return list.compactMap { dict -> NoteAttachment? in
-            guard let idStr = dict["id"] as? String,
-                  let id = UUID(uuidString: idStr),
-                  let urlStr = dict["url"] as? String,
-                  let url = URL(string: urlStr),
-                  let type = dict["type"] as? String else { return nil }
-            return NoteAttachment(
-                id: id, url: url, type: type,
-                extractedText: dict["extractedText"] as? String ?? dict["ocrText"] as? String,
-                extractionProvider: dict["extractionProvider"] as? String ?? dict["ocrProvider"] as? String,
-                extractionModel: dict["extractionModel"] as? String ?? dict["ocrModel"] as? String
-            )
         }
     }
 

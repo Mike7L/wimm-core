@@ -11,7 +11,6 @@ public struct RecallNote: Sendable, Equatable, Codable {
     public let title: String?
     public let summary: String?
     public let text: String
-    public let attachmentTexts: [String]
     public let filePath: String
     /// Audio length in seconds, from the sidecar.
     public let duration: Double?
@@ -34,7 +33,6 @@ public struct RecallNote: Sendable, Equatable, Codable {
         title: String?,
         summary: String?,
         text: String,
-        attachmentTexts: [String] = [],
         filePath: String,
         duration: Double? = nil,
         speech: String? = nil,
@@ -48,7 +46,6 @@ public struct RecallNote: Sendable, Equatable, Codable {
         self.title = title
         self.summary = summary
         self.text = text
-        self.attachmentTexts = attachmentTexts
         self.filePath = filePath
         self.duration = duration
         self.speech = speech
@@ -76,7 +73,6 @@ public struct RecallNote: Sendable, Equatable, Codable {
             title: note.title?.nilIfBlank,
             summary: note.summary?.nilIfBlank,
             text: body,
-            attachmentTexts: note.attachments.compactMap { $0.extractedText?.nilIfBlank },
             filePath: note.fileURL.path,
             duration: isAudio ? meta.duration ?? (note.duration > 0 ? note.duration : nil) : nil,
             speech: speech,
@@ -95,7 +91,7 @@ public struct RecallNote: Sendable, Equatable, Codable {
     /// UTF-8 bytes this note takes in a `RecallLibrary` buffer.
     var rawByteCount: Int {
         id.utf8.count + filePath.utf8.count + (title?.utf8.count ?? 0) + (summary?.utf8.count ?? 0)
-            + text.utf8.count + attachmentTexts.reduce(0) { $0 + $1.utf8.count }
+            + text.utf8.count
     }
 
     /// The lowercased text search runs over. Folding a whole library is
@@ -117,8 +113,8 @@ public struct RecallNote: Sendable, Equatable, Codable {
         return kind == "audio" && chars == 0
     }
 
-    /// Text plus attachment text, as the snippet shows it.
-    var body: String { ([text] + attachmentTexts).joined(separator: "\n") }
+    /// The text the snippet shows.
+    var body: String { text }
 
     /// The shared kind table (`NoteContent`); recall keeps it as a string.
     static func kind(of url: URL) -> String {
@@ -158,7 +154,6 @@ public struct RecallLibrary: Sendable {
         let title: Range<Int>?
         let summary: Range<Int>?
         let text: Range<Int>
-        let attachments: [Range<Int>]
         // In `folded`:
         let foldedID: Range<Int>
         let foldedTitle: Range<Int>
@@ -204,7 +199,6 @@ public struct RecallLibrary: Sendable {
             title: e.title.map(string),
             summary: e.summary.map(string),
             text: string(e.text),
-            attachmentTexts: e.attachments.map(string),
             filePath: string(e.path),
             duration: e.duration,
             speech: e.speech,
@@ -217,7 +211,7 @@ public struct RecallLibrary: Sendable {
     func rawByteCount(of index: Int) -> Int {
         let e = entries[index]
         return e.id.count + e.path.count + (e.title?.count ?? 0) + (e.summary?.count ?? 0)
-            + e.text.count + e.attachments.reduce(0) { $0 + $1.count }
+            + e.text.count
     }
 
     func foldedByteCount(of index: Int) -> Int {
@@ -247,19 +241,18 @@ public struct RecallLibrary: Sendable {
         let title: Int?
         let summary: Int?
         let text: Int
-        let attachments: [Int]
         let foldedID: Int
         let foldedTitle: Int
         let foldedSummary: Int
         let foldedBody: Int
 
-        var rawBytes: Int { id + path + (title ?? 0) + (summary ?? 0) + text + attachments.reduce(0, +) }
+        var rawBytes: Int { id + path + (title ?? 0) + (summary ?? 0) + text }
         var foldedBytes: Int { foldedID + foldedTitle + foldedSummary + foldedBody }
         var payloadBytes: Int { rawBytes + foldedBytes }
 
         var isValid: Bool {
-            ([id, path, title ?? 0, summary ?? 0, text, foldedID, foldedTitle, foldedSummary, foldedBody]
-                + attachments).allSatisfy { $0 >= 0 }
+            [id, path, title ?? 0, summary ?? 0, text, foldedID, foldedTitle, foldedSummary, foldedBody]
+                .allSatisfy { $0 >= 0 }
         }
 
         static func encode(_ note: RecallNote) -> (layout: Layout, payload: Data) {
@@ -284,7 +277,6 @@ public struct RecallLibrary: Sendable {
                 title: note.title.map(put),
                 summary: note.summary.map(put),
                 text: put(note.text),
-                attachments: note.attachmentTexts.map(put),
                 foldedID: put(folded.id),
                 foldedTitle: put(folded.title),
                 foldedSummary: put(folded.summary),
@@ -334,7 +326,6 @@ public struct RecallLibrary: Sendable {
                 title: note.title.map(put),
                 summary: note.summary.map(put),
                 text: put(note.text),
-                attachments: note.attachmentTexts.map(put),
                 foldedID: fold(text.id),
                 foldedTitle: fold(text.title),
                 foldedSummary: fold(text.summary),
@@ -356,7 +347,6 @@ public struct RecallLibrary: Sendable {
             let title = layout.title.map { take($0, into: &raw) }
             let summary = layout.summary.map { take($0, into: &raw) }
             let text = take(layout.text, into: &raw)
-            let attachments = layout.attachments.map { take($0, into: &raw) }
             entries.append(Entry(
                 date: layout.date,
                 updated: layout.updated,
@@ -371,7 +361,6 @@ public struct RecallLibrary: Sendable {
                 title: title,
                 summary: summary,
                 text: text,
-                attachments: attachments,
                 foldedID: take(layout.foldedID, into: &folded),
                 foldedTitle: take(layout.foldedTitle, into: &folded),
                 foldedSummary: take(layout.foldedSummary, into: &folded),
@@ -406,7 +395,6 @@ public struct RecallLibrary: Sendable {
                 title: e.title.map(copyRaw),
                 summary: e.summary.map(copyRaw),
                 text: copyRaw(e.text),
-                attachments: e.attachments.map(copyRaw),
                 foldedID: copyFolded(e.foldedID),
                 foldedTitle: copyFolded(e.foldedTitle),
                 foldedSummary: copyFolded(e.foldedSummary),
@@ -1084,7 +1072,7 @@ public actor LibraryRecallSource {
 
     /// The layout of the cache file. A new number gets a new file name, so an
     /// installed older build keeps its own file instead of overwriting this one.
-    static let cacheVersion = 3
+    static let cacheVersion = 4
     /// Inside `cacheDirectory`; Studio's warm-up watches its age.
     public static let cacheFileName = "recall-v3.stream"
     /// What a note is built into: **raise it with any change that gives an
@@ -1094,7 +1082,7 @@ public actor LibraryRecallSource {
     /// rebuild, and each of the installed copies, threw away a 20-second build
     /// of identical notes. `SecretaryRecallCacheTests` pins the built form of a
     /// fixture library to this number.
-    static let cacheBuilderVersion = 1
+    static let cacheBuilderVersion = 2
     private let builderVersion: Int
 
     private func restoreCache() {
@@ -1171,7 +1159,7 @@ public actor LibraryRecallSource {
                 RecallLibrary.Layout(date: e.date, updated: e.updated, fingerprintSnapshot: e.fingerprintSnapshot,
                     kind: e.kind, duration: e.duration, speech: e.speech, chars: e.chars, device: e.device,
                     id: e.id.count, path: e.path.count, title: e.title?.count, summary: e.summary?.count,
-                    text: e.text.count, attachments: e.attachments.map(\.count), foldedID: e.foldedID.count,
+                    text: e.text.count, foldedID: e.foldedID.count,
                     foldedTitle: e.foldedTitle.count, foldedSummary: e.foldedSummary.count, foldedBody: e.foldedBody.count)
                     .write(&out)
             }

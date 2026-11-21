@@ -42,7 +42,6 @@ public actor NoteProcessor {
     private let fileRepository: FileRepository
     private let metadataRepository: MetadataRepository
     private let transcriptRepository: TranscriptRepository
-    private let attachmentRepository: AttachmentRepository
     private let transcriptionGlossary: TranscriptionGlossary?
     private let personalGlossaryStore: PersonalGlossaryStore?
 
@@ -50,15 +49,12 @@ public actor NoteProcessor {
         fileRepository: FileRepository = FileRepository(),
         metadataRepository: MetadataRepository = MetadataRepository(),
         transcriptRepository: TranscriptRepository = TranscriptRepository(),
-        attachmentRepository: AttachmentRepository? = nil,
         transcriptionGlossary: TranscriptionGlossary? = .production,
         personalGlossaryStore: PersonalGlossaryStore? = .shared
     ) {
         self.fileRepository = fileRepository
         self.metadataRepository = metadataRepository
         self.transcriptRepository = transcriptRepository
-        self.attachmentRepository =
-            attachmentRepository ?? AttachmentRepository(metadataRepository: metadataRepository)
         self.transcriptionGlossary = transcriptionGlossary
         self.personalGlossaryStore = personalGlossaryStore
     }
@@ -292,7 +288,7 @@ public actor NoteProcessor {
 
     // MARK: - Context Building (SINGLE SOURCE OF TRUTH)
 
-    /// Builds unified LLM context from transcript and attachments.
+    /// Builds unified LLM context from the note's own text (one note = one media).
     /// This is the ONLY place where context is assembled.
     public func buildContext(for file: URL, readOnly: Bool = false) async -> String {
         let mainText = await transcriptRepository.textOfRecord(for: file) ?? ""
@@ -307,7 +303,8 @@ public actor NoteProcessor {
         let documentTextModel = document?[MetadataKey.textModel.rawValue] as? String
         let ocrProvider = ocr?["provider"] as? String
         let ocrModel = ocr?["model"] as? String
-        let attachments = await attachmentRepository.attachments(for: file, migrateLegacyKeys: !readOnly)
+        // A recording's screenshot is part of the same note: its OCR text goes along.
+        let screenshotText = FileStore.isAudioFile(file) ? ocr?["text"] as? String : nil
 
         return Self.buildContext(
             text: mainText,
@@ -316,7 +313,9 @@ public actor NoteProcessor {
             transcriptionModel: transcriptionModel,
             extractionProvider: documentTextProvider ?? ocrProvider,
             extractionModel: documentTextModel ?? ocrModel,
-            attachments: attachments
+            screenshotText: screenshotText,
+            screenshotProvider: ocrProvider,
+            screenshotModel: ocrModel
         )
     }
 
@@ -328,7 +327,9 @@ public actor NoteProcessor {
         transcriptionModel: String? = nil,
         extractionProvider: String? = nil,
         extractionModel: String? = nil,
-        attachments: [NoteAttachment]
+        screenshotText: String? = nil,
+        screenshotProvider: String? = nil,
+        screenshotModel: String? = nil
     ) -> String {
         var parts: [String] = []
         let baseText = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -357,23 +358,12 @@ public actor NoteProcessor {
             parts.append("\(header)\n\(baseText)")
         }
 
-        // Attachments with OCR
-        let baseLower = baseText.lowercased()
-        for (i, attachment) in attachments.enumerated() {
-            guard let ocr = attachment.extractedText?.trimmingCharacters(in: .whitespacesAndNewlines),
-                !ocr.isEmpty
-            else { continue }
-
-            // Skip if attachment text is duplicate of main text
-            if shouldSkipAttachment(baseText: baseLower, attachmentText: ocr) { continue }
-
-            var meta: [String] = ["type=\(attachment.type)"]
-            if let provider = attachment.extractionProvider, !provider.isEmpty {
-                meta.append("provider=\(provider)")
-            }
-            if let model = attachment.extractionModel, !model.isEmpty { meta.append("model=\(model)") }
-            let header = "[ATTACHMENT_\(i + 1)_OCR \(meta.joined(separator: " "))]"
-            parts.append("\(header)\n\(ocr)")
+        if let shot = screenshotText?.trimmingCharacters(in: .whitespacesAndNewlines), !shot.isEmpty,
+           !(shot.count >= 20 && baseText.lowercased().contains(shot.lowercased())) {
+            var meta = ["type=screenshot"]
+            if let provider = screenshotProvider, !provider.isEmpty { meta.append("provider=\(provider)") }
+            if let model = screenshotModel, !model.isEmpty { meta.append("model=\(model)") }
+            parts.append("[SCREENSHOT_OCR \(meta.joined(separator: " "))]\n\(shot)")
         }
 
         return parts.joined(separator: "\n\n")
@@ -385,11 +375,5 @@ public actor NoteProcessor {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return trimmed == "no text recognized" || trimmed == "transcription failed"
             || trimmed == "no text found." || trimmed.hasPrefix("processing ")
-    }
-
-    private static func shouldSkipAttachment(baseText: String, attachmentText: String) -> Bool {
-        let attachment = attachmentText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if attachment.count < 20 { return false }
-        return baseText.contains(attachment.lowercased())
     }
 }

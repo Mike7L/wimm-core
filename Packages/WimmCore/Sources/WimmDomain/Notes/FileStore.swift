@@ -374,6 +374,15 @@ public enum FileStore {
     public static func strippingDerivedAudioSuffix(_ base: String) -> String { DefaultFileStore.shared.strippingDerivedAudioSuffix(base) }
 
     public static func relativePath(for url: URL) -> String { DefaultFileStore.shared.relativePath(for: url) }
+    /// A path stored in a sidecar: a `file://` URL, an absolute path, or a
+    /// path relative to the library.
+    public static func resolveStoredPath(_ raw: String) -> URL? {
+        if let url = URL(string: raw), url.isFileURL { return url.standardizedFileURL }
+        if raw.hasPrefix("/") { return URL(fileURLWithPath: raw).standardizedFileURL }
+        guard !raw.isEmpty, !raw.contains("://") else { return nil }
+        return resolveRelativePath(raw).standardizedFileURL
+    }
+
     public static func resolveRelativePath(_ path: String) -> URL { DefaultFileStore.shared.resolveRelativePath(path) }
 
     public static func newRecordingURL(

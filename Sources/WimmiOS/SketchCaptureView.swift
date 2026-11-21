@@ -25,7 +25,7 @@ struct SketchCaptureView: View {
     // Phase and Draft State
     @State var phase: CapturePhase = .listening
     @State var savedRecordingURL: URL? = nil
-    @State var savedAttachments: [NoteAttachment] = []
+    @State var savedAttachments: [URL] = []
     @State var completedSegments: [IOSRecordingSegment] = []
 
     // Picker & Media States
@@ -356,8 +356,8 @@ struct SketchCaptureView: View {
 
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 12) {
-                            ForEach(savedAttachments) { attachment in
-                                AttachmentCard(attachment: attachment)
+                            ForEach(savedAttachments, id: \.self) { url in
+                                AttachmentCard(url: url)
                             }
                         }
                         .padding(.horizontal, 20)

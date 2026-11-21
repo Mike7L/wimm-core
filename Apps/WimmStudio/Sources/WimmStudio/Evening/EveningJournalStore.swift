@@ -36,7 +36,6 @@ enum EveningJournalStore {
         for file in candidates {
             let metadata = readMetadata(file)
             guard let journal = metadata[metadataKey] as? [String: Any], journal["date"] as? String == key else { continue }
-            if relocateLegacyAnswerAudio(of: file) > 0 { return reload(file) }
             return entry(file: file, metadata: metadata)
         }
         return nil
@@ -157,9 +156,9 @@ enum EveningJournalStore {
     }
 
     /// The answer audio shown as inline players: answer notes the evening
-    /// note links to under a question or "Мысли", in body order, then answers
-    /// recorded before 2026-11-09 that still sit in the note's `attachments`
-    /// (read only; the split migration turns them into notes).
+    /// note links to under a question or "Мысли", in body order. Answers
+    /// recorded before 2026-11-09 became notes of their own in the split
+    /// migration (2026-11-21) and are linked from the body.
     static func answerAudio(of file: URL?, in document: EveningJournal.Document,
                             directory: URL = FileStore.recordingsDirectory()) -> [(url: URL, prompt: String)] {
         var result: [(url: URL, prompt: String)] = []
@@ -170,7 +169,6 @@ enum EveningJournalStore {
                 }
             }
         }
-        if let file { result += legacyAnswerAudio(of: file) }
         return result
     }
 
@@ -185,71 +183,6 @@ enum EveningJournalStore {
             }
         }
         return nil
-    }
-
-    // MARK: - Legacy answers in `attachments` (read only)
-
-    /// Answers recorded before 2026-11-09 live outside the recordings
-    /// directory, like Evernote's attachments, and are listed only in the
-    /// note's `attachments`. A `<note>_Attach_….m4a` beside the note would
-    /// join its session, and the library picks audio over the `.md` as the
-    /// anchor: the note then read as a failed audio recording.
-    static func answerDirectory(for file: URL) -> URL {
-        StoragePaths.baseDirectory()
-            .appendingPathComponent("Attachments/Journal", isDirectory: true)
-            .appendingPathComponent(file.deletingPathExtension().lastPathComponent, isDirectory: true)
-    }
-
-    /// Moves answers recorded before 2026-11-01 evening (as `_Attach_` files
-    /// beside the note) into `answerDirectory`, rewriting their sidecar URLs.
-    /// It only repoints existing entries; it never adds one.
-    @discardableResult
-    static func relocateLegacyAnswerAudio(of file: URL) -> Int {
-        let base = file.deletingPathExtension().lastPathComponent
-        let legacy = legacyAnswerAudio(of: file).filter {
-            $0.url.lastPathComponent.hasPrefix(base + "_Attach_")
-                && $0.url.deletingLastPathComponent().standardizedFileURL == file.deletingLastPathComponent().standardizedFileURL
-        }
-        guard !legacy.isEmpty else { return 0 }
-        let directory = answerDirectory(for: file)
-        do { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) } catch { return 0 }
-        var moved: [String: String] = [:]
-        for item in legacy {
-            let name = "answer-" + String(item.url.lastPathComponent.dropFirst((base + "_Attach_").count))
-            let destination = directory.appendingPathComponent(name)
-            let fm = FileManager.default
-            if fm.fileExists(atPath: item.url.path), !fm.fileExists(atPath: destination.path) {
-                guard (try? fm.moveItem(at: item.url, to: destination)) != nil else { continue }
-            } else if !fm.fileExists(atPath: destination.path) {
-                continue
-            }
-            moved[StoragePaths.relativePath(for: item.url)] = StoragePaths.relativePath(for: destination)
-        }
-        guard !moved.isEmpty else { return 0 }
-        do {
-            try FileStore.mutateSidecar(at: FileStore.metadataURL(forRecordingURL: file)) { metadata in
-                guard var attachments = metadata["attachments"] as? [[String: Any]] else { return false }
-                for index in attachments.indices {
-                    if let old = attachments[index]["url"] as? String, let new = moved[old] {
-                        attachments[index]["url"] = new
-                    }
-                }
-                metadata["attachments"] = attachments
-                return true
-            }
-        } catch {
-            log("[Evening] moved answer audio but could not rewrite \(file.lastPathComponent): \(error.localizedDescription)")
-        }
-        return moved.count
-    }
-
-    /// Answer audio listed in the note's legacy `attachments`.
-    static func legacyAnswerAudio(of file: URL) -> [(url: URL, prompt: String)] {
-        let attachments = readMetadata(file)["attachments"] as? [[String: Any]] ?? []
-        return attachments.compactMap { item in
-            guard let prompt = item["journalPrompt"] as? String, let path = item["url"] as? String else { return nil }
-            return (StoragePaths.resolveRelativePath(path), prompt)
-        }
     }
 
     // MARK: - Reading

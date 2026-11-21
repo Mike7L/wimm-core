@@ -151,18 +151,11 @@ struct TranscriptRetranscribe: AsyncParsableCommand {
             throw ValidationError("No single note matches \"\(note)\".")
         }
         let noteFile = URL(fileURLWithPath: found.filePath)
-        // A text note (Evernote) is retranscribed through its audio attachments.
-        let targets: [(file: URL, attachmentID: UUID?, words: Int)]
-        if found.kind == "audio" {
-            targets = [(noteFile, nil, NoteRetranscription.storedWordCount(file: noteFile))]
-        } else {
-            targets = NoteAttachmentMedia.audio(ofNote: noteFile).map {
-                ($0.url, $0.id, $0.hasMeaningfulText ? NoteRetranscription.wordCount($0.text ?? "") : 0)
-            }
-            guard !targets.isEmpty else {
-                throw ValidationError("[\(found.id)] is not audio (\(found.kind)) and has no audio attachments — nothing to transcribe.")
-            }
+        guard found.kind == "audio" else {
+            throw ValidationError("[\(found.id)] is not audio (\(found.kind)) — nothing to transcribe.")
         }
+        let targets: [(file: URL, attachmentID: UUID?, words: Int)] =
+            [(noteFile, nil, NoteRetranscription.storedWordCount(file: noteFile))]
         let selectedModel = model?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
             ?? Config.transcribeModel
 
