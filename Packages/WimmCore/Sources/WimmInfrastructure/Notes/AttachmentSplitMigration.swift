@@ -23,7 +23,8 @@ import WimmDomain
 /// `splitFrom` is found again on the next run, so a run stopped at any point
 /// resumes and a finished run changes nothing. Dry-run unless `apply`. Every
 /// sidecar write goes through `FileStore.mutateSidecar`. It never touches a
-/// file outside the library root (`Options.library`).
+/// file outside the library root (`Options.library`). An applied run gives each
+/// new note its parent's settled secretary mark (`SplitMarkInheritance`).
 public enum AttachmentSplitMigration {
     public static let tool = "split-attachments"
     public static let version = 1
@@ -110,6 +111,8 @@ public enum AttachmentSplitMigration {
         public var totals = Totals()
         public var parseErrors: [String] = []
         public var parents: [Parent] = []
+        /// New notes that took their parent's settled secretary mark (`SplitMarkInheritance`); nil in a dry run.
+        public var marksInherited: Int?
     }
 
     public enum Failure: LocalizedError {
@@ -148,6 +151,17 @@ public enum AttachmentSplitMigration {
             let parent = splitParent(sidecar: url, json: json, options: options, context: &context)
             add(parent, to: &report.totals)
             report.parents.append(parent)
+        }
+        if options.apply {
+            // The secretary read these texts inside the parent; without its mark they come back as new.
+            let written = Set(report.parents.flatMap(\.items)
+                .filter { changingActions.contains($0.action) && $0.error == nil }
+                .compactMap { $0.target.map { ($0 as NSString).lastPathComponent } })
+            if !written.isEmpty {
+                let inherited = try SplitMarkInheritance.run(library: options.library, apply: true, only: written,
+                                                             now: options.now)
+                report.marksInherited = inherited.inheritedStatus.values.reduce(0, +)
+            }
         }
         report.finishedAt = ISO8601.string(from: Date())
         return report

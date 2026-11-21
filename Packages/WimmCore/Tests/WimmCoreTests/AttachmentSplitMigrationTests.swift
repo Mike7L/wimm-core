@@ -293,6 +293,58 @@ final class AttachmentSplitMigrationTests: XCTestCase {
         XCTAssertEqual(left.compactMap { $0["id"] as? String }, [amrID])
     }
 
+    // MARK: - Secretary marks
+
+    private var marks: AgentMarkStore { AgentMarkStore(directory: library.appendingPathComponent("AgentState")) }
+
+    private func markParent(_ status: AgentMarkStore.Mark.Status, at iso: String) throws {
+        try marks.update(["Wimm_2016-05-01_10-00-00_aaaaaaaa.txt": AgentMarkStore.Mark(
+            status: status, source: "S9", markedAt: try XCTUnwrap(ISO8601.parseEither(iso)), noteId: "P",
+            text: "t", analysis: "a")])
+    }
+
+    /// The secretary read the attachments' text inside the parent: an applied split
+    /// hands the new notes the parent's settled mark instead of offering them again.
+    func testApplyGivesNewNotesTheParentsSettledMark() throws {
+        try makeEvernoteParent()
+        try markParent(.noise, at: "2026-11-04T09:00:00Z")
+        let report = try run(apply: true)
+        XCTAssertEqual(report.marksInherited, 2)
+        let children = try XCTUnwrap(report.parents.first?.items).prefix(2).map { try XCTUnwrap($0.target) }
+        for child in children {
+            let mark = try XCTUnwrap(marks.mark(forFile: (child as NSString).lastPathComponent))
+            XCTAssertEqual(mark.status, .noise)
+            XCTAssertEqual(mark.source, "S9")
+            let fingerprint = NoteFingerprint.read(forRecordingURL: library.appendingPathComponent(child))
+            XCTAssertEqual(mark.text, fingerprint.text, "the mark matches the child's own content")
+        }
+    }
+
+    func testInheritanceSkipsUnsettledParentsAndNewerText() throws {
+        try makeEvernoteParent()
+        _ = try run(apply: true)
+        func actions() throws -> [SplitMarkInheritance.Action] {
+            try SplitMarkInheritance.run(library: library, apply: false).items.map(\.action)
+        }
+        XCTAssertEqual(try actions(), [.parentUnmarked, .parentUnmarked])
+
+        try markParent(.pending, at: "2026-11-04T09:00:00Z")
+        XCTAssertEqual(try actions(), [.parentUnsettled, .parentUnsettled])
+
+        // Both children carry a run newer than this mark (image 10-28, audio rerun 10-20).
+        try markParent(.applied, at: "2026-10-01T00:00:00Z")
+        XCTAssertEqual(try actions(), [.changedSinceParentMark, .changedSinceParentMark])
+
+        try markParent(.applied, at: "2026-11-04T09:00:00Z")
+        let dry = try SplitMarkInheritance.run(library: library, apply: false)
+        XCTAssertEqual(dry.inheritedStatus, ["applied": 2])
+        XCTAssertEqual(marks.marks().count, 1, "a dry run writes no marks")
+
+        _ = try SplitMarkInheritance.run(library: library, apply: true)
+        XCTAssertEqual(marks.marks().count, 3)
+        XCTAssertEqual(try actions(), [.alreadyMarked, .alreadyMarked], "an existing mark is never replaced")
+    }
+
     func testApplyWithoutBackupIsRefused() {
         XCTAssertThrowsError(try AttachmentSplitMigration.run(.init(apply: true, library: library)))
     }
